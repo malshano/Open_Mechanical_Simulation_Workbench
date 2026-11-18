@@ -36,6 +36,21 @@ not installed. Physics changes should come with a check against an analytical re
 - Keep the style of the surrounding code; update the user and technical manuals when behaviour changes.
 - Do not commit generated files, studies, solver installations, or CAD you do not have the right to share.
 
+## Rules for main
+
+`main` is protected on GitHub:
+
+- Changes go in through a **pull request** from a branch or a fork. Direct pushes, force-pushes and deleting the branch
+  are blocked.
+- The **tests** check (`pytest` on Windows) must pass on the latest commit, and the branch must be up to date with
+  `main`.
+- One **approving review** from the maintainer (see [.github/CODEOWNERS](.github/CODEOWNERS)) is needed, after the last
+  push, and every review conversation must be resolved.
+- Pull requests are merged with **squash** (preferred) or a merge commit.
+- The first workflow run of a new contributor waits for the maintainer's approval (a GitHub default for forks).
+- Changes to the security checks (case-file check, local-host and CSRF guards, pinned downloads with checksums) get an
+  extra careful review: say so in the pull request.
+
 ## Licence and sign-off
 
 The project is licensed under the **GNU GPL v3.0 or later** (see [LICENSE](LICENSE)). By contributing you agree that
