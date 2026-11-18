@@ -17,7 +17,7 @@ New-Item -ItemType Directory -Path $stage | Out-Null
 
 # 1. the files: exactly what git would commit (.gitignore applied), nothing else
 $internal = @('HANDOFF.md', 'SECURITY.md', 'CONTRIBUTING.md')   # notes for the developers, not for the users
-$files = git ls-files -co --exclude-standard | Where-Object { $_ -and ($internal -notcontains $_) -and (Test-Path -LiteralPath $_ -PathType Leaf) }
+$files = git ls-files -co --exclude-standard | Where-Object { $_ -and ($internal -notcontains $_) -and -not $_.StartsWith('.github/') -and (Test-Path -LiteralPath $_ -PathType Leaf) }
 $app = Join-Path $stage 'app'
 foreach ($f in $files) {
     $dest = Join-Path $app $f
