@@ -72,7 +72,10 @@ def test_the_launcher_runs_the_claude_cli_only(env, monkeypatch, tmp_path):
     import simwb.agent as A
 
     calls = []
-    monkeypatch.setattr(A.subprocess, "Popen", lambda *a, **k: calls.append((a, k)))
+    # (only the agent module's view of subprocess: patching subprocess.Popen itself breaks libraries imported meanwhile)
+    from types import SimpleNamespace
+    monkeypatch.setattr(A, "subprocess", SimpleNamespace(Popen=lambda *a, **k: calls.append((a, k)),
+                                                         CREATE_NEW_CONSOLE=0x10))
     evil = tmp_path / "a & calc ^ b"
     evil.mkdir()
     A.open_in_claude_code(evil)
