@@ -68,7 +68,11 @@ def test_case_file_edit_cannot_run_programs():
                  'a "//"; #codeStream { };', 'x "/*"; f { type coded; } y "*/";', 'libs $myLibs;',
                  'functionObjectLibs ("/tmp/evil.so");', '#sinclude "/etc/passwd"', '#include "$HOME/x"',
                  # (a quoted key is a regular expression: it can stand for 'libs'; a library path under any key)
-                 '"l.bs" ("C:/x/evil");', '".*"\n  ( evil );', 'foo ("C:/x/libevil.dll");'):
+                 '"l.bs" ("C:/x/evil");', '".*"\n  ( evil );', 'foo ("C:/x/libevil.dll");',
+                 # (a pattern key anywhere on a line, in any regex form, with any list form; a directive argument
+                 # cannot swallow the next '#')
+                 'a 1; "[lm]ibs" (forces);', 'x { } "lib(s)" $v;', '"Lib.*" 2{a};', '#include "a" #codeStream {}',
+                 '#includeEtc"x"#calc "1"'):
         with pytest.raises(ValueError, match="not allowed"):
             A.check_safe("system/controlDict", text)
     A.check_safe("system/controlDict", 'libs (forces "libfieldFunctionObjects.so");\n#include "initialConditions"\n'
@@ -83,6 +87,16 @@ def test_case_file_edit_cannot_run_programs():
         except ValueError:
             pass
     assert time.time() - t0 < 5, "the check must stay linear on hostile input"
+
+
+def test_compressed_case_file_is_checked(tmp_path):
+    import gzip
+    from simwb.solvers.openfoam import advanced as A
+    (tmp_path / "0").mkdir()
+    with gzip.open(tmp_path / "0" / "U.gz", "wt") as f:
+        f.write('internalField uniform (0 0 0);\nx #codeStream { };\n')
+    with pytest.raises(ValueError, match="not allowed"):
+        A.apply(tmp_path, {}, {})
 
 
 def test_websocket_rejects_foreign_origin(client):

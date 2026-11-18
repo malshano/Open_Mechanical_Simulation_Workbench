@@ -35,16 +35,14 @@ _CODE_WORDS = {"systemCall": "systemCall (runs commands)", "executeCalls": "syst
 # a code entry of a coded condition / function object / source: code, codeInclude, codeOptions, ... localCode
 _CODE_ENTRY = re.compile(r"\b(code[A-Z]\w{0,40}|code|localCode)\b(?=\s*(#\{|\{|\"|\$))")
 _WORD = re.compile(r"\w+")
-_DIRECTIVE = re.compile(r"#\s*(\w+)[ \t]*([^\s;]*)")
+# every '#' followed by a word is a directive; its argument is read separately, so it never swallows the next '#'
+_DIRECTIVE = re.compile(r"#\s*(\w+)")
+_ARG = re.compile(r"[ \t]*(\"[^\"\n]{0,500}\"|<[^\s>;#]{0,100}>[^\s;#\"]{0,500}|[^\s;#\"]{0,500})")
 _CASE_TAGS = ("<case>", "<system>", "<constant>")
 # a library list key: any word ending in libs / Libs (libs, motionSolverLibs, functionObjectLibs, ...); the value is
 # read token by token (no regular expression over the whole value: linear time on any input)
 _LIBS = re.compile(r"(?<!\w)(\w{0,60}[Ll]ibs)\b")
 _LIB_NAME = re.compile(r"\"?(lib)?[A-Za-z][A-Za-z0-9_]{0,100}(\.(so|dll|dylib))?\"?")
-_LIB_KEYS = ("libs", "motionSolverLibs", "functionObjectLibs", "Libs")
-# a quoted key is a regular expression in OpenFOAM ("(U|k)" {...}, ".*" {...}); one whose value is a list and that could
-# stand for a library key is refused
-_QUOTED_KEY = re.compile(r'(?m)^[ \t]*"([^"\n]{1,200})"\s*(\S?)')  # (group 2: the first character of the value)
 _LIB_EXT = (".so", ".dll", ".dylib")
 _TOKEN_SPLIT = re.compile(r"[\s\"'();{}]+")
 
@@ -87,14 +85,49 @@ def _lib_list_ok(body: str, start: int) -> bool:
     return all(_LIB_NAME.fullmatch(tok) for tok in v[1:-1].split())
 
 
-def _key_could_be_libs(pattern: str) -> bool:
-    if "ibs" in pattern.lower():
+def _string_value_after(body: str):
+    """For every "string" in comment-free text (read as OpenFOAM reads it: left to right, \\ escapes), the text that
+    follows it. A single pass."""
+    i, n = 0, len(body)
+    while True:
+        i = body.find('"', i)
+        if i < 0:
+            return
+        j = i + 1
+        while j < n and body[j] != '"':
+            j += 2 if body[j] == "\\" else 1
+        if j >= n:
+            return
+        yield body[i:j + 1], j + 1
+        i = j + 1
+
+
+_DIRECTIVE_BEFORE = re.compile(r"#[ \t]*\w{0,20}[Ii]nclude\w{0,20}[ \t]*\Z")
+
+
+def _directive_arg(body: str, start: int) -> bool:
+    """The "string" at body[start] is the argument of an #include directive on the same line (#include "file",
+    #includeEtc "...", #sinclude "..."): a file name (checked above), not a key."""
+    return bool(_DIRECTIVE_BEFORE.search(body[max(0, start - 60):start]))
+
+
+def _list_follows(body: str, k: int) -> bool:
+    """A list, a $variable or a #directive starts at body[k:] (after blanks): '(...)', 'N(...)', 'N{...}', '$x', '#x'."""
+    n = len(body)
+    while k < n and body[k] in " \t\r\n":
+        k += 1
+    if k >= n:
+        return False
+    if body[k] in "($#":
         return True
-    try:
-        rx = re.compile(pattern)
-    except re.error:
-        return True  # (a pattern Python cannot read: assume the worst)
-    return any(rx.fullmatch(k) for k in _LIB_KEYS)
+    j = k
+    while j < n and j - k < 30 and body[j].isdigit():
+        j += 1
+    if j == k:
+        return False
+    while j < n and body[j] in " \t\r\n" and j - k < 60:
+        j += 1
+    return j < n and body[j] in "({"
 
 
 def check_safe(rel: str, text: str) -> None:
@@ -107,7 +140,8 @@ def check_safe(rel: str, text: str) -> None:
 
     if len(text) > MAX_FILE_BYTES:
         refuse("a file this large")
-    for body in (text, _strip_comments(text)):
+    clean = _strip_comments(text)
+    for body in (text, clean):
         if "#{" in body:
             refuse("a verbatim code block #{ ... #}")
         if _CODE_ENTRY.search(body):
@@ -120,25 +154,30 @@ def check_safe(rel: str, text: str) -> None:
             if w.startswith("coded") or "Coded" in w:
                 refuse(f"a coded type ({w[:40]}: compiles and runs code)")
         for m in _DIRECTIVE.finditer(body):
-            word, arg = m.group(1).lower(), m.group(2).strip("\"'")
+            word = m.group(1).lower()
             if "codestream" in word or "calc" in word:
                 refuse("#codeStream / #calc (compiles and runs code)")
-            if "include" in word and (not arg or arg[0] in "/\\~$" or "$" in arg or ".." in arg
-                                      or re.match(r"[A-Za-z]:", arg)
-                                      or (arg.startswith("<") and not arg.startswith(_CASE_TAGS))):
-                refuse(f"an include of a file outside the case (#{m.group(1)} {m.group(2)[:60]})")
+            if "include" in word:
+                raw = _ARG.match(body, m.end()).group(1)
+                arg = raw.strip("\"'")
+                if (not arg or arg[0] in "/\\~$" or "$" in arg or ".." in arg or re.match(r"[A-Za-z]:", arg)
+                        or (arg.startswith("<") and not arg.startswith(_CASE_TAGS))):
+                    refuse(f"an include of a file outside the case (#{m.group(1)} {raw[:60]})")
         # a library file named by path, under any key
         for tok in _TOKEN_SPLIT.split(body):
             low = tok.lower()
             if any(e in low for e in _LIB_EXT) and any(c in tok for c in "/\\:~$"):
                 refuse(f"a library given by path ({tok[:80]})")
-        for m in _QUOTED_KEY.finditer(body):
-            if m.group(2) != "{" and _key_could_be_libs(m.group(1)):
-                refuse(f"a pattern key that could load libraries (\"{m.group(1)[:60]}\")")
         for m in _LIBS.finditer(body):
             if not _lib_list_ok(body, m.end()):
                 refuse(f"'{m.group(1)}' that is not a plain list of OpenFOAM library names (like (forces "
                        "\"libfieldFunctionObjects.so\"))")
+    # A quoted key is a regular expression in OpenFOAM ("(U|k)" {...}, ".*" {...}) and could stand for a library key.
+    # Its pattern is never interpreted here: a quoted string anywhere may be followed only by a dictionary or a plain
+    # value, never by a list, a $variable or a #directive. (Generated cases never need that.)
+    for s, end in _string_value_after(clean):
+        if not _directive_arg(clean, end - len(s)) and _list_follows(clean, end):
+            refuse(f"a list or variable after the quoted key {s[:60]} (a pattern key could load libraries)")
 
 
 def list_files(case: Path) -> list[str]:
@@ -152,6 +191,20 @@ def list_files(case: Path) -> list[str]:
             if f.is_file() and "polyMesh" not in rel and f.stat().st_size <= MAX_FILE_BYTES:
                 out.append(rel)
     return out
+
+
+def _case_text(p: Path):
+    """The text OpenFOAM would read from a case file: .gz files are read decompressed (OpenFOAM reads them too).
+    None for a compressed file over the size limit (skipped like a large plain file)."""
+    if p.suffix != ".gz":
+        return p.read_text(errors="replace")
+    import gzip
+    try:
+        with gzip.open(p, "rb") as f:
+            data = f.read(MAX_FILE_BYTES + 1)
+    except (OSError, EOFError):
+        return p.read_text(errors="replace")  # (not really gzip: OpenFOAM would read it as text)
+    return None if len(data) > MAX_FILE_BYTES else data.decode(errors="replace")
 
 
 def _block(text: str, name: str):
@@ -258,7 +311,9 @@ def apply(case: Path, adv: dict, overrides: dict, log=lambda *_: None) -> list[s
         done.append(f"edited file: {rel}")
     # the whole case, not only the edited files: names and values from project.json end up in the dictionaries too
     for rel in list_files(case):
-        check_safe(rel, (case / rel).read_text(errors="replace"))
+        text = _case_text(case / rel)
+        if text is not None:
+            check_safe(rel, text)
     for d in done:
         log("Advanced: " + d)
     return done
