@@ -395,7 +395,7 @@ The wake in the results is only as long as the run: one revolution gives about o
 Use the workbench from Claude Code or Claude Desktop (MCP):
 
 ```
-claude mcp add simwb -- C:\path\to\Open_Mechanical_Workbench\.venv\Scripts\python.exe -m simwb.mcp_server
+claude mcp add simwb -- C:\path\to\Open_Mechanical_Simulation_Workbench\.venv\Scripts\python.exe -m simwb.mcp_server
 ```
 
 ---

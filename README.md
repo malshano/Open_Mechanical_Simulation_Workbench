@@ -71,7 +71,7 @@ Model: `SIMWB_CLAUDE_MODEL` (default `claude-opus-5-5`).
 Use the workbench from **Claude Code / Claude Desktop** via MCP:
 
 ```
-claude mcp add simwb -- C:\path\to\Open_Mechanical_Workbench\.venv\Scripts\python.exe -m simwb.mcp_server
+claude mcp add simwb -- C:\path\to\Open_Mechanical_Simulation_Workbench\.venv\Scripts\python.exe -m simwb.mcp_server
 ```
 
 ## Workflow tips

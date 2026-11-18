@@ -4,7 +4,7 @@
 
 Please **do not open a public issue** for a security problem. Report it privately through GitHub:
 **Security** tab of this repository > **Report a vulnerability**
-(<https://github.com/malshano/Open_Mechanical_Workbench/security/advisories/new>).
+(<https://github.com/malshano/Open_Mechanical_Simulation_Workbench/security/advisories/new>).
 
 Include what you found, how to reproduce it, and what an attacker could do with it. You should get an answer within
 two weeks. Fixes are released as soon as they are ready, and you are credited in the advisory unless you ask not to be.
