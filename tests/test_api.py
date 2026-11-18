@@ -66,11 +66,23 @@ def test_case_file_edit_cannot_run_programs():
                  'libs ("C:/Users/x/evil.dll");', '#include "/etc/passwd"', '#include "../../x"',
                  # (a string that looks like a comment cannot hide an entry; nor can other keys or include forms)
                  'a "//"; #codeStream { };', 'x "/*"; f { type coded; } y "*/";', 'libs $myLibs;',
-                 'functionObjectLibs ("/tmp/evil.so");', '#sinclude "/etc/passwd"', '#include "$HOME/x"'):
+                 'functionObjectLibs ("/tmp/evil.so");', '#sinclude "/etc/passwd"', '#include "$HOME/x"',
+                 # (a quoted key is a regular expression: it can stand for 'libs'; a library path under any key)
+                 '"l.bs" ("C:/x/evil");', '".*"\n  ( evil );', 'foo ("C:/x/libevil.dll");'):
         with pytest.raises(ValueError, match="not allowed"):
             A.check_safe("system/controlDict", text)
     A.check_safe("system/controlDict", 'libs (forces "libfieldFunctionObjects.so");\n#include "initialConditions"\n'
-                                       '#includeEtc "caseDicts/setConstraintTypes"\n#include "<constant>/x"\n')
+                                       '#includeEtc "caseDicts/setConstraintTypes"\n#include "<constant>/x"\n'
+                                       '".*"\n{\n    type zeroGradient;\n}\n"(k|omega)" 0.7;\n')
+    import time
+    t0 = time.time()
+    for text in ("libs (" + "a" * 30000 + ' ' + '"x' * 5000 + ")", "#" + "a" * 500000, "/*" * 200000, '"' * 400000,
+                 "x" * 500000 + "Coded"):
+        try:
+            A.check_safe("system/controlDict", text)
+        except ValueError:
+            pass
+    assert time.time() - t0 < 5, "the check must stay linear on hostile input"
 
 
 def test_websocket_rejects_foreign_origin(client):

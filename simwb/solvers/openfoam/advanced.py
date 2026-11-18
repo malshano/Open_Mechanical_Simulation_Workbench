@@ -30,48 +30,115 @@ def check_rel(rel: str) -> str:
 # DLL by path. An edited file is stored in project.json and written into the case before every run, so a study folder
 # from someone else could carry such a file: these constructs are refused (here when a file is saved, again before the
 # run). The generated case never needs them.
-_CODE_RULES = [
-    (re.compile(r"#\{"), "verbatim code blocks #{ ... #}"),
-    (re.compile(r"\b(code[A-Z]\w*|code|localCode)\b(?=\s*(#\{|\{|\"|\$))"), "code entries (compiled and run)"),
-    # (as a word anywhere, so that 'type $t;' with 't systemCall;' elsewhere is caught too)
-    (re.compile(r"\b(coded\w*|\w+Coded\w*|systemCall)\b"), "coded / systemCall types (run code or commands)"),
-    (re.compile(r"\b(executeCalls|writeCalls|endCalls)\b"), "systemCall commands"),
-    (re.compile(r"#\s*\w*(codeStream|calc)\w*"), "#codeStream / #calc (compiles and runs code)"),
-]
-# any include-type directive (#include, #sinclude, #includeEtc, #includeIfPresent, #includeFunc, ...) and its argument
-_INCLUDE = re.compile(r"#\s*\w*include\w*\s*([^\s;]*)", re.I)
+_CODE_WORDS = {"systemCall": "systemCall (runs commands)", "executeCalls": "systemCall commands",
+               "writeCalls": "systemCall commands", "endCalls": "systemCall commands"}
+# a code entry of a coded condition / function object / source: code, codeInclude, codeOptions, ... localCode
+_CODE_ENTRY = re.compile(r"\b(code[A-Z]\w{0,40}|code|localCode)\b(?=\s*(#\{|\{|\"|\$))")
+_WORD = re.compile(r"\w+")
+_DIRECTIVE = re.compile(r"#\s*(\w+)[ \t]*([^\s;]*)")
 _CASE_TAGS = ("<case>", "<system>", "<constant>")
-# a library list: any key ending in libs / Libs (libs, motionSolverLibs, functionObjectLibs, ...) and its whole value
-_LIBS = re.compile(r"\b(\w*[Ll]ibs)\b\s*([^;]*);?")
-_LIB_LIST = re.compile(r"\(\s*(\"?(lib)?[A-Za-z][A-Za-z0-9_]*(\.(so|dll|dylib))?\"?\s*)*\)\s*")
+# a library list key: any word ending in libs / Libs (libs, motionSolverLibs, functionObjectLibs, ...); the value is
+# read token by token (no regular expression over the whole value: linear time on any input)
+_LIBS = re.compile(r"(?<!\w)(\w{0,60}[Ll]ibs)\b")
+_LIB_NAME = re.compile(r"\"?(lib)?[A-Za-z][A-Za-z0-9_]{0,100}(\.(so|dll|dylib))?\"?")
+_LIB_KEYS = ("libs", "motionSolverLibs", "functionObjectLibs", "Libs")
+# a quoted key is a regular expression in OpenFOAM ("(U|k)" {...}, ".*" {...}); one whose value is a list and that could
+# stand for a library key is refused
+_QUOTED_KEY = re.compile(r'(?m)^[ \t]*"([^"\n]{1,200})"\s*(\S?)')  # (group 2: the first character of the value)
+_LIB_EXT = (".so", ".dll", ".dylib")
+_TOKEN_SPLIT = re.compile(r"[\s\"'();{}]+")
 
 
 def _strip_comments(text: str) -> str:
-    """The text without // and /* */ comments, skipping over "strings" (so a // inside a string is not a comment)."""
-    return re.sub(r'("(?:\\.|[^"\\])*")|/\*.*?\*/|//[^\n]*', lambda m: m.group(1) or " ", text, flags=re.S)
+    """The text without // and /* */ comments, skipping over "strings" (a // inside a string is not a comment).
+    A single pass over the text."""
+    out, i, n = [], 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == '"':
+            j = i + 1
+            while j < n and text[j] != '"':
+                j += 2 if text[j] == "\\" else 1
+            out.append(text[i:j + 1])
+            i = j + 1
+        elif text.startswith("//", i):
+            j = text.find("\n", i)
+            i = n if j < 0 else j
+            out.append(" ")
+        elif text.startswith("/*", i):
+            j = text.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+            out.append(" ")
+        else:
+            j = i + 1
+            while j < n and text[j] not in '"/':
+                j += 1
+            out.append(text[i:j])
+            i = j
+    return "".join(out)
+
+
+def _lib_list_ok(body: str, start: int) -> bool:
+    """The value after a library key at body[start:] is a literal list '( name name ... )' of bare library names."""
+    end = body.find(";", start)
+    v = body[start:end if end >= 0 else len(body)].strip()
+    if len(v) > 4000 or not (v.startswith("(") and v.endswith(")")):
+        return False
+    return all(_LIB_NAME.fullmatch(tok) for tok in v[1:-1].split())
+
+
+def _key_could_be_libs(pattern: str) -> bool:
+    if "ibs" in pattern.lower():
+        return True
+    try:
+        rx = re.compile(pattern)
+    except re.error:
+        return True  # (a pattern Python cannot read: assume the worst)
+    return any(rx.fullmatch(k) for k in _LIB_KEYS)
 
 
 def check_safe(rel: str, text: str) -> None:
     """Raise ValueError if a case dictionary could run code, include a file from outside the case or load a library
-    from a path (see _CODE_RULES). The rules are applied to the raw text and to the text without comments, so neither a
-    comment nor a string that looks like one can hide an entry from the check."""
+    from a path. The checks run on the raw text and again on the text without comments, so neither a comment nor a
+    string that looks like one can hide an entry. Every check is linear in the length of the text."""
     def refuse(what):
         raise ValueError(f"{rel}: {what} - not allowed in case files, it could run programs on this computer. Use the "
                          "generated settings, or run the case by hand outside the workbench.")
 
+    if len(text) > MAX_FILE_BYTES:
+        refuse("a file this large")
     for body in (text, _strip_comments(text)):
-        for rx, what in _CODE_RULES:
-            if rx.search(body):
-                refuse(what)
-        for m in _INCLUDE.finditer(body):
-            arg = m.group(1).strip("\"'")
-            if (not arg or arg[0] in "/\\~$" or "$" in arg or ".." in arg or re.match(r"[A-Za-z]:", arg)
-                    or (arg.startswith("<") and not arg.startswith(_CASE_TAGS))):
-                refuse(f"an include of a file outside the case ({m.group(0).strip()})")
+        if "#{" in body:
+            refuse("a verbatim code block #{ ... #}")
+        if _CODE_ENTRY.search(body):
+            refuse("a code entry (compiled and run)")
+        # words anywhere, so that 'type $t;' with 't systemCall;' elsewhere is caught too
+        for m in _WORD.finditer(body):
+            w = m.group(0)
+            if w in _CODE_WORDS:
+                refuse(_CODE_WORDS[w])
+            if w.startswith("coded") or "Coded" in w:
+                refuse(f"a coded type ({w[:40]}: compiles and runs code)")
+        for m in _DIRECTIVE.finditer(body):
+            word, arg = m.group(1).lower(), m.group(2).strip("\"'")
+            if "codestream" in word or "calc" in word:
+                refuse("#codeStream / #calc (compiles and runs code)")
+            if "include" in word and (not arg or arg[0] in "/\\~$" or "$" in arg or ".." in arg
+                                      or re.match(r"[A-Za-z]:", arg)
+                                      or (arg.startswith("<") and not arg.startswith(_CASE_TAGS))):
+                refuse(f"an include of a file outside the case (#{m.group(1)} {m.group(2)[:60]})")
+        # a library file named by path, under any key
+        for tok in _TOKEN_SPLIT.split(body):
+            low = tok.lower()
+            if any(e in low for e in _LIB_EXT) and any(c in tok for c in "/\\:~$"):
+                refuse(f"a library given by path ({tok[:80]})")
+        for m in _QUOTED_KEY.finditer(body):
+            if m.group(2) != "{" and _key_could_be_libs(m.group(1)):
+                refuse(f"a pattern key that could load libraries (\"{m.group(1)[:60]}\")")
         for m in _LIBS.finditer(body):
-            if not _LIB_LIST.fullmatch(m.group(2)):
-                refuse(f"'{m.group(1)}' must be a plain list of OpenFOAM library names (like (forces "
-                       f"\"libfieldFunctionObjects.so\")), not {m.group(2).strip()[:60]!r}")
+            if not _lib_list_ok(body, m.end()):
+                refuse(f"'{m.group(1)}' that is not a plain list of OpenFOAM library names (like (forces "
+                       "\"libfieldFunctionObjects.so\"))")
 
 
 def list_files(case: Path) -> list[str]:
