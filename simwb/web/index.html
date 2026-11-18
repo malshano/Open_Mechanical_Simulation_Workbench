@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Simulation Workbench</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath d=%22M8 1l7 7-7 7-7-7z%22 fill=%22%232563eb%22/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/style.css">
+<script type="importmap">
+{ "imports": { "three": "/static/vendor/three.module.js" } }
+</script>
+</head>
+<body>
+<header id="topbar">
+  <div class="brand" id="brandHome" title="Start page (all projects)"><span class="logo">◆</span> SimWorkbench</div>
+  <div id="projectBox"></div>
+  <nav id="steps"></nav>
+  <div class="spacer"></div>
+  <div id="modeBox" class="seg" title="Simple: the essential settings and a hint for the next step. Expert: every setting and tool (advanced meshing, solver numerics, case files, extra checks).">
+    <button data-mode="simple">Simple</button><button data-mode="expert">Expert</button></div>
+  <div class="projMenu"><button id="jobsBtn" class="ghost" title="Running jobs in all projects (stop them here)">⚙ Jobs <span id="jobsCount"></span></button>
+    <div id="jobsList" class="menu hidden" style="right:0;left:auto;min-width:360px"></div></div>
+  <button id="chatToggle" class="ghost" title="Show/hide the Claude assistant">✦ Claude</button>
+  <button id="quitBtn" class="ghost" title="Close the workbench: stops every running job and solver process">⏻ Close</button>
+</header>
+
+<main id="layout">
+  <aside id="left">
+    <div id="treeHead"><span>Outline</span><span class="muted small" id="treeStudy"></span></div>
+    <div id="tree"></div>
+    <div id="panel"></div>
+  </aside>
+  <section id="viewport">
+    <canvas id="three"></canvas>
+    <div id="viewTools">
+      <button data-view="iso" title="Isometric view">Iso</button>
+      <button data-view="+x" title="Look along -X (from +X)">X</button>
+      <button data-view="+y" title="Look from +Y">Y</button>
+      <button data-view="+z" title="Look from top (+Z)">Z</button>
+      <button data-view="fit" title="Fit all (F)">Fit</button>
+      <span class="sep"></span>
+      <label title="Show CAD edges"><input type="checkbox" id="optEdges" checked> Edges</label>
+      <label title="Show far-field / air box faces"><input type="checkbox" id="optAir"> Air box</label>
+      <span class="sep"></span>
+      <button id="probeBtn" class="hidden" title="Probe: click a point of the result to read its value there. Click the button again to stop; the labels stay until the field changes.">⌖ Probe</button>
+      <button id="shotBtn" title="Save the 3D view as a picture (PNG), with the colour scale">Picture</button>
+    </div>
+    <div id="clipTools" class="hidden">
+      <span>Section</span>
+      <select id="clipAxis"><option value="">off</option><option>x</option><option>y</option><option>z</option></select>
+      <input type="range" id="clipPos" min="0" max="1000" value="500"><button id="clipPlay" class="ghost small hidden" title="Sweep the section through the model along its axis (press again to stop)">&#9654;</button><span id="clipVal" class="muted" style="min-width:90px"></span>
+      <label id="hideAirLbl"><input type="checkbox" id="hideAir"> Hide air</label>
+    </div>
+    <div id="hoverTip" class="hidden"></div>
+    <div id="legend" class="hidden"></div>
+    <div id="selectHint" class="hidden"></div>
+    <div id="rotInfo" class="hidden"></div>
+    <div id="welcome" class="hidden"></div>
+    <div id="dock" class="hidden">
+      <div class="dockTabs"><button data-dock="msgs" class="active">Messages</button><button data-dock="log">Solver log</button>
+        <span class="spacer"></span><button id="dockToggle" title="Show / hide">▾</button></div>
+      <div id="dockBody"></div>
+    </div>
+  </section>
+  <aside id="chat" class="">
+    <div class="chatHead">
+      <div><b>Claude assistant</b><div id="claudeAuth" class="muted small">checking login…</div></div>
+      <div class="chatBtns">
+        <button id="chatLogin" class="small hidden">Log in</button>
+        <button id="chatLogout" class="ghost small hidden" title="Log out of Claude (log in again as someone else with Log in)">Log out</button>
+        <button id="chatCode" class="ghost small hidden" title="Open Claude Code in a terminal window, in this study's folder (it finds a CLAUDE.md and the workbench tools there)">Claude Code</button>
+        <button id="chatNew" class="ghost small" title="Start a new conversation">New</button>
+      </div>
+    </div>
+    <div id="chatLog"></div>
+    <div id="chatSuggest"></div>
+    <form id="chatForm">
+      <textarea id="chatInput" rows="2" placeholder="Ask Claude to set up, mesh or explain…   /login  /logout  /status  /help  (Enter to send)"></textarea>
+      <button type="submit" id="chatSend">Send</button>
+      <button type="button" id="chatStop" class="ghost hidden">Stop</button>
+    </form>
+  </aside>
+</main>
+<footer id="statusbar"><span id="stStudy">Ready</span><span id="stMesh"></span><span id="stSolve"></span>
+  <span class="spacer"></span>
+  <div id="jobBar" class="hidden"><div class="fill"></div><span class="txt"></span><button id="jobCancel" class="ghost small">Cancel</button></div>
+</footer>
+<div id="toast"></div>
+<div id="modal" class="hidden"></div>
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>

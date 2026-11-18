@@ -1,0 +1,143 @@
+<title>Showcase Task Monitor</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: one screen. Header with live counts, then one compact row per task: name, status, progress, elapsed, time left. */
+:root {
+  --bg: #f4f6f8; --panel: #ffffff; --fg: #17212b; --muted: #5d6b79; --line: #dde3e9;
+  --run: #1d6fd1; --done: #1f8a4c; --warn: #b9770e; --bad: #c4372c; --idle: #7b8794; --track: #e6ebf0;
+  --font: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #11171d; --panel: #18212a; --fg: #e6ecf2; --muted: #93a1af; --line: #28343f;
+    --run: #5aa2f2; --done: #4cc07f; --warn: #e0a24a; --bad: #ef6f64; --idle: #8794a1; --track: #26323d; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #11171d; --panel: #18212a; --fg: #e6ecf2; --muted: #93a1af; --line: #28343f;
+  --run: #5aa2f2; --done: #4cc07f; --warn: #e0a24a; --bad: #ef6f64; --idle: #8794a1; --track: #26323d; color-scheme: dark;
+}
+html, body { height: 100%; }
+body { background: var(--bg); color: var(--fg); font: 14px/1.35 var(--font); padding-block: 14px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.wrap { max-width: 980px; margin: 0 auto; display: flex; flex-direction: column; gap: 12px; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 16px; }
+h1 { font-size: 18px; font-weight: 650; margin: 0; letter-spacing: -0.01em; }
+.sync { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.sync.bad { color: var(--bad); }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; display: flex; gap: 8px; align-items: baseline; }
+.chip b { font-size: 20px; font-variant-numeric: tabular-nums; }
+.chip span { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+.chip.run b { color: var(--run); } .chip.done b { color: var(--done); } .chip.bad b { color: var(--bad); }
+.chip.eta { margin-left: auto; } .chip.eta b { font-family: var(--mono); font-size: 18px; }
+.list { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.row { display: grid; grid-template-columns: minmax(0, 2.2fr) 92px minmax(90px, 1.4fr) 64px 76px; gap: 12px; align-items: center; padding: 9px 12px; border-top: 1px solid var(--line); }
+.row:first-child { border-top: 0; }
+.row.head { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .07em; padding-block: 7px; }
+.name { min-width: 0; } .name b { font-weight: 600; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.name small { color: var(--muted); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.pill { justify-self: start; border-radius: 999px; padding: 2px 9px; font-size: 12px; font-weight: 600; color: var(--c); border: 1px solid var(--c); white-space: nowrap; }
+.pill::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--c); margin-right: 6px; vertical-align: 1px; }
+.s-running { --c: var(--run); } .s-done { --c: var(--done); } .s-failed { --c: var(--bad); } .s-blocked { --c: var(--warn); }
+.s-queued { --c: var(--idle); } .s-stale { --c: var(--warn); } .s-overdue { --c: var(--warn); }
+.bar { height: 8px; border-radius: 4px; background: var(--track); overflow: hidden; }
+.bar i { display: block; height: 100%; width: var(--p); background: var(--c); border-radius: 4px; }
+.bar .tick { font-style: normal; }
+.pc { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.t { font-family: var(--mono); font-size: 13px; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.t.warn { color: var(--warn); } .t.muted { color: var(--muted); }
+.empty { padding: 28px 12px; color: var(--muted); text-align: center; }
+@media (max-width: 560px) {
+  .row { grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; }
+  .row.head { display: none; }
+  .row .bar { grid-column: 1 / -1; }
+  .row .t { text-align: left; }
+  .chip.eta { margin-left: 0; }
+}
+@media (prefers-reduced-motion: no-preference) { .bar i { transition: width .6s ease; } }
+</style>
+<div class="wrap">
+  <header>
+    <h1>Showcase Task Monitor</h1>
+    <div class="sync" id="sync">connecting...</div>
+  </header>
+  <div class="chips" id="chips"></div>
+  <div class="list" id="list">
+    <div class="row head"><div>Task</div><div>Status</div><div>Progress</div><div style="text-align:right">Elapsed</div><div style="text-align:right">Left</div></div>
+    <div id="rows"><div class="empty">Waiting for the first update.</div></div>
+  </div>
+</div>
+<script>
+(function () {
+  var STALE_MS = 10 * 60 * 1000, tasks = {}, lastSnap = 0, live = false;
+  var $ = function (id) { return document.getElementById(id); };
+  function fmt(ms) {
+    if (ms == null || !isFinite(ms)) return "-";
+    var s = Math.max(0, Math.round(ms / 1000)), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
+    if (h) return h + "h " + String(m).padStart(2, "0") + "m";
+    if (m) return m + "m " + String(s % 60).padStart(2, "0") + "s";
+    return s + "s";
+  }
+  function state(t, now) {  // self check: a running task that stopped reporting, or ran past its estimate, is flagged
+    var st = t.status || "queued";
+    if (st === "running") {
+      if (t.updated && now - t.updated > STALE_MS) return "stale";
+      if (t.eta && now > t.eta + 60000) return "overdue";
+    }
+    return st;
+  }
+  var LABEL = { running: "Running", done: "Done", failed: "Failed", blocked: "Blocked", queued: "Queued", stale: "No update", overdue: "Overdue" };
+  function render() {
+    var now = Date.now(), list = Object.keys(tasks).map(function (k) { return Object.assign({ id: k }, tasks[k]); });
+    list.sort(function (a, b) { return (a.order || 0) - (b.order || 0) || String(a.name).localeCompare(String(b.name)); });
+    var n = { running: 0, done: 0, bad: 0, total: list.length }, maxLeft = 0;
+    var rows = $("rows"); rows.textContent = "";
+    if (!list.length) { var e = document.createElement("div"); e.className = "empty"; e.textContent = "No tasks reported yet."; rows.appendChild(e); }
+    list.forEach(function (t) {
+      var s = state(t, now);
+      if (s === "running" || s === "overdue" || s === "stale") n.running++;
+      if (s === "done") n.done++;
+      if (s === "failed" || s === "blocked" || s === "stale" || s === "overdue") n.bad++;
+      var p = t.status === "done" ? 1 : Math.min(1, Math.max(0, +t.progress || 0));
+      var end = t.status === "done" || t.status === "failed" ? (t.finished || t.updated) : now;
+      var el = t.started ? end - t.started : null;
+      var left = t.status === "running" && t.eta ? t.eta - now : null;
+      if (left != null && left > maxLeft) maxLeft = left;
+      var r = document.createElement("div"); r.className = "row";
+      var nm = document.createElement("div"); nm.className = "name";
+      var b = document.createElement("b"); b.textContent = t.name || t.id; nm.appendChild(b);
+      var sm = document.createElement("small"); sm.textContent = t.note || ""; nm.appendChild(sm);
+      var pill = document.createElement("div"); pill.className = "pill s-" + s; pill.textContent = LABEL[s] || s;
+      var bar = document.createElement("div"); bar.className = "bar s-" + (s === "done" ? "done" : s);
+      bar.style.setProperty("--p", Math.round(p * 100) + "%"); var i = document.createElement("i"); bar.appendChild(i);
+      bar.title = Math.round(p * 100) + "%";
+      var te = document.createElement("div"); te.className = "t muted"; te.textContent = fmt(el);
+      var tl = document.createElement("div"); tl.className = "t" + (left != null && left < 0 ? " warn" : "");
+      tl.textContent = t.status === "done" ? "done" : left == null ? "-" : left < 0 ? "late" : fmt(left);
+      [nm, pill, bar, te, tl].forEach(function (x) { r.appendChild(x); });
+      rows.appendChild(r);
+    });
+    $("chips").innerHTML = "";
+    function chip(cls, v, l) { var c = document.createElement("div"); c.className = "chip " + cls; var bb = document.createElement("b"); bb.textContent = v; var ss = document.createElement("span"); ss.textContent = l; c.appendChild(bb); c.appendChild(ss); $("chips").appendChild(c); }
+    chip("run", n.running, "active"); chip("done", n.done + "/" + n.total, "done"); chip("bad", n.bad, "need attention");
+    chip("eta", maxLeft ? fmt(maxLeft) : "-", "all done in");
+    var ago = lastSnap ? now - lastSnap : null, sy = $("sync");
+    sy.textContent = live ? "live, updated " + fmt(ago) + " ago" : "offline (showing the last data)";
+    sy.className = "sync" + (!live || (ago != null && ago > STALE_MS) ? " bad" : "");
+  }
+  setInterval(render, 1000);
+  render();
+  (async function () {
+    var db = null;
+    try { db = await claude.use("db"); } catch (e) { db = null; }
+    if (!db) { return; }
+    live = true;
+    db.collection("tasks").onSnapshot(function (snap) {
+      var o = {}; snap.forEach ? snap.forEach(function (d) { o[d.id] = d.data(); }) : (snap.docs || []).forEach(function (d) { o[d.id] = d.data(); });
+      tasks = o; lastSnap = Date.now(); render();
+    }, function () { live = false; render(); });
+  })();
+})();
+</script>
