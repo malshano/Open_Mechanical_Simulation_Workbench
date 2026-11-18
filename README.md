@@ -1,5 +1,7 @@
 # Mechanical Simulation Workbench
 
+https://github.com/user-attachments/assets/729b3f70-68c9-4c16-a749-821662b5661a
+
 Import a STEP, STL or OBJ file → click faces to set boundary conditions → mesh → solve → inspect results, in the browser,
 with a Claude assistant that can do the setup for you.
 
