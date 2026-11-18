@@ -35,9 +35,9 @@ _CODE_WORDS = {"systemCall": "systemCall (runs commands)", "executeCalls": "syst
 # a code entry of a coded condition / function object / source: code, codeInclude, codeOptions, ... localCode
 _CODE_ENTRY = re.compile(r"\b(code[A-Z]\w{0,40}|code|localCode)\b(?=\s*(#\{|\{|\"|\$))")
 _WORD = re.compile(r"\w+")
-# every '#' followed by a word is a directive; its argument is read separately, so it never swallows the next '#'
+# every '#' followed by a word is a directive (each one is checked, whatever an earlier argument looked like)
 _DIRECTIVE = re.compile(r"#\s*(\w+)")
-_ARG = re.compile(r"[ \t]*(\"[^\"\n]{0,500}\"|<[^\s>;#]{0,100}>[^\s;#\"]{0,500}|[^\s;#\"]{0,500})")
+_MAX_ARG = 1000
 _CASE_TAGS = ("<case>", "<system>", "<constant>")
 # a library list key: any word ending in libs / Libs (libs, motionSolverLibs, functionObjectLibs, ...); the value is
 # read token by token (no regular expression over the whole value: linear time on any input)
@@ -102,6 +102,26 @@ def _string_value_after(body: str):
         i = j + 1
 
 
+def _include_arg(body: str, k: int):
+    """The file name after an #include directive at body[k:], read as OpenFOAM reads it: a "string" (backslash escapes
+    kept, so a backslash refuses it) or a word up to a blank or ';'. None (refused) when it is missing, unterminated or
+    longer than _MAX_ARG characters. At most _MAX_ARG characters are read: linear over all directives."""
+    n = len(body)
+    while k < n and body[k] in " \t":
+        k += 1
+    if k >= n:
+        return None
+    if body[k] == '"':
+        j = k + 1
+        while j < n and body[j] != '"' and j - k <= _MAX_ARG:
+            j += 2 if body[j] == "\\" else 1
+        return body[k + 1:j] if j < n and body[j] == '"' and j - k <= _MAX_ARG else None
+    j = k
+    while j < n and not body[j].isspace() and body[j] != ";" and j - k <= _MAX_ARG:
+        j += 1
+    return body[k:j] if j - k <= _MAX_ARG else None
+
+
 _DIRECTIVE_BEFORE = re.compile(r"#[ \t]*\w{0,20}[Ii]nclude\w{0,20}[ \t]*\Z")
 
 
@@ -111,26 +131,29 @@ def _directive_arg(body: str, start: int) -> bool:
     return bool(_DIRECTIVE_BEFORE.search(body[max(0, start - 60):start]))
 
 
-def _list_follows(body: str, k: int) -> bool:
-    """A list, a $variable or a #directive starts at body[k:] (after blanks): '(...)', 'N(...)', 'N{...}', '$x', '#x'."""
+_ENDS = ";{})\""
+_PLAIN = re.compile(r"[A-Za-z0-9_.+\-]+")
+
+
+def _plain_value_follows(body: str, k: int) -> bool:
+    """Only a dictionary or a plain value follows the "string" ending at body[k] (fail closed: anything else, such
+    as a list '(..)', 'N(..)', 'N{..}', '$x', '#x' or 'List<..>', is not). Allowed: nothing more, '{', ';', '}', ')',
+    another "string", or one plain word / number followed by one of those."""
     n = len(body)
-    while k < n and body[k] in " \t\r\n":
+    while k < n and body[k].isspace():
         k += 1
-    if k >= n:
-        return False
-    if body[k] in "($#":
+    if k >= n or body[k] in _ENDS:
         return True
-    j = k
-    while j < n and j - k < 30 and body[j].isdigit():
-        j += 1
-    if j == k:
+    m = _PLAIN.match(body, k)
+    if not m:
         return False
-    while j < n and body[j] in " \t\r\n" and j - k < 60:
-        j += 1
-    return j < n and body[j] in "({"
+    k = m.end()
+    while k < n and body[k].isspace():
+        k += 1
+    return k >= n or body[k] in ";})\""
 
 
-def check_safe(rel: str, text: str) -> None:
+def check_safe(rel: str, text: str, limit: int = MAX_FILE_BYTES) -> None:
     """Raise ValueError if a case dictionary could run code, include a file from outside the case or load a library
     from a path. The checks run on the raw text and again on the text without comments, so neither a comment nor a
     string that looks like one can hide an entry. Every check is linear in the length of the text."""
@@ -138,7 +161,7 @@ def check_safe(rel: str, text: str) -> None:
         raise ValueError(f"{rel}: {what} - not allowed in case files, it could run programs on this computer. Use the "
                          "generated settings, or run the case by hand outside the workbench.")
 
-    if len(text) > MAX_FILE_BYTES:
+    if len(text) > limit:
         refuse("a file this large")
     clean = _strip_comments(text)
     for body in (text, clean):
@@ -158,11 +181,10 @@ def check_safe(rel: str, text: str) -> None:
             if "codestream" in word or "calc" in word:
                 refuse("#codeStream / #calc (compiles and runs code)")
             if "include" in word:
-                raw = _ARG.match(body, m.end()).group(1)
-                arg = raw.strip("\"'")
-                if (not arg or arg[0] in "/\\~$" or "$" in arg or ".." in arg or re.match(r"[A-Za-z]:", arg)
-                        or (arg.startswith("<") and not arg.startswith(_CASE_TAGS))):
-                    refuse(f"an include of a file outside the case (#{m.group(1)} {raw[:60]})")
+                arg = _include_arg(body, m.end())
+                if (not arg or "\\" in arg or arg[0] in "/~$" or "$" in arg or ".." in arg
+                        or re.match(r"[A-Za-z]:", arg) or (arg.startswith("<") and not arg.startswith(_CASE_TAGS))):
+                    refuse(f"an include of a file outside the case (#{m.group(1)} {(arg or '')[:60]})")
         # a library file named by path, under any key
         for tok in _TOKEN_SPLIT.split(body):
             low = tok.lower()
@@ -173,11 +195,12 @@ def check_safe(rel: str, text: str) -> None:
                 refuse(f"'{m.group(1)}' that is not a plain list of OpenFOAM library names (like (forces "
                        "\"libfieldFunctionObjects.so\"))")
     # A quoted key is a regular expression in OpenFOAM ("(U|k)" {...}, ".*" {...}) and could stand for a library key.
-    # Its pattern is never interpreted here: a quoted string anywhere may be followed only by a dictionary or a plain
-    # value, never by a list, a $variable or a #directive. (Generated cases never need that.)
+    # Its pattern is never interpreted here: a quoted string anywhere (except an #include file name) may be followed
+    # only by a dictionary or a plain value; anything else is refused (fail closed). Generated cases never need more.
     for s, end in _string_value_after(clean):
-        if not _directive_arg(clean, end - len(s)) and _list_follows(clean, end):
-            refuse(f"a list or variable after the quoted key {s[:60]} (a pattern key could load libraries)")
+        if not _directive_arg(clean, end - len(s)) and not _plain_value_follows(clean, end):
+            refuse(f"something other than a dictionary or a plain value after the quoted key {s[:60]} (a pattern "
+                   "key could load libraries)")
 
 
 def list_files(case: Path) -> list[str]:
@@ -193,18 +216,51 @@ def list_files(case: Path) -> list[str]:
     return out
 
 
-def _case_text(p: Path):
+# generated field files (mapped or nonuniform values) can be far larger than an edited file; before a run every file
+# is checked whatever its size, and only one larger than this is refused outright (fail closed, never skipped)
+MAX_CHECK_BYTES = 200_000_000
+
+
+def _case_text(p: Path) -> str:
     """The text OpenFOAM would read from a case file: .gz files are read decompressed (OpenFOAM reads them too).
-    None for a compressed file over the size limit (skipped like a large plain file)."""
+    Raises ValueError for a file (or decompressed file) over MAX_CHECK_BYTES."""
+    def too_large():
+        raise ValueError(f"{p.name}: a case file over {MAX_CHECK_BYTES // 1_000_000} MB - not checked, so not run. "
+                         "Remove it from the case.")
     if p.suffix != ".gz":
+        if p.stat().st_size > MAX_CHECK_BYTES:
+            too_large()
         return p.read_text(errors="replace")
     import gzip
+    with open(p, "rb") as f:
+        is_gzip = f.read(2) == b"\x1f\x8b"
+    if not is_gzip:  # (named .gz but plain: OpenFOAM reads it as text)
+        if p.stat().st_size > MAX_CHECK_BYTES:
+            too_large()
+        return p.read_text(errors="replace")
+    import zlib
+    chunks, total = [], 0
     try:
         with gzip.open(p, "rb") as f:
-            data = f.read(MAX_FILE_BYTES + 1)
-    except (OSError, EOFError):
-        return p.read_text(errors="replace")  # (not really gzip: OpenFOAM would read it as text)
-    return None if len(data) > MAX_FILE_BYTES else data.decode(errors="replace")
+            while total <= MAX_CHECK_BYTES and (chunk := f.read(1 << 20)):
+                chunks.append(chunk)
+                total += len(chunk)
+    except (EOFError, OSError, zlib.error):  # (cut short or damaged: refused, never partly checked)
+        raise ValueError(f"{p.name}: a damaged compressed file - not checked, so not run. Remove it from the case.")
+    if total > MAX_CHECK_BYTES:
+        too_large()
+    return b"".join(chunks).decode(errors="replace")
+
+
+def _all_case_files(case: Path):
+    """Every file under the editable roots except the mesh, whatever its size (list_files is what can be edited)."""
+    for root in EDITABLE_ROOTS:
+        d = case / root
+        if d.is_dir():
+            for f in sorted(d.rglob("*")):
+                rel = f.relative_to(case).as_posix()
+                if f.is_file() and "polyMesh" not in rel.split("/"):
+                    yield rel
 
 
 def _block(text: str, name: str):
@@ -310,10 +366,8 @@ def apply(case: Path, adv: dict, overrides: dict, log=lambda *_: None) -> list[s
         p.write_text(text, newline="\n")
         done.append(f"edited file: {rel}")
     # the whole case, not only the edited files: names and values from project.json end up in the dictionaries too
-    for rel in list_files(case):
-        text = _case_text(case / rel)
-        if text is not None:
-            check_safe(rel, text)
+    for rel in _all_case_files(case):
+        check_safe(rel, _case_text(case / rel), limit=MAX_CHECK_BYTES)
     for d in done:
         log("Advanced: " + d)
     return done

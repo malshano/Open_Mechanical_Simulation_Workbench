@@ -72,7 +72,10 @@ def test_case_file_edit_cannot_run_programs():
                  # (a pattern key anywhere on a line, in any regex form, with any list form; a directive argument
                  # cannot swallow the next '#')
                  'a 1; "[lm]ibs" (forces);', 'x { } "lib(s)" $v;', '"Lib.*" 2{a};', '#include "a" #codeStream {}',
-                 '#includeEtc"x"#calc "1"'):
+                 '#includeEtc"x"#calc "1"',
+                 # (only a dictionary or a plain value after a quoted key; include names read as OpenFOAM reads them)
+                 '"l.bs" List<word> (a);', '"l.bs" (a);', '"l.bs" uniform (a);', '#include "a\\"/etc/passwd"',
+                 '#include "x', '#include "' + 'a' * 2000 + '"'):
         with pytest.raises(ValueError, match="not allowed"):
             A.check_safe("system/controlDict", text)
     A.check_safe("system/controlDict", 'libs (forces "libfieldFunctionObjects.so");\n#include "initialConditions"\n'
@@ -81,7 +84,7 @@ def test_case_file_edit_cannot_run_programs():
     import time
     t0 = time.time()
     for text in ("libs (" + "a" * 30000 + ' ' + '"x' * 5000 + ")", "#" + "a" * 500000, "/*" * 200000, '"' * 400000,
-                 "x" * 500000 + "Coded"):
+                 "x" * 500000 + "Coded", '#include "\\' * 100000, '"a" ' + " " * 400000):
         try:
             A.check_safe("system/controlDict", text)
         except ValueError:
@@ -96,6 +99,22 @@ def test_compressed_case_file_is_checked(tmp_path):
     with gzip.open(tmp_path / "0" / "U.gz", "wt") as f:
         f.write('internalField uniform (0 0 0);\nx #codeStream { };\n')
     with pytest.raises(ValueError, match="not allowed"):
+        A.apply(tmp_path, {}, {})
+    # a file over the edit limit is still checked before a run (never skipped), plain or compressed
+    big = "internalField nonuniform List<scalar> 1 (0);\n" + "// pad\n" * 400_000 + "x #codeStream { };\n"
+    (tmp_path / "0" / "U.gz").unlink()
+    (tmp_path / "0" / "T").write_text(big)
+    with pytest.raises(ValueError, match="not allowed"):
+        A.apply(tmp_path, {}, {})
+    (tmp_path / "0" / "T").unlink()
+    with gzip.open(tmp_path / "0" / "T.gz", "wt") as f:
+        f.write(big)
+    with pytest.raises(ValueError, match="not allowed"):
+        A.apply(tmp_path, {}, {})
+    # a damaged or cut-short compressed file is refused, never partly checked
+    data = (tmp_path / "0" / "T.gz").read_bytes()
+    (tmp_path / "0" / "T.gz").write_bytes(data[: len(data) // 2])
+    with pytest.raises(ValueError, match="damaged"):
         A.apply(tmp_path, {}, {})
 
 
