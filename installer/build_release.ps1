@@ -38,11 +38,11 @@ try {
 } finally { $z.Dispose() }
 
 # 3. the one-file setup: a small exe (compiled with the C# compiler that ships with Windows) that carries app.zip,
-#    unpacks it into %LOCALAPPDATA%\Programs\SimWB and runs the installer
+#    asks where to install (default C:\SimWB), unpacks it there and runs the installer
 $exe = Join-Path $dist 'SimWB-Setup.exe'
 $csc = Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 if (-not (Test-Path $csc)) { throw 'The C# compiler (csc.exe of .NET Framework 4) was not found.' }
-$cscArgs = @('/nologo', '/target:exe', "/out:$exe", "/resource:$zip,app.zip", '/reference:System.IO.Compression.dll', '/reference:System.IO.Compression.FileSystem.dll', (Join-Path $PSScriptRoot 'Setup.cs'))
+$cscArgs = @('/nologo', '/target:exe', "/out:$exe", "/resource:$zip,app.zip", '/reference:System.IO.Compression.dll', '/reference:System.IO.Compression.FileSystem.dll', '/reference:System.Windows.Forms.dll', '/reference:System.Drawing.dll', (Join-Path $PSScriptRoot 'Setup.cs'))
 $ico = Join-Path $PSScriptRoot 'simwb.ico'
 if (Test-Path $ico) { $cscArgs += "/win32icon:$ico" }
 & $csc @cscArgs

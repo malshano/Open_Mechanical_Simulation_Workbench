@@ -7,17 +7,20 @@
     5. desktop + Start menu shortcuts, a self-test, and the first start.
   Nothing is installed system-wide. The Uninstall shortcut (or Uninstall-SimWB.ps1) removes it all.
 
-  Options:  -InstallDir <folder>   where to install (default %LOCALAPPDATA%\Programs\SimWB)
+  Options:  -InstallDir <folder>   where to install (default C:\SimWB, or the folder of an existing install in
+                                   %LOCALAPPDATA%\Programs\SimWB)
             -NoLaunch              do not start the workbench at the end
             -SkipSolvers           skip OpenFOAM and CalculiX (the workbench offers them again when it needs them)
             -DryRun                check the computer and show what would be done; download and change nothing
             -Quiet                 never wait for a key press
+            -NoDesktopShortcut     no desktop icon (the Start menu entries are still made)
             -NoShortcuts           do not make desktop / Start menu icons (for tests)
 #>
 param(
-    [string]$InstallDir = (Join-Path $env:LOCALAPPDATA 'Programs\SimWB'),
-    [switch]$NoLaunch, [switch]$SkipSolvers, [switch]$DryRun, [switch]$Quiet, [switch]$NoShortcuts
+    [string]$InstallDir = '',
+    [switch]$NoLaunch, [switch]$SkipSolvers, [switch]$DryRun, [switch]$Quiet, [switch]$NoShortcuts, [switch]$NoDesktopShortcut
 )
+if ($env:SIMWB_NO_DESKTOP_SHORTCUT) { $NoDesktopShortcut = $true }
 # the same switches from the environment (for the one-file setup, which cannot pass arguments, and for tests)
 if ($env:SIMWB_QUIET) { $Quiet = $true }
 if ($env:SIMWB_NO_LAUNCH) { $NoLaunch = $true }
@@ -35,6 +38,44 @@ $PYTHON     = '3.12'
 $MIN_FREE_GB = 10
 
 $Source  = Split-Path -Parent $PSScriptRoot          # the folder with simwb\ (the unzipped release or a checkout)
+
+# ---- safety of the install folder (same rules as SimWB-Setup.exe). The workbench runs programs from its folder, so
+# nobody else may be able to write there or to have made it first. Folders in the user's profile are private already;
+# any other is created with permissions for the user, SYSTEM and Administrators only, and an existing one is used only
+# when the user (or Administrators) own it.
+function Test-InstallDir([string]$Dir) {      # $null when usable, otherwise the reason
+    if (($Dir.TrimEnd('\') + '\').StartsWith($env:USERPROFILE.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { return $null }
+    if (-not (Test-Path -LiteralPath $Dir)) { return $null }
+    if ((Get-Item -LiteralPath $Dir -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { return "$Dir is a link, not a folder." }
+    $owner = (Get-Acl -LiteralPath $Dir).GetOwner([Security.Principal.SecurityIdentifier])
+    if (-not $owner.Equals([Security.Principal.WindowsIdentity]::GetCurrent().User) -and
+        -not $owner.IsWellKnown([Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid)) { return "$Dir already exists and belongs to another user." }
+    $null
+}
+function New-LockedDirectory([string]$Dir) {
+    $inside = ($Dir.TrimEnd('\') + '\').StartsWith($env:USERPROFILE.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)
+    if ($inside) { New-Item -ItemType Directory -Force -Path $Dir | Out-Null; return }
+    $why = Test-InstallDir $Dir; if ($why) { throw $why }
+    $sec = New-Object Security.AccessControl.DirectorySecurity
+    $sec.SetAccessRuleProtection($true, $false)         # no inherited permissions (C:\ gives every user write access)
+    foreach ($sid in @([Security.Principal.WindowsIdentity]::GetCurrent().User,
+                       (New-Object Security.Principal.SecurityIdentifier([Security.Principal.WellKnownSidType]::LocalSystemSid, $null)),
+                       (New-Object Security.Principal.SecurityIdentifier([Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null)))) {
+        $sec.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+    }
+    if (Test-Path -LiteralPath $Dir) { (Get-Item -LiteralPath $Dir -Force).SetAccessControl($sec) }
+    else { [IO.Directory]::CreateDirectory($Dir, $sec) | Out-Null }   # created with the permissions, never open
+    $why = Test-InstallDir $Dir; if ($why) { throw $why }
+}
+
+if (-not $InstallDir) {
+    # an installed copy in the older per-user folder is updated in place; otherwise C:\SimWB, unless that is not safe
+    $perUser = Join-Path $env:LOCALAPPDATA 'Programs\SimWB'
+    $short = Join-Path $(if ($env:SystemDrive) { $env:SystemDrive } else { 'C:' }) 'SimWB'
+    if ((Test-Path (Join-Path $perUser 'install.log')) -or (Test-Path (Join-Path $perUser 'simwb\__init__.py'))) { $InstallDir = $perUser }
+    elseif (Test-InstallDir $short) { $InstallDir = $perUser }
+    else { $InstallDir = $short }
+}
 $InstallDir = [IO.Path]::GetFullPath($InstallDir)
 $Log     = Join-Path $InstallDir 'install.log'
 $T0      = Get-Date
@@ -156,7 +197,7 @@ $ramGB = [Math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemor
 if ($ramGB -lt 8) { Warn "$ramGB GB of memory: fine for small studies, flow simulations of bigger meshes want 16 GB or more." } else { Ok "$ramGB GB memory, $([Environment]::ProcessorCount) logical cores" }
 if ($DryRun) { Line ''; C '  Dry run finished: this computer is ready for the setup.' Green; Line ''; exit 0 }
 
-New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+try { New-LockedDirectory $InstallDir } catch { Line ''; C '  ✗ ' Red; Line "$_" Red; Line '    Choose another folder with -InstallDir.' Gray; if (-not $Quiet) { Read-Host '  Press Enter to close' | Out-Null }; exit 1 }
 Add-Content -Path $Log -Value ("=== SimWB setup {0} ===" -f (Get-Date))
 
 # 2 ---------------------------------------------------------------------------------------- the workbench files
@@ -245,12 +286,15 @@ $links = @(
     @{ Path = (Join-Path ([Environment]::GetFolderPath('Programs')) 'Mechanical Simulation Workbench.lnk'); Args = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$launcher`""; Desc = 'Start the workbench' },
     @{ Path = (Join-Path ([Environment]::GetFolderPath('Programs')) 'Uninstall Mechanical Simulation Workbench.lnk'); Args = "-NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $InstallDir 'installer\Uninstall-SimWB.ps1')`""; Desc = 'Remove the workbench and its solvers' }
 )
+if ($NoDesktopShortcut) { $links = @($links | Where-Object { $_.Path -notlike (Join-Path ([Environment]::GetFolderPath('Desktop')) '*') }) }
 foreach ($l in $(if ($NoShortcuts) { @() } else { $links })) {
     $s = $wsh.CreateShortcut($l.Path); $s.TargetPath = $ps; $s.Arguments = $l.Args; $s.WorkingDirectory = $InstallDir; $s.Description = $l.Desc
     if ($icon -and (Test-Path $icon)) { $s.IconLocation = $icon }
     $s.Save()
 }
-if ($NoShortcuts) { Skip 'No icons (-NoShortcuts)' } else { Ok 'Desktop and Start menu icons made' }
+if ($NoShortcuts) { Skip 'No icons (-NoShortcuts)' }
+elseif ($NoDesktopShortcut) { Ok 'Start menu icons made (no desktop icon, as chosen)' }
+else { Ok 'Desktop and Start menu icons made' }
 Push-Location $InstallDir   # (the packages must be found in the install folder, not in the folder the setup was started from)
 $env:PYTHONPATH = ''
 $test = & $py -c "import gmsh, numpy, scipy, fastapi, simwb.server; from simwb.solvers.openfoam import runner; from simwb.solvers.calculix import installer as c; print('openfoam', runner.detect(True)['available'], '| calculix', c.detect(True)['available'])" 2>&1

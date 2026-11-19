@@ -29,10 +29,14 @@ pypardiso (FEM solvers).
 Download **`SimWB-Setup.exe`** from the latest release and double-click it (or unzip `SimWB-v*-windows.zip` and
 double-click **`Install SimWB.bat`**). It installs everything into one folder, with no admin rights: a private
 Python, the libraries, OpenFOAM + Microsoft MPI for flow simulation and CalculiX as a second structural solver
-(about 3 GB of downloads, 15-30 minutes), makes a desktop icon and opens the workbench. The *Uninstall* shortcut in
-the Start menu removes it all; your studies are saved in the folders you choose and are not touched. Windows
+(about 3 GB of downloads, 15-30 minutes), makes a desktop icon and opens the workbench. `SimWB-Setup.exe` first asks
+**where to install** (default `C:\SimWB`, no admin rights needed; an existing install in
+`%LOCALAPPDATA%\Programs\SimWB` is updated in place; a folder that already holds other files gets a `SimWB` folder
+inside it) and whether to put an **icon on the desktop**. The *Uninstall* shortcut in the Start menu removes
+it all; your studies are saved in the folders you choose and are not touched. Windows
 SmartScreen may warn about the unsigned setup file: choose *More info* > *Run anyway*.
-Options of `installer\Install-SimWB.ps1`: `-InstallDir`, `-SkipSolvers`, `-DryRun` (check this computer only), `-Quiet`.
+Options of `installer\Install-SimWB.ps1`: `-InstallDir`, `-NoDesktopShortcut`, `-SkipSolvers`, `-DryRun` (check this
+computer only), `-Quiet`.
 
 ## Start
 

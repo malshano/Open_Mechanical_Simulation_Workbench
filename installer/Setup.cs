@@ -1,24 +1,181 @@
-// SimWB-Setup.exe: unpacks the workbench (embedded app.zip) into %LOCALAPPDATA%\Programs\SimWB and runs the installer.
+// SimWB-Setup.exe: asks where to install and whether to make a desktop icon, unpacks the workbench (embedded app.zip)
+// there and runs the installer. Default folder: C:\SimWB (no admin rights needed; see DefaultFolder).
 // Built by installer\build_release.ps1 with the C# compiler that ships with Windows (no extra tools needed).
+// SIMWB_QUIET=1 skips the window and uses the defaults (for tests); SIMWB_INSTALL_DIR sets the folder then.
 using System;
 using System.Diagnostics;
+using System.Drawing;
 using System.IO;
 using System.IO.Compression;
 using System.Reflection;
+using System.Security.AccessControl;
+using System.Security.Principal;
+using System.Windows.Forms;
 
 static class Setup
 {
+    // The folder the workbench goes into. The uninstaller removes this whole folder, so a folder that already holds
+    // other things (Documents, a drive root) is never used itself: the workbench goes into a "SimWB" folder inside it.
+    public static string TargetFolder(string typed)
+    {
+        string dir = Path.GetFullPath(Environment.ExpandEnvironmentVariables((typed ?? "").Trim().Trim('"')));
+        bool exists = Directory.Exists(dir);
+        bool isSimwb = File.Exists(Path.Combine(dir, "simwb", "__init__.py")) || File.Exists(Path.Combine(dir, "install.log"));
+        bool empty = !exists || Directory.GetFileSystemEntries(dir).Length == 0;
+        bool root = Path.GetPathRoot(dir).TrimEnd('\\') == dir.TrimEnd('\\');
+        if (isSimwb || (empty && !root) || string.Equals(Path.GetFileName(dir.TrimEnd('\\')), "SimWB", StringComparison.OrdinalIgnoreCase))
+            return dir;
+        return Path.Combine(dir, "SimWB");
+    }
+
+    class Choice { public string Dir; public bool Desktop = true; }
+
+    // ---- safety of the install folder. The workbench runs programs from its folder (Python, OpenFOAM, scripts), so
+    // nobody else may be able to write there or to have made it first. Folders inside the user's profile are private
+    // to the user already; any other (C:\SimWB, D:\Tools\SimWB) is created readable/writable only by the user, SYSTEM
+    // and Administrators, and an existing one is used only when the user (or Administrators) own it.
+    static bool UnderProfile(string dir)
+    {
+        string p = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile).TrimEnd('\\') + "\\";
+        return (dir.TrimEnd('\\') + "\\").StartsWith(p, StringComparison.OrdinalIgnoreCase);
+    }
+
+    static DirectorySecurity Locked()
+    {
+        DirectorySecurity ds = new DirectorySecurity();
+        ds.SetAccessRuleProtection(true, false);   // no inherited permissions (C:\ gives every user write access)
+        SecurityIdentifier[] who = { WindowsIdentity.GetCurrent().User,
+            new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
+            new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null) };
+        foreach (SecurityIdentifier sid in who)
+            ds.AddAccessRule(new FileSystemAccessRule(sid, FileSystemRights.FullControl,
+                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
+        return ds;
+    }
+
+    // null when the folder can be used, otherwise the reason
+    public static string Problem(string dir)
+    {
+        if (UnderProfile(dir) || !Directory.Exists(dir)) return null;
+        try
+        {
+            DirectoryInfo di = new DirectoryInfo(dir);
+            if ((di.Attributes & FileAttributes.ReparsePoint) != 0) return dir + " is a link, not a folder.";
+            SecurityIdentifier owner = (SecurityIdentifier)di.GetAccessControl().GetOwner(typeof(SecurityIdentifier));
+            if (!owner.Equals(WindowsIdentity.GetCurrent().User) && !owner.IsWellKnown(WellKnownSidType.BuiltinAdministratorsSid))
+                return dir + " already exists and belongs to another user.";
+            return null;
+        }
+        catch (Exception e) { return "Cannot check " + dir + ": " + e.Message; }
+    }
+
+    // creates the folder (or takes over one the user owns) with the protected permissions; throws if it is not safe
+    public static void Prepare(string dir)
+    {
+        if (UnderProfile(dir)) { Directory.CreateDirectory(dir); return; }
+        string why = Problem(dir);
+        if (why != null) throw new InvalidOperationException(why);
+        if (!Directory.Exists(dir)) Directory.CreateDirectory(dir, Locked());   // created with the permissions, never open
+        else new DirectoryInfo(dir).SetAccessControl(Locked());
+        why = Problem(dir);   // (another user cannot have won a race: the owner is checked again)
+        if (why != null) throw new InvalidOperationException(why);
+    }
+
+    static bool IsInstall(string dir)
+    {
+        return File.Exists(Path.Combine(dir, "install.log")) || File.Exists(Path.Combine(dir, "simwb", "__init__.py"));
+    }
+
+    // The folder offered first: an installed workbench in the older per-user folder is updated in place; otherwise
+    // C:\SimWB (short, easy to find, no admin rights needed for a new folder on the system drive); if that cannot be
+    // written (locked-down computer) the per-user folder.
+    public static string DefaultFolder()
+    {
+        string local = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+        if (string.IsNullOrEmpty(local)) local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        string perUser = Path.GetFullPath(Path.Combine(local, "Programs", "SimWB"));
+        if (IsInstall(perUser)) return perUser;
+        string drive = Environment.GetEnvironmentVariable("SystemDrive");
+        if (string.IsNullOrEmpty(drive)) drive = "C:";
+        string shortDir = drive + "\\SimWB";
+        try
+        {
+            if (Problem(shortDir) != null) return perUser;       // someone else's folder (or a link): never used
+            if (IsInstall(shortDir)) return shortDir;
+            bool made = !Directory.Exists(shortDir);
+            if (made) Directory.CreateDirectory(shortDir, Locked());   // (can it be made? private from the first moment)
+            string probe = Path.Combine(shortDir, ".write-test");
+            File.WriteAllText(probe, "x"); File.Delete(probe);
+            if (made && Directory.GetFileSystemEntries(shortDir).Length == 0) Directory.Delete(shortDir);   // (made again at install)
+            return shortDir;
+        }
+        catch { return perUser; }
+    }
+
+    static Choice Ask(string defaultDir)
+    {
+        Application.EnableVisualStyles();
+        Form f = new Form { Text = "Mechanical Simulation Workbench - Setup", ClientSize = new Size(560, 250),
+                            FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false,
+                            StartPosition = FormStartPosition.CenterScreen, Font = new Font("Segoe UI", 9f) };
+        Label l1 = new Label { Text = "Install the workbench into this folder:", Left = 16, Top = 16, Width = 520 };
+        TextBox box = new TextBox { Text = defaultDir, Left = 16, Top = 40, Width = 440 };
+        Button browse = new Button { Text = "Browse...", Left = 464, Top = 38, Width = 80 };
+        Label will = new Label { Left = 16, Top = 70, Width = 528, Height = 34, ForeColor = Color.DimGray };
+        CheckBox desk = new CheckBox { Text = "Put an icon on the desktop", Left = 16, Top = 114, Width = 400, Checked = true };
+        Label note = new Label { Left = 16, Top = 142, Width = 528, Height = 50, ForeColor = Color.DimGray,
+            Text = "A Start menu entry (and an Uninstall entry) is always made. About 10 GB of free space and 15-30 minutes " +
+                   "are needed: the workbench downloads Python, OpenFOAM and CalculiX once. No administrator rights." };
+        Button ok = new Button { Text = "Install", Left = 380, Top = 208, Width = 80, DialogResult = DialogResult.OK };
+        Button cancel = new Button { Text = "Cancel", Left = 468, Top = 208, Width = 76, DialogResult = DialogResult.Cancel };
+        Action refresh = delegate
+        {
+            try
+            {
+                string t = TargetFolder(box.Text), why = Problem(t);
+                will.Text = why ?? ("Will install into: " + t);
+                will.ForeColor = why == null ? Color.DimGray : Color.Firebrick;
+                ok.Enabled = why == null && box.Text.Trim().Length > 0;
+            }
+            catch { will.Text = "This is not a valid folder."; ok.Enabled = false; }
+        };
+        box.TextChanged += delegate { refresh(); };
+        browse.Click += delegate
+        {
+            using (FolderBrowserDialog d = new FolderBrowserDialog { Description = "Choose where to install the workbench" })
+                if (d.ShowDialog(f) == DialogResult.OK) box.Text = d.SelectedPath;
+        };
+        f.Controls.AddRange(new Control[] { l1, box, browse, will, desk, note, ok, cancel });
+        f.AcceptButton = ok; f.CancelButton = cancel;
+        refresh();
+        if (f.ShowDialog() != DialogResult.OK) return null;
+        return new Choice { Dir = TargetFolder(box.Text), Desktop = desk.Checked };
+    }
+
+    [STAThread]
     static int Main()
     {
         Console.Title = "Mechanical Simulation Workbench - Setup";
-        string local = Environment.GetEnvironmentVariable("LOCALAPPDATA");
-        if (string.IsNullOrEmpty(local)) local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        string app = Path.GetFullPath(Path.Combine(local, "Programs", "SimWB"));
+        string defaultDir = DefaultFolder();
+        Choice c;
+        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("SIMWB_QUIET")))
+        {
+            string d = Environment.GetEnvironmentVariable("SIMWB_INSTALL_DIR");
+            c = new Choice { Dir = TargetFolder(string.IsNullOrEmpty(d) ? defaultDir : d), Desktop = string.IsNullOrEmpty(Environment.GetEnvironmentVariable("SIMWB_NO_DESKTOP_SHORTCUT")) };
+        }
+        else
+        {
+            try { c = Ask(defaultDir); }
+            catch { c = new Choice { Dir = defaultDir }; }   // (no window possible: the default folder)
+            if (c == null) return 0;                         // cancelled
+        }
+        string app = c.Dir;
         Console.WriteLine();
+        Console.WriteLine("  Installing into " + app);
         Console.WriteLine("  Unpacking the workbench...");
         try
         {
-            Directory.CreateDirectory(app);
+            Prepare(app);
             using (Stream s = Assembly.GetExecutingAssembly().GetManifestResourceStream("app.zip"))
             using (ZipArchive z = new ZipArchive(s))
             {
@@ -26,7 +183,7 @@ static class Setup
                 {
                     if (e.FullName.EndsWith("/")) continue;
                     string dest = Path.GetFullPath(Path.Combine(app, e.FullName));
-                    if (!dest.StartsWith(app + Path.DirectorySeparatorChar)) continue;   // never write outside the install folder
+                    if (!dest.StartsWith(app.TrimEnd('\\') + Path.DirectorySeparatorChar)) continue;   // never write outside the install folder
                     Directory.CreateDirectory(Path.GetDirectoryName(dest));
                     e.ExtractToFile(dest, true);
                 }
@@ -43,6 +200,7 @@ static class Setup
         ProcessStartInfo psi = new ProcessStartInfo("powershell.exe",
             "-NoProfile -ExecutionPolicy Bypass -File \"" + script + "\" -InstallDir \"" + app + "\"");
         psi.UseShellExecute = false;
+        if (!c.Desktop) psi.EnvironmentVariables["SIMWB_NO_DESKTOP_SHORTCUT"] = "1";
         using (Process p = Process.Start(psi))
         {
             p.WaitForExit();
