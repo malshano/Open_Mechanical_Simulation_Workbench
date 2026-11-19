@@ -32,7 +32,8 @@ Python, the libraries, OpenFOAM + Microsoft MPI for flow simulation and CalculiX
 (about 3 GB of downloads, 15-30 minutes), makes a desktop icon and opens the workbench. `SimWB-Setup.exe` first asks
 **where to install** (default `C:\SimWB`, no admin rights needed; an existing install in
 `%LOCALAPPDATA%\Programs\SimWB` is updated in place; a folder that already holds other files gets a `SimWB` folder
-inside it) and whether to put an **icon on the desktop**. The *Uninstall* shortcut in the Start menu removes
+inside it). Outside your user folder it must sit directly on a drive (`C:\SimWB`, `D:\SimWB`) and is made private to
+you, so other users of the computer cannot change the programs it runs and whether to put an **icon on the desktop**. The *Uninstall* shortcut in the Start menu removes
 it all; your studies are saved in the folders you choose and are not touched. Windows
 SmartScreen may warn about the unsigned setup file: choose *More info* > *Run anyway*.
 Options of `installer\Install-SimWB.ps1`: `-InstallDir`, `-NoDesktopShortcut`, `-SkipSolvers`, `-DryRun` (check this

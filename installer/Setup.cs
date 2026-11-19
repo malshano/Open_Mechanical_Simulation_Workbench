@@ -53,17 +53,46 @@ static class Setup
         return ds;
     }
 
+    // a folder directly on a drive (C:\SimWB): there is no parent folder that someone else could rename or swap
+    static bool OnDriveRoot(string dir)
+    {
+        string d = dir.TrimEnd('\\'), parent = Path.GetDirectoryName(d);
+        return parent != null && parent.TrimEnd('\\') == Path.GetPathRoot(d).TrimEnd('\\') && !d.StartsWith("\\\\");
+    }
+
+    // true when only the user, SYSTEM and Administrators are given any access (the folder is private)
+    static bool OnlyTrusted(DirectorySecurity ds)
+    {
+        SecurityIdentifier me = WindowsIdentity.GetCurrent().User;
+        foreach (FileSystemAccessRule r in ds.GetAccessRules(true, true, typeof(SecurityIdentifier)))
+        {
+            if (r.AccessControlType != AccessControlType.Allow) continue;
+            SecurityIdentifier s = (SecurityIdentifier)r.IdentityReference;
+            if (!s.Equals(me) && !s.IsWellKnown(WellKnownSidType.LocalSystemSid) && !s.IsWellKnown(WellKnownSidType.BuiltinAdministratorsSid))
+                return false;
+        }
+        return true;
+    }
+
     // null when the folder can be used, otherwise the reason
     public static string Problem(string dir)
     {
-        if (UnderProfile(dir) || !Directory.Exists(dir)) return null;
+        if (UnderProfile(dir)) return null;
+        if (!OnDriveRoot(dir))
+            return "Outside your user folder the workbench goes directly on a drive (for example C:\\SimWB or D:\\SimWB): a folder " +
+                   "inside other folders could be swapped by other users. Choose such a folder.";
+        if (!Directory.Exists(dir)) return null;
         try
         {
             DirectoryInfo di = new DirectoryInfo(dir);
             if ((di.Attributes & FileAttributes.ReparsePoint) != 0) return dir + " is a link, not a folder.";
-            SecurityIdentifier owner = (SecurityIdentifier)di.GetAccessControl().GetOwner(typeof(SecurityIdentifier));
+            DirectorySecurity acl = di.GetAccessControl();
+            SecurityIdentifier owner = (SecurityIdentifier)acl.GetOwner(typeof(SecurityIdentifier));
             if (!owner.Equals(WindowsIdentity.GetCurrent().User) && !owner.IsWellKnown(WellKnownSidType.BuiltinAdministratorsSid))
                 return dir + " already exists and belongs to another user.";
+            // files in a folder that others could write to may have been planted: only an empty folder or a private one
+            if (!OnlyTrusted(acl) && Directory.GetFileSystemEntries(dir).Length > 0)
+                return dir + " already holds files and is not private to you: choose an empty folder.";
             return null;
         }
         catch (Exception e) { return "Cannot check " + dir + ": " + e.Message; }
@@ -75,10 +104,13 @@ static class Setup
         if (UnderProfile(dir)) { Directory.CreateDirectory(dir); return; }
         string why = Problem(dir);
         if (why != null) throw new InvalidOperationException(why);
-        if (!Directory.Exists(dir)) Directory.CreateDirectory(dir, Locked());   // created with the permissions, never open
+        bool existed = Directory.Exists(dir), wasEmpty = existed && Directory.GetFileSystemEntries(dir).Length == 0;
+        if (!existed) Directory.CreateDirectory(dir, Locked());   // created with the permissions, never open
         else new DirectoryInfo(dir).SetAccessControl(Locked());
         why = Problem(dir);   // (another user cannot have won a race: the owner is checked again)
         if (why != null) throw new InvalidOperationException(why);
+        if (wasEmpty && Directory.GetFileSystemEntries(dir).Length > 0)
+            throw new InvalidOperationException(dir + " changed while it was being made private: nothing was installed.");
     }
 
     static bool IsInstall(string dir)

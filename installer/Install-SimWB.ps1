@@ -45,11 +45,23 @@ $Source  = Split-Path -Parent $PSScriptRoot          # the folder with simwb\ (t
 # when the user (or Administrators) own it.
 function Test-InstallDir([string]$Dir) {      # $null when usable, otherwise the reason
     if (($Dir.TrimEnd('\') + '\').StartsWith($env:USERPROFILE.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { return $null }
+    # directly on a drive (C:\SimWB): no parent folder that someone else could rename or swap
+    $d = $Dir.TrimEnd('\')
+    if ($d.StartsWith('\\') -or (Split-Path $d -Parent).TrimEnd('\') -ne [IO.Path]::GetPathRoot($d).TrimEnd('\')) {
+        return "Outside your user folder the workbench goes directly on a drive (for example C:\SimWB or D:\SimWB): a folder inside other folders could be swapped by other users. Choose such a folder."
+    }
     if (-not (Test-Path -LiteralPath $Dir)) { return $null }
     if ((Get-Item -LiteralPath $Dir -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { return "$Dir is a link, not a folder." }
-    $owner = (Get-Acl -LiteralPath $Dir).GetOwner([Security.Principal.SecurityIdentifier])
-    if (-not $owner.Equals([Security.Principal.WindowsIdentity]::GetCurrent().User) -and
-        -not $owner.IsWellKnown([Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid)) { return "$Dir already exists and belongs to another user." }
+    $acl = Get-Acl -LiteralPath $Dir
+    $me = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier])
+    if (-not $owner.Equals($me) -and -not $owner.IsWellKnown([Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid)) { return "$Dir already exists and belongs to another user." }
+    # files in a folder that others could write to may have been planted: only an empty folder or a private one
+    $others = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | Where-Object {
+        $_.AccessControlType -eq 'Allow' -and -not ($_.IdentityReference.Equals($me) -or
+            $_.IdentityReference.IsWellKnown([Security.Principal.WellKnownSidType]::LocalSystemSid) -or
+            $_.IdentityReference.IsWellKnown([Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid)) })
+    if ($others.Count -gt 0 -and @(Get-ChildItem -LiteralPath $Dir -Force).Count -gt 0) { return "$Dir already holds files and is not private to you: choose an empty folder." }
     $null
 }
 function New-LockedDirectory([string]$Dir) {
@@ -63,9 +75,12 @@ function New-LockedDirectory([string]$Dir) {
                        (New-Object Security.Principal.SecurityIdentifier([Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null)))) {
         $sec.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
     }
-    if (Test-Path -LiteralPath $Dir) { (Get-Item -LiteralPath $Dir -Force).SetAccessControl($sec) }
+    $existed = Test-Path -LiteralPath $Dir
+    $wasEmpty = $existed -and (@(Get-ChildItem -LiteralPath $Dir -Force).Count -eq 0)
+    if ($existed) { (Get-Item -LiteralPath $Dir -Force).SetAccessControl($sec) }
     else { [IO.Directory]::CreateDirectory($Dir, $sec) | Out-Null }   # created with the permissions, never open
     $why = Test-InstallDir $Dir; if ($why) { throw $why }
+    if ($wasEmpty -and @(Get-ChildItem -LiteralPath $Dir -Force).Count -gt 0) { throw "$Dir changed while it was being made private: nothing was installed." }
 }
 
 if (-not $InstallDir) {
