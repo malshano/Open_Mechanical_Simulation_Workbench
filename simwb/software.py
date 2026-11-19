@@ -33,6 +33,7 @@ STUDY_SOLVERS = {
     "heat_conduction": ["builtin"],
     "vibration_modal": ["builtin", "calculix"],
     "static_structural": ["builtin", "calculix"],
+    "aeroelastic_flutter": ["builtin"],
     "cht_enclosure": ["openfoam"],
     "external_aero": ["openfoam"],
 }

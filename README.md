@@ -10,6 +10,7 @@ with a Claude assistant that can do the setup for you.
 | **Heat transfer in solids** | built-in finite-element solver (no install) | heated plates, PCBs, enclosures with convection coefficients |
 | **Static structural (stress, deformation)** | built-in linear static FEM, quadratic tetrahedra (no install) | brackets, shafts, housings: von Mises and principal stresses, deflection, safety factor, estimated stress error under forces, pressures, gravity |
 | **Vibration (natural frequencies, shake test)** | built-in modal FEM, quadratic tetrahedra (no install) | brackets, mounts, PCBs: will a part resonate with a motor or rotor? Optional sine-sweep shake test: stress, movement and acceleration against frequency |
+| **Flutter (multiphysics: structure + air)** | built-in modal FEM coupled to unsteady strip aerodynamics (p-k method), on the start page's Multiphysics tab | wings, blades, fins, panels: flutter and divergence speed, frequency, margin on the design speed, V-f and V-g diagrams |
 | **Heatsink / electronics cooling** | OpenFOAM `chtMultiRegionSimpleFoam` | chip + heatsink in a duct or enclosure with a fan |
 | **Drone / external aerodynamics** | OpenFOAM `simpleFoam` (k-ω SST) + actuator-disk rotors | drag, rotor downwash, trim pitch in forward flight |
 
@@ -138,7 +139,8 @@ claude mcp add simwb -- C:\path\to\Open_Mechanical_Simulation_Workbench\.venv\Sc
   set centre, axis, radius, length and rpm, or *Fit around part*. *MRF* (steady, rotating reference frame, fast)
   or *Sliding mesh* (transient: the zone's cells rotate, its boundary becomes a cyclicAMI pair). The zone boundary
   is meshed exactly; regenerate the mesh after changing a zone.
-* **Mesh** — start with *Coarse* for a quick look, then *Medium/Fine*. Use *Section* to look inside.
+* **Mesh** — start with *Coarse* for a quick look, then *Medium/Fine*. Use *Section* to look inside. For flow round a
+  body there is also a **hex-dominant** mesh (OpenFOAM snappyHexMesh); rotors and moving zones use the tetrahedral mesh.
 * **Selecting many faces** — Shift+click selects every face of that part, Ctrl+click selects all similar faces
   (same surface type, parallel normal, similar area — e.g. all fin sides). Click a view button twice to look from the
   opposite side; hide parts with the eye icon.

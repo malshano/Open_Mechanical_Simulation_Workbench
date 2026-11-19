@@ -435,7 +435,7 @@ def mesh_settings(pid: str, body: dict = Body(...)):
     pr = P.open_project(pid)
     pr.set_mesh(preset=body.get("preset"), size_max_mm=body.get("size_max_mm"), size_min_mm=body.get("size_min_mm"),
                 refinements=body.get("refinements"), regions=body.get("regions"), layers=body.get("layers"),
-                defeature_mm=body["defeature_mm"] if "defeature_mm" in body else False)
+                defeature_mm=body["defeature_mm"] if "defeature_mm" in body else False, method=body.get("method"))
     return pr.state()
 
 
@@ -446,8 +446,8 @@ def mesh(pid: str):
 
 @app.get("/api/projects/{pid}/mesh/view")
 def mesh_view(pid: str, clip_axis: str | None = None, clip_pos: float | None = None, hide_fluid: bool = False,
-              poor: float | None = None):
-    return P.open_project(pid).mesh_view(clip_axis, clip_pos, hide_fluid, poor)
+              poor: float | None = None, color: str = "quality"):
+    return P.open_project(pid).mesh_view(clip_axis, clip_pos, hide_fluid, poor, color)
 
 
 @app.post("/api/projects/{pid}/solve")
@@ -864,6 +864,23 @@ def result_plane(pid: str, field: str, axis: str, pos: float, box: str, n: int =
     pr = P.open_project(pid)
     return resample.plane_payload(pr.results().at(time), field, "xyz".index(axis), pos, _box(box, pr),
                                   min(max(n, 16), 256), [h for h in hide.split(",") if h])
+
+
+@app.get("/api/projects/{pid}/results/line")
+def result_line(pid: str, field: str, p0: str, p1: str, n: int = 120, time: int = -1, hide: str = ""):
+    """The field along the straight line between two points (x,y,z in m): for the line plot of the results step."""
+    from . import resample
+
+    def pt(s):
+        try:
+            v = [float(x) for x in s.split(",")]
+        except ValueError:
+            v = []
+        if len(v) != 3:
+            raise ValueError("a point must be x,y,z (m)")
+        return v
+    pr = P.open_project(pid)
+    return resample.line_payload(pr.results().at(time), field, pt(p0), pt(p1), n, [h for h in hide.split(",") if h])
 
 
 @app.get("/api/projects/{pid}/results/vectors")

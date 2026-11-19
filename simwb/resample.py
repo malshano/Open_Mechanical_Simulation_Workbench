@@ -51,6 +51,7 @@ class Locator:
 
     def _try(self, p: np.ndarray, k: int):
         """Look for the tet of each point among its k nearest centroids: -> (tet or -1, weights, found)."""
+        k = min(k, len(self.tets))   # (a tiny mesh has fewer cells than candidates)
         _, cand = self.tree.query(p, k=k, workers=-1)
         cand = cand.reshape(len(p), -1)
         V = self.nodes[self.tets[cand]]                          # (m,K,4,3)
@@ -204,6 +205,34 @@ def _crop_to_box(payload: dict, axis: int, lo, hi, unit):
     return {"positions": _b64(pos), "indices": _b64(tris.ravel().astype(np.uint32)), "values": _b64(val),
             "per": "vertex", "n_tris": int(len(tris)), "min": float(fin.min()) if len(fin) else 0.0,
             "max": float(fin.max()) if len(fin) else 0.0, "unit": unit}
+
+
+def line_payload(rs, field: str, p0, p1, n: int = 120, hide_regions=()):
+    """A field sampled along the straight line p0 -> p1 (n points): distance from p0 (m) and the value at each point (a
+    vector field: its magnitude); None where the line is outside the mesh (in the air of a solid study, in a body of
+    a flow study). Also the statistics over the points inside."""
+    if field not in rs.fields:
+        raise ValueError(f"Unknown field '{field}'. Available: {', '.join(rs.fields)}")
+    a, b = np.asarray(p0, float), np.asarray(p1, float)
+    L = float(np.linalg.norm(b - a))
+    if L <= 0:
+        raise ValueError("the two points of the line are the same point")
+    n = int(min(max(n, 8), 600))
+    t = np.linspace(0.0, 1.0, n)
+    pts = a[None, :] + t[:, None] * (b - a)[None, :]
+    loc = Locator(rs, hide_regions)
+    tet, lam = loc.locate(pts)
+    v = loc.interpolate(tet, lam, nodal_values(rs, field))
+    if v.ndim == 2:
+        v = np.linalg.norm(v, axis=1)
+    ok = np.isfinite(v)
+    out = {"s": (t * L).tolist(), "values": [float(x) if f else None for x, f in zip(v, ok)],
+           "unit": rs.fields[field][2], "length": L, "p0": a.tolist(), "p1": b.tolist(), "n_inside": int(ok.sum())}
+    if ok.any():
+        w = v[ok]
+        out.update({"min": float(w.min()), "max": float(w.max()), "mean": float(w.mean()),
+                    "s_min": float(t[ok][np.argmin(w)] * L), "s_max": float(t[ok][np.argmax(w)] * L)})
+    return out
 
 
 def vector_payload(rs, axis: int, pos: float, box, n: int, field: str = "Velocity", hide_regions=()):

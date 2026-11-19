@@ -5,6 +5,7 @@ __pycache__/
 # downloaded or generated next to the workbench (anchored to the repo root: a bare "openfoam/" also hid new
 # source files in simwb/solvers/openfoam/ from git)
 /projects/
+/.workspace/
 /openfoam/
 /mpi/
 /calculix/

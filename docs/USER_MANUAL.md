@@ -218,6 +218,11 @@ Heat sources are set on parts (body settings), not on faces, in the heat and coo
    Each region shows an estimate of its cell count; check it before you generate (millions of cells need hours).
 5. Sizing is kept when you replace the geometry (part sizing follows parts of the same name; what cannot be placed is dropped with a note).
 6. Warning "Max non-orthogonality ... > 75 degrees can make OpenFOAM unstable": refine the mesh near the sharp or thin features, or accept the risk for a quick look.
+7. **Mesh type** (external aerodynamics): **Tetrahedral** (the default, made by Gmsh) or **Hex-dominant** (made by OpenFOAM's snappyHexMesh). The hex-dominant mesh is mostly hexahedral cells that change size in octree steps, with a finer wake behind the body and wall layers made together with it. It usually has fewer, more orthogonal cells for the same wall resolution. It takes about a minute per 100,000 cells and needs OpenFOAM.
+   - It is for **a body in the automatic box of air**, with its wall faces as the only boundary conditions. **Rotors, moving zones, symmetry planes and a custom air volume need the tetrahedral mesh**; the button explains which one stops it.
+   - The preset, *Near-wall size*, *Face sizing* (thin faces get finer cells), *Refinement regions* and the *Wall layers* settings work as for the tetrahedral mesh.
+   - **Thin parts need fine cells**: a wing 64 mm thick meshed with 50 mm cells cannot get layers (the statistics show how much of the wall did). Give thin faces a finer *Face sizing*, or choose a finer preset.
+   - The statistics show the share of hexahedra, the maximum non-orthogonality, skewness and aspect ratio from `checkMesh`, and the share of wall faces that got layers. "Concave cells" are reported as a note: snappyHexMesh limits them and the solvers tolerate them.
 
 ---
 
@@ -254,6 +259,19 @@ Run-time guide measured on the author's machine (8 physical cores): a 2.74 milli
 ---
 
 ## 8. Step 5 - Results
+
+### 8.0 The four tabs of the Results step
+
+The panel is split into four tabs; the 3D view is the same in all of them.
+
+| Tab | What it holds |
+|---|---|
+| **Summary** | The numbers of the study as tiles with a verdict (green / amber / red edge: safety factor, margin to an allowed temperature, a mode in the excitation range, heat balance) and a **show on model** link under the key values. Bars compare the parts (stress as a share of the yield strength, temperatures on one scale, forces and moments from a zero line); a stacked bar shows where the heat goes; the vibration study draws its natural frequencies as stems (height = share of the mass moving in the main direction, colour = direction, red band = excitation range, click a stem to show the mode); a flow study draws the solver residuals. Type an **Allowed temperature** to see the margin of every part (kept per study). Warnings are listed under the numbers. |
+| **Display** | **Field**, **Colours** (colour map: turbo, viridis, plasma, inferno, cool-warm, rainbow, grayscale; reverse; flat colour bands; the range), the **distribution** of the field over the drawn surface (drag over it to set the colour range, double-click for automatic), **Model** (opacity, min / max labels, mirrored half), **Deformation** and the contour planes, vortex surfaces, volume, arrows and particles of a flow. |
+| **Probe** | A **line plot**: the field along a straight line between two points you click on the model (or from the lowest to the highest value); move over the plot to see the point on the model; **Copy data** puts the table on the clipboard. The values pinned with **Probe** are listed here. |
+| **Checks** | The mesh-sensitivity check, the flow-model comparison, the comparison with the previous run and the model assumptions. |
+
+**Deformation.** A static study draws the part deformed under the load: the real deformation is far too small to see, so it is drawn larger (**Auto**: the largest movement is 8 % of the model size; **True size x1**, or a scale of your own); the note under the controls says by how much. The thin outline is the undeformed part. A mode shape swings at about 8 % of the model size times the amplitude. Every field of a static study (stress, safety factor, ...) is drawn on the deformed shape. The colour map is remembered in the browser.
 
 ### 8.1 Display
 
@@ -542,6 +560,28 @@ corner matters.
 Stress is averaged at the nodes within each part only. Where two parts of different material touch, each part
 shows its own stress (the stress jumps there in reality).
 
+
+## Flutter (multiphysics: structure + air)
+
+Start page, tab **Multiphysics** (it holds the studies that couple several kinds of physics; the *Studies* tab holds the single-physics ones).
+The structure and the air are solved together: the natural modes of the part (built-in FEM) are put in a stream of air
+whose forces follow the motion. The air speed is raised until the motion stops decaying and grows.
+
+1. Import the wing, blade, fin or plate. Examples: `airplane_wing.step` (half wing of a small aircraft: 800 mm semi-span, NACA 2406 section, tapered 160 to 100 mm chord, leading edge swept 15 degrees, 3D-printed in PLA; flutters at about 75 m/s) and `flutter_plate.step` (80 x 300 x 1.2 mm aluminium plate). Model the wing as one solid half (root at the fuselage): the root is treated as a mirror, so the finite-wing correction uses the aspect ratio of the whole wing.
+2. Mark the clamped root as **Fixed support** and the upper and lower skin as **Aerodynamic surface**. Added masses
+   (pods, tip tanks) can be put on faces.
+3. Setup: the direction the air flows towards (along the chord), the **span direction**, altitude, highest air speed
+   (0 = up to Mach 0.6), the design speed (for the margin: flutter speed / design speed, aircraft rules ask for 1.15),
+   damping (0 = lowest, conservative speed).
+4. Mesh, Solve (seconds). Results: flutter speed, frequency, Mach, margin, divergence speed, frequency and damping
+   against air speed (flutter where a damping line crosses zero), and the shapes: *Flutter mode*, *Divergence shape*
+   and every natural mode, animated in the 3D view.
+
+Limits: incompressible attached flow (indicative above Mach 0.6; transonic flutter is lower), strips across the span
+without induction between them (a finite-wing factor AR/(AR+2) of the whole wing is applied by default), no sweep effect on the air forces (a swept wing is cut into strips along the flow), thin slender surfaces (aspect
+ratio below about 2: estimate only), no sweep effect, no stall, linear small motion, no pre-stress. The method
+reproduces the Goland wing (published 2-D strip value about 137 m/s) within 1 %. A CFD-coupled check (OpenFOAM with
+preCICE) is the next multiphysics step.
 
 ## Shake test (sine sweep) in a vibration study
 

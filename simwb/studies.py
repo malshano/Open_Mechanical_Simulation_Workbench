@@ -138,6 +138,76 @@ STUDIES = {
         ],
         "needs": ["materials for all parts", "fixed supports for a mounted part (none = free-free modes)"],
     },
+    "aeroelastic_flutter": {
+        "label": "Flutter (structure + air)",
+        "icon": "flutter",
+        "category": "multiphysics",
+        "physics": ["Structure: modal finite elements (built in)", "Air: unsteady strip aerodynamics (Theodorsen)"],
+        "solver": "builtin_fem",
+        "solver_label": "Built-in FEM modes coupled to strip aerodynamics (p-k method)",
+        "description": "Aeroelastic stability of a wing, blade, fin or plate: the air speed at which the structure "
+                       "starts to flutter or diverge, with the frequency and shape of the motion.",
+        "examples": ["airplane_wing.step", "flutter_plate.step"],
+        "face_bc_types": {
+            "fixed_support": {
+                "label": "Fixed support (root)", "color": "#e4572e",
+                "help": "Face held completely still: the root of the wing, blade or fin where it is clamped or bolted.",
+                "params": [],
+            },
+            "aero_surface": {
+                "label": "Aerodynamic surface", "color": "#3a86ff",
+                "help": "The faces the air flows over and that carry the air loads: the upper and lower skin of the "
+                        "wing, blade or fin (select both sides). Faces not marked here (a root block, a pod, a "
+                        "mount) feel no air. None marked = every face counts.",
+                "params": [],
+            },
+            "added_mass": {
+                "label": "Added mass", "color": "#8338ec",
+                "help": "Mass of a component that is not modelled (a pod, tip tank, motor) on the face it is "
+                        "mounted to: inertia only, no stiffness. Wing-mounted masses change the flutter speed a lot.",
+                "params": [P("mass_kg", "Mass", "kg", 0.05, min=0, max=10000),
+                           P("cg_height_mm", "CG height above the face", "mm", 0.0, min=0, max=10000,
+                             help="Distance from the mounting face to the component's centre of gravity.")],
+            },
+        },
+        "default_face_bc": {"label": "Free"},
+        "body_roles": ["solid"],
+        "body_params": [],
+        "settings": [
+            P("flow_direction", "Air flows towards", "", "+x", options=["+x", "-x", "+y", "-y", "+z", "-z"],
+              help="The direction the air moves relative to the structure, along the chord of the wing (from the "
+                   "leading edge to the trailing edge)."),
+            P("span_axis", "Span direction", "", "y", options=["x", "y", "z"],
+              help="The axis along the wing from root to tip. The air must flow across it. The aerodynamic faces "
+                   "are cut into strips along this axis."),
+            P("n_modes", "Number of modes", "", 8, min=2, max=40,
+              help="Natural modes used for the structure (lowest first). Flutter usually involves the first bending "
+                   "and torsion modes; more modes make little difference once these are in."),
+            P("n_strips", "Strips along the span", "", 16, min=2, max=100,
+              help="Number of strips the aerodynamic faces are cut into. 10-20 is enough for a wing."),
+            P("altitude_m", "Altitude", "m", 0.0, min=-500, max=20000,
+              help="Sets the air density and the speed of sound from the standard atmosphere (0 = sea level, "
+                   "density 1.225 kg/m³). Flutter speeds are lower in denser air."),
+            P("speed_max_ms", "Highest air speed", "m/s", 0.0, min=0, max=2000,
+              help="Speeds from near zero up to this value are examined. 0 = automatic: up to Mach 0.6, the limit "
+                   "of the incompressible aerodynamics used here."),
+            P("design_speed_ms", "Design speed (for the margin)", "m/s", 0.0, min=0, max=2000,
+              help="The highest speed the structure is used at (a dive or maximum speed). The result then states "
+                   "the flutter margin = flutter speed / design speed; aircraft rules ask for 1.15 or more. "
+                   "0 = no margin is computed."),
+            P("damping_percent", "Structural damping", "% of critical", 0.0, min=0, max=20,
+              help="Damping ratio of every mode. 0 gives the lowest (conservative) flutter speed; measured values "
+                   "are 0.5-2 % for metal structures. Damping raises the flutter speed but cannot be predicted "
+                   "reliably: use a measured value or 0."),
+            P("finite_wing", "Finite-wing correction", "", "on", options=["on", "off"],
+              help="Reduces the lift of every strip for the finite aspect ratio (a short wing carries less lift per "
+                   "unit span than a 2-D airfoil): AR / (AR + 2). Standard 'modified strip theory'. Off = pure 2-D "
+                   "strip theory, which gives lower (conservative) flutter speeds."),
+            P("n_speeds", "Speeds examined", "", 100, min=20, max=400, adv=True,
+              help="Number of air speeds between zero and the highest speed. The crossing is then refined exactly."),
+        ],
+        "needs": ["materials for all parts", "a fixed support at the root", "aerodynamic faces (the wing skin)"],
+    },
     "static_structural": {
         "label": "Static structural",
         "icon": "beam",
@@ -425,7 +495,13 @@ STUDIES = {
 # Settings a bundled example (examples/*.step) gets when it is imported, so that it can run at once. They are
 # assumptions for the example, not data of the CAD model: the user changes them in Setup.
 EXAMPLE_SETTINGS = {
+    "airplane_wing.step": {"design_speed_ms": 30.0},  # a small aircraft's top speed (flutter margin)
     "quadcopter.step": {"mass_kg": 1.2},  # all-up mass of a ~450 mm class quad (rotors carry it: ~2.9 N each in hover)
+}
+
+# Materials a bundled example gets (body name -> material key), where the aluminium default would make no sense
+EXAMPLE_MATERIALS = {
+    "airplane_wing.step": {"Wing": "pla"},  # a 3D-printed model wing: flutters at model-aircraft speeds
 }
 
 EXPLAIN = {
@@ -438,6 +514,13 @@ EXPLAIN = {
         "Modal analysis: the natural frequencies at which the parts like to vibrate, and the shape of each "
         "vibration. No loads are needed, only how the parts are held (and any added masses). Keep these "
         "frequencies away from what shakes the part (motors, rotors, road) to avoid resonance."),
+    "aeroelastic_flutter": (
+        "Flutter and divergence (a multiphysics study: the structure and the air are solved together). The natural "
+        "modes of the structure from the built-in finite elements are put in a stream of air; the air forces on every "
+        "strip of the wing follow its motion (unsteady thin-airfoil theory). The air speed is raised until the "
+        "motion stops decaying and grows: the flutter speed, with the frequency and shape of the flutter motion. A "
+        "fast engineering method (seconds) for wings, blades, fins and panels; it does not replace a CFD-coupled "
+        "check for transonic flow or large motion."),
     "static_structural": (
         "Linear static stress analysis: how much the parts deform and how high the stress is under steady loads "
         "(forces, pressure, gravity), with the safety factor against yield. Assumes small deformations and that the "

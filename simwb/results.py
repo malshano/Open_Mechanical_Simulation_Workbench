@@ -157,9 +157,26 @@ class ResultSet:
             "n_tris": int(len(idx)), "min": float(fin.min()) if len(fin) else 0.0,
             "max": float(fin.max()) if len(fin) else 0.0, "unit": unit,
         }
-        if loc == "node" and np.ndim(arr) == 2 and unit in ("relative", "mm"):  # mode shape / deformation
-            out["disp"] = _b64(np.asarray(arr)[used].astype(np.float32))
+        disp = self._displacement(field)
+        if disp is not None:   # the shape of a mode, or the deformation of a load case: the surface can be drawn moved
+            kind, d = disp
+            out["disp"] = _b64(np.asarray(d)[used].astype(np.float32))
+            out["disp_kind"] = kind
         return out
+
+    def _displacement(self, field):
+        """(kind, (N,3) node vectors) that move the surface drawn for this field, or None. A mode shape ('mode', relative
+        units) moves with its own field; a static load case ('static', metres) moves every field of the result."""
+        loc, arr, unit = self.fields[field]
+        if loc == "node" and np.ndim(arr) == 2 and unit == "relative":
+            return "mode", arr
+        if loc == "node" and np.ndim(arr) == 2 and unit == "mm":
+            return "static", np.asarray(arr, float) * 1e-3
+        if not field.startswith("Mode "):
+            d = self.fields.get("Total deformation")
+            if d is not None and d[0] == "node" and np.ndim(d[1]) == 2 and d[2] == "mm":
+                return "static", np.asarray(d[1], float) * 1e-3
+        return None
 
     def surface(self, field, groups=None, hide_regions=()):
         m = np.ones(len(self.surf_tris), bool)
@@ -273,22 +290,27 @@ class ResultSet:
                 "per": "vertex", "n_tris": int(len(tris)), "min": float(fin.min()) if len(fin) else 0.0,
                 "max": float(fin.max()) if len(fin) else 0.0, "unit": unit}
 
-    def clip(self, field, axis: int, pos: float, keep_below=True, hide_regions=()):
-        """Crinkle clip: all tets whose centroid is on one side of the plane, shown by their outer faces."""
+    def clip_tris(self, axis: int, pos: float, keep_below=True, hide_regions=()):
+        """Crinkle clip: all tets whose centroid is on one side of the plane, as (outer face triangles, owning cell)."""
         cen = self.nodes[self.tets].mean(1)[:, axis]
         sel = np.where(cen <= pos if keep_below else cen >= pos)[0]
         if hide_regions:
             hid = [self.regions.index(r) for r in hide_regions if r in self.regions]
             sel = sel[~np.isin(self.tet_region[sel], hid)]
         if not len(sel):
-            return self._tri_payload(np.zeros((0, 3), np.int64), np.zeros(0, np.int64), field)
+            return np.zeros((0, 3), np.int64), np.zeros(0, np.int64)
         loc = np.array([[1, 2, 3], [0, 3, 2], [0, 1, 3], [0, 2, 1]])
         F = self.tets[sel][:, loc].reshape(-1, 3)
         cells = np.repeat(sel, 4)
         key = np.sort(F, axis=1)
         _, inv, cnt = np.unique(key, axis=0, return_inverse=True, return_counts=True)
         once = cnt[inv.ravel()] == 1
-        return self._tri_payload(F[once], cells[once], field)
+        return F[once], cells[once]
+
+    def clip(self, field, axis: int, pos: float, keep_below=True, hide_regions=()):
+        """The crinkle clip (clip_tris) coloured by a field."""
+        tris, cells = self.clip_tris(axis, pos, keep_below, hide_regions)
+        return self._tri_payload(tris, cells, field)
 
     def summary_ranges(self):
         return {k: v for k, v in ((f["name"], [f["min"], f["max"]]) for f in self.field_info())}

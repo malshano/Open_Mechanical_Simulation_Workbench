@@ -47,7 +47,8 @@ def get_project_state(pr, a):
 
 def list_options(pr, a):
     st = pr.spec if pr else (studies.study(a["study"]) if a.get("study") else None)
-    mech = st is not None and (st is studies.STUDIES["vibration_modal"] or st is studies.STUDIES["static_structural"])
+    mech = st is not None and (st is studies.STUDIES["vibration_modal"] or st is studies.STUDIES["static_structural"]
+                               or st is studies.STUDIES["aeroelastic_flutter"])
     out = {
         "solid_materials": {k: (f"{v['label']} (E={v['E'] / 1e9:g} GPa, density={v['rho']:g} kg/m3"
                                 + (f", yield {v['Sy'] / 1e6:g} MPa)" if v.get("Sy") else ", no yield strength)")
@@ -176,7 +177,7 @@ def set_domain(pr, a):
 
 def set_mesh(pr, a):
     pr.set_mesh(preset=a.get("preset"), size_max_mm=a.get("size_max_mm"), size_min_mm=a.get("size_min_mm"),
-                refinements=a.get("refinements"))
+                refinements=a.get("refinements"), method=a.get("method"))
     return pr.data["mesh"]
 
 
@@ -517,8 +518,11 @@ TOOLS = [
                                        "farfield": {"type": "object"}, "shape": STR, "size": {"type": "object"},
                                        "fit": {"type": "boolean"}, "flow_axis": STR, "span_axis": STR}}, set_domain),
     ("set_mesh_settings", "Mesh settings: preset quick|coarse|medium|fine|very_fine, optional size_max_mm (bulk), "
-                          "size_min_mm (near walls), refinements [{faces:[..], size_mm}].",
-     {"type": "object", "properties": {"preset": STR, "size_max_mm": NUM, "size_min_mm": NUM,
+                          "size_min_mm (near walls), refinements [{faces:[..], size_mm}]. method 'tet' (Gmsh "
+                          "tetrahedra, the default) or 'hex' (hex-dominant snappyHexMesh: external aerodynamics round "
+                          "bodies in the automatic box, no rotors, moving zones or symmetry planes; usually fewer, "
+                          "more orthogonal cells; needs OpenFOAM, takes about a minute per 100,000 cells).",
+     {"type": "object", "properties": {"preset": STR, "size_max_mm": NUM, "size_min_mm": NUM, "method": STR,
                                        "refinements": {"type": "array", "items": {"type": "object"}}}},
      set_mesh),
     ("generate_mesh", "Generate the mesh (waits until done). Returns cell count and quality.",
@@ -567,12 +571,92 @@ TOOLS = [
      {"type": "object", "properties": {"timeout_s": NUM}}, install_openfoam),
 ]
 
-PROJECT_FREE = {"list_projects", "create_project", "openfoam_status", "install_openfoam", "list_options"}
+# ---------------------------------------------------------------------------------------------------- the desktop window
+# Tools to see and drive the user interface of the running desktop application (simwb.qt): what it shows, every operation of
+# it, every control by id, pictures of it, its log. They work only while that window is running (else: a clear error).
+def _ui(op, args=None):
+    from . import ui_bridge
+
+    try:
+        return ui_bridge.call(op, args or {})
+    except ui_bridge.NoWindow as e:
+        raise ValueError(str(e)) from None
+
+
+def ui_state(pr, a):
+    return _ui("state")
+
+
+def ui_actions(pr, a):
+    return _ui("actions")
+
+
+def ui_do(pr, a):
+    return _ui("do", {"action": a["action"], "args": a.get("args") or {}})
+
+
+def ui_widgets(pr, a):
+    return _ui("widgets", {"filter": a.get("filter"), "visible_only": bool(a.get("visible_only"))})
+
+
+def ui_widget(pr, a):
+    return _ui("widget", {"id": a["id"], "op": a.get("op", "get"), "value": a.get("value")})
+
+
+def ui_screenshot(pr, a):
+    d = _ui("screenshot", {"what": a.get("what", "window")})
+    # (the MCP server turns the first line into an image the model can see; a person can open the file)
+    return f"SCREENSHOT: {d['path']}\n{d['what']} picture, {d['width']} x {d['height']} px, saved at {d['path']}"
+
+
+def ui_log(pr, a):
+    return _ui("log", {k: a[k] for k in ("after", "level", "source", "contains", "limit") if a.get(k) is not None})
+
+
+def ui_wait(pr, a):
+    return _ui("wait", {"timeout_s": min(float(a.get("timeout_s", 120)), 900)})
+
+
+def ui_eval(pr, a):
+    return _ui("eval", {"code": a["code"], "token": a.get("token", "")})
+
+
+UI_TOOLS = [
+    ("ui_state", "DESKTOP WINDOW: a snapshot of everything the window shows - step, open study, the value of every control, what the 3D "
+                 "view draws (colour map, range, deformation, camera, legend), running jobs, the assistant, error counts. Start here when "
+                 "something looks wrong.", {"type": "object", "properties": {}}, ui_state),
+    ("ui_actions", "DESKTOP WINDOW: every operation of the user interface by name (study.new, mesh.generate, results.show ...) with its "
+                   "parameters.", {"type": "object", "properties": {}}, ui_actions),
+    ("ui_do", "DESKTOP WINDOW: perform one operation of the user interface, as a person would (see ui_actions). Returns the new step, what "
+              "the 3D view draws and any warnings or errors the operation logged.",
+     {"type": "object", "properties": {"action": STR, "args": {"type": "object"}}, "required": ["action"]}, ui_do),
+    ("ui_widgets", "DESKTOP WINDOW: list the controls by stable id (mesh.generate, results.colormap ...) with their text, value, enabled and "
+                   "visible state and place in the window. filter = part of an id.",
+     {"type": "object", "properties": {"filter": STR, "visible_only": {"type": "boolean"}}}, ui_widgets),
+    ("ui_widget", "DESKTOP WINDOW: read or operate one control by id. op: get | click | set (value) | select (a tree item path). Opens no "
+                  "dialogs: controls that would open a file chooser name the ui_do action to use instead.",
+     {"type": "object", "properties": {"id": STR, "op": STR, "value": {}}, "required": ["id"]}, ui_widget),
+    ("ui_screenshot", "DESKTOP WINDOW: a picture of the window (what='window'), the 3D view ('viewport') or one control (its id). Returns "
+                      "the PNG file path and, in Claude Code, the image itself.",
+     {"type": "object", "properties": {"what": STR}}, ui_screenshot),
+    ("ui_log", "DESKTOP WINDOW: the application's log - Python logging, uncaught exceptions, Qt and VTK messages, anything printed. "
+               "after = the last id you saw (returns only newer); level = debug|info|warning|error; source; contains; limit.",
+     {"type": "object", "properties": {"after": INT, "level": STR, "source": STR, "contains": STR, "limit": INT}}, ui_log),
+    ("ui_wait", "DESKTOP WINDOW: wait until the running jobs (mesh, solve ...) are finished and the window has caught up; timeout_s max 900.",
+     {"type": "object", "properties": {"timeout_s": NUM}}, ui_wait),
+]
+TOOLS += UI_TOOLS
+
+PROJECT_FREE = {"list_projects", "create_project", "openfoam_status", "install_openfoam", "list_options"} | {t[0] for t in UI_TOOLS} | {"ui_eval"}
 PROJECT_OPTIONAL = {"list_options"}  # project-free, but uses the project when one is given
 
 MCP_EXTRA = [
+    ("ui_eval", "DESKTOP WINDOW, DEBUG ONLY: run Python inside the running application (win, engine, view, control, app, P, np are in "
+                "scope; the last expression's value is returned). Needs the window to be started with --debug-api. Use it to inspect or "
+                "change anything the other ui_ tools cannot reach; it is logged.",
+     {"type": "object", "properties": {"code": STR, "token": STR}, "required": ["code"]}, ui_eval),
     ("list_projects", "List workbench projects.", {"type": "object", "properties": {}}, list_projects),
-    ("create_project", "Create a project. study: heat_conduction | static_structural | vibration_modal | cht_enclosure | "
+    ("create_project", "Create a project. study: heat_conduction | static_structural | vibration_modal | aeroelastic_flutter | cht_enclosure | "
                        "external_aero. "
                        "Optional step_path imports a STEP file (absolute path); or example = a bundled example name "
                        "(heated_plate.step, camera_mount.step, heatsink_duct.step, quadcopter.step). "
@@ -662,4 +746,7 @@ How to help:
 - OpenFOAM is built in on Windows: the workbench sets it up by itself on the first start, and a CFD run started
   meanwhile waits for it. If openfoam_status says it is missing and no setup is running, call install_openfoam.
   On Linux/macOS relay the install instructions; the case can still be exported.
+- When the user has the desktop window open you can see and drive it: ui_state (what it shows), ui_screenshot (a picture), ui_do (any
+  operation of the user interface), ui_widget (one control), ui_log (errors and warnings), ui_wait (for jobs). If something on the
+  screen looks wrong, look at ui_state and ui_log before guessing, and say what you found.
 - Be concise. Do not invent results; only report numbers returned by tools."""

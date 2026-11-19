@@ -10,6 +10,41 @@ export function turbo(t) {
   return [Math.min(1, Math.max(0, r)), Math.min(1, Math.max(0, g)), Math.min(1, Math.max(0, b))];
 }
 
+// ---- colour maps for results (ParaView / matplotlib style presets). Stops are interpolated linearly into a 256-entry table.
+const STOPS = {
+  viridis: ['#440154', '#482878', '#3e4989', '#31688e', '#26828e', '#1f9e89', '#35b779', '#6ece58', '#b5de2b', '#fde725'],
+  plasma: ['#0d0887', '#47039f', '#7301a8', '#9c179e', '#bd3786', '#d8576b', '#ed7953', '#fa9e3b', '#fdc328', '#f0f921'],
+  inferno: ['#000004', '#1b0c41', '#4a0c6b', '#781c6d', '#a52c60', '#cf4446', '#ed6925', '#fb9b06', '#f7d13d', '#fcffa4'],
+  'cool-warm': ['#3b4cc0', '#6788ee', '#9abbff', '#c9d7f0', '#dddddd', '#f2cbb7', '#f7a889', '#e26952', '#b40426'],
+  rainbow: ['#0000ff', '#00a0ff', '#00ffff', '#00ff80', '#00ff00', '#ffff00', '#ff8000', '#ff0000'],
+  grayscale: ['#101010', '#f4f4f4'],
+};
+export const COLORMAP_NAMES = ['turbo', ...Object.keys(STOPS)];
+const LUTS = {};
+function lutOf(name) {
+  if (LUTS[name]) return LUTS[name];
+  const L = new Float32Array(256 * 3);
+  const st = (STOPS[name] || []).map(h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16) / 255));
+  for (let i = 0; i < 256; i++) {
+    let c;
+    if (!st.length) c = turbo(i / 255);
+    else { const x = (i / 255) * (st.length - 1), k = Math.min(Math.floor(x), st.length - 2), f = x - k; c = st[k].map((v, j) => v + (st[k + 1][j] - v) * f); }
+    L.set(c, i * 3);
+  }
+  return (LUTS[name] = L);
+}
+const CM = { name: 'turbo', reverse: false, bands: 0 };
+export function setColormap(o) { Object.assign(CM, o); }
+export function getColormap() { return { ...CM }; }
+// colour of t (0..1) in the chosen map; banded: quantised to CM.bands flat colours (contour bands)
+export function cmap(t, banded = false) {
+  t = Math.min(1, Math.max(0, t));
+  if (banded && CM.bands > 1) t = Math.min(Math.floor(t * CM.bands), CM.bands - 1) / (CM.bands - 1);
+  if (CM.reverse) t = 1 - t;
+  const L = lutOf(CM.name), i = Math.round(t * 255) * 3;
+  return [L[i], L[i + 1], L[i + 2]];
+}
+
 function b64(s, Type) {
   const bin = atob(s);
   const buf = new ArrayBuffer(bin.length);
@@ -17,6 +52,24 @@ function b64(s, Type) {
   for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
   return new Type(buf);
 }
+
+// colour-map values are display (sRGB) colours; three.js takes vertex colours as linear light and converts on output, so a
+// colour handed over as it is comes out washed out and differs from the legend. Converting keeps model and legend alike.
+const toLin = x => (x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4));
+
+// three.js sorts see-through objects back to front by the ORIGIN of each object, not by where its geometry is. Surfaces made
+// in world coordinates all sit at (0,0,0), so their order never followed the camera (a plane was now in front of another,
+// now behind it). Moving the origin to the middle of the geometry makes the sort follow the view.
+function centreOrigin(mesh) {
+  const g = mesh.geometry; g.computeBoundingBox();
+  const c = g.boundingBox.getCenter(new THREE.Vector3());
+  g.translate(-c.x, -c.y, -c.z); g.computeBoundingBox(); g.computeBoundingSphere();
+  mesh.position.copy(c);
+  return mesh;
+}
+// every see-through result surface (contour planes, vortex surfaces) is drawn after the volume cloud, in one group sorted by
+// distance. The cloud only stops at opaque things, so anything drawn before it was veiled by it, depending on its opacity.
+const SEE_THROUGH_ORDER = 6;
 
 export class Viewer {
   constructor(canvas, { onPick, onHover } = {}) {
@@ -487,14 +540,25 @@ export class Viewer {
     this.controls.update();
   }
 
+  // fit the view to what the overlay draws (a section through the air is far larger than the CAD model fit() looks at)
+  fitOverlay(dir) {
+    const box = new THREE.Box3().setFromObject(this.overlayGroup);
+    if (box.isEmpty()) return this.fit(dir);
+    this._fitBox = box; this.fit(dir); this._fitBox = null;
+  }
+
   _animate() {
     if (this._particles) this._stepParticles();
     const a = this._anim;
     if (!a) return;
-    const s = a.amp * Math.sin((performance.now() - a.t0) / 1000 * 2 * Math.PI * 0.8);  // 0.8 cycles per second
+    const ph = (performance.now() - a.t0) / 1000;
+    // a mode shape swings both ways (0.8 cycles per second); a static deformation grows from nothing to its full size
+    // and back (0.4 cycles per second), as the animation of a commercial post-processor
+    const s = a.amp * (a.kind === 'static' ? 0.5 - 0.5 * Math.cos(ph * 2 * Math.PI * 0.4) : Math.sin(ph * 2 * Math.PI * 0.8));
     const P = a.attr.array, B = a.base, D = a.D;
     for (let i = 0; i < P.length; i++) P[i] = B[i] + s * D[i];
     a.attr.needsUpdate = true;
+    this._placeExtrema();
   }
 
   setView(name) {
@@ -853,27 +917,93 @@ export class Viewer {
     return Number.isFinite(value) ? { point: h.point.toArray(), value } : null;
   }
 
-  // pinned probe labels: [{point: [x, y, z], text}]
+  // a label with a dot on the point it names (the dot is the sprite's anchor)
+  _labelSprite(text, dotColor = '#ffd43b') {
+    const c = document.createElement('canvas'), g = c.getContext('2d'), fs = 26, dot = 16;
+    g.font = `600 ${fs}px sans-serif`;
+    c.width = Math.ceil(g.measureText(text).width) + 26 + dot; c.height = fs + 14;
+    g.font = `600 ${fs}px sans-serif`;
+    g.fillStyle = 'rgba(20,24,32,.86)'; g.fillRect(dot, 0, c.width - dot, c.height);
+    g.fillStyle = dotColor; g.beginPath(); g.arc(dot / 2, c.height - dot / 2, dot / 2 - 1, 0, 2 * Math.PI); g.fill();
+    g.strokeStyle = '#10141c'; g.lineWidth = 2; g.stroke();
+    g.fillStyle = '#ffffff'; g.textBaseline = 'middle'; g.fillText(text, dot + 10, c.height / 2 + 1);
+    const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, sizeAttenuation: false }));
+    const hgt = 0.021;
+    sp.scale.set(hgt * c.width / c.height, hgt, 1);
+    sp.center.set(dot / 2 / c.width, dot / 2 / c.height);  // the dot sits on the labelled point
+    sp.renderOrder = 11;
+    return sp;
+  }
+
+  // pinned probe labels: [{point: [x, y, z], text, color?}]
   setProbes(list) {
     if (!this.probeGroup) { this.probeGroup = new THREE.Group(); this.scene.add(this.probeGroup); }
     for (const c of [...this.probeGroup.children]) { this.probeGroup.remove(c); c.material?.map?.dispose(); c.material?.dispose(); }
     for (const pr of list || []) {
-      const c = document.createElement('canvas'), g = c.getContext('2d'), fs = 26, dot = 16;
-      g.font = `600 ${fs}px sans-serif`;
-      c.width = Math.ceil(g.measureText(pr.text).width) + 26 + dot; c.height = fs + 14;
-      g.font = `600 ${fs}px sans-serif`;
-      g.fillStyle = 'rgba(20,24,32,.86)'; g.fillRect(dot, 0, c.width - dot, c.height);
-      g.fillStyle = '#ffd43b'; g.beginPath(); g.arc(dot / 2, c.height - dot / 2, dot / 2 - 1, 0, 2 * Math.PI); g.fill();
-      g.strokeStyle = '#10141c'; g.lineWidth = 2; g.stroke();
-      g.fillStyle = '#ffffff'; g.textBaseline = 'middle'; g.fillText(pr.text, dot + 10, c.height / 2 + 1);
-      const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
-      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, sizeAttenuation: false }));
-      const hgt = 0.021;
-      sp.scale.set(hgt * c.width / c.height, hgt, 1);
-      sp.center.set(dot / 2 / c.width, dot / 2 / c.height);  // the dot sits on the probed point
-      sp.position.set(...pr.point); sp.renderOrder = 11;
+      const sp = this._labelSprite(pr.text, pr.color);
+      sp.position.set(...pr.point);
       this.probeGroup.add(sp);
     }
+  }
+
+  // labels at the extreme values of the result drawn: [{ids, text, color}] - ids: corners (of the drawn triangles) the
+  // label sits at (their mean); it follows the shape while that deforms or swings
+  setExtrema(list) {
+    if (!this.extremaGroup) { this.extremaGroup = new THREE.Group(); this.scene.add(this.extremaGroup); }
+    for (const c of [...this.extremaGroup.children]) { this.extremaGroup.remove(c); c.material?.map?.dispose(); c.material?.dispose(); }
+    for (const e of list || []) {
+      const sp = this._labelSprite(e.text, e.color);
+      sp.userData.ids = e.ids;
+      this.extremaGroup.add(sp);
+    }
+    this._placeExtrema();
+  }
+  _placeExtrema() {
+    const grp = this.extremaGroup, P = this._ovPos;
+    if (!grp || !grp.children.length || !P) return;
+    for (const sp of grp.children) {
+      const ids = sp.userData.ids; let x = 0, y = 0, z = 0;
+      for (const i of ids) { x += P[i * 3]; y += P[i * 3 + 1]; z += P[i * 3 + 2]; }
+      sp.position.set(x / ids.length, y / ids.length, z / ids.length);
+    }
+  }
+
+  // the point (mean of the drawn corners ids): where it is drawn now, or (base) on the part as it was
+  extremumPoint(ids, base = false) {
+    const P = base ? this._ovBase : this._ovPos; let x = 0, y = 0, z = 0;
+    for (const i of ids) { x += P[i * 3]; y += P[i * 3 + 1]; z += P[i * 3 + 2]; }
+    return [x / ids.length, y / ids.length, z / ids.length];
+  }
+
+  // the line of the line plot: from a to b with a dot at each end (A, B) and, while the pointer moves over the plot, a
+  // marker at the point it reads. setSegment(null) removes it.
+  setSegment(a, b, marker = null) {
+    if (this.segGroup) { for (const c of [...this.segGroup.children]) { this.segGroup.remove(c); c.geometry?.dispose(); c.material?.map?.dispose(); c.material?.dispose(); } }
+    if (!a || !b) return;
+    if (!this.segGroup) { this.segGroup = new THREE.Group(); this.scene.add(this.segGroup); }
+    const ln = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(...a), new THREE.Vector3(...b)]),
+      new THREE.LineBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true }));
+    ln.renderOrder = 10; this.segGroup.add(ln);
+    const lab = (t, p) => { const sp = this._labelSprite(t, '#ffffff'); sp.position.set(...p); this.segGroup.add(sp); };
+    lab('A', a); if (a.some((v, i) => v !== b[i])) lab('B', b);
+    if (marker) { const sp = this._labelSprite('', '#ffd43b'); sp.position.set(...marker); this.segGroup.add(sp); }
+  }
+
+  // histogram of the drawn field over [lo, hi]: share of the drawn area in each of n bins (area-weighted, as the eye
+  // reads a coloured surface), with the area-weighted mean and the shares below / above the range
+  histogram(lo, hi, n = 48) {
+    const st = this._ovStats; if (!st) return null;
+    const bins = new Float64Array(n), span = (hi - lo) || 1;
+    let tot = 0, sum = 0, below = 0, above = 0;
+    for (let t = 0; t < st.n; t++) {
+      const v = st.tv[t], a = st.ta[t];
+      if (!Number.isFinite(v)) continue;
+      tot += a; sum += a * v;
+      if (v < lo) below += a; else if (v > hi) above += a;
+      bins[Math.min(n - 1, Math.max(0, Math.floor((v - lo) / span * n)))] += a;
+    }
+    return { bins: Array.from(bins, b => tot ? b / tot : 0), mean: tot ? sum / tot : NaN, below: tot ? below / tot : 0, above: tot ? above / tot : 0 };
   }
 
   // ---------------------------------------------------------------- overlays
@@ -890,8 +1020,8 @@ export class Viewer {
     const [lo, hi] = range || [p.min, p.max], span = (hi - lo) || 1;
     const C = new Float32Array(val.length * 3);
     for (let i = 0; i < val.length; i++) {
-      const c = Number.isFinite(val[i]) ? turbo(Math.min(1, Math.max(0, (val[i] - lo) / span))) : [0.7, 0.7, 0.7];
-      C[i * 3] = c[0]; C[i * 3 + 1] = c[1]; C[i * 3 + 2] = c[2];
+      const c = Number.isFinite(val[i]) ? cmap((val[i] - lo) / span) : [0.7, 0.7, 0.7];
+      C[i * 3] = toLin(c[0]); C[i * 3 + 1] = toLin(c[1]); C[i * 3 + 2] = toLin(c[2]);
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
@@ -901,15 +1031,20 @@ export class Viewer {
     this.isoMesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.45,
       metalness: 0.05, transparent: true, opacity, depthWrite: opacity >= 1 }));
     // drawn after the volume cloud (renderOrder 5, no depth test): the cloud would otherwise veil the vortices
-    this.isoMesh.renderOrder = 6;
+    this.isoMesh.renderOrder = SEE_THROUGH_ORDER;
+    centreOrigin(this.isoMesh);
     this.scene.add(this.isoMesh);
   }
 
-  // flat-coloured triangles of a surface payload: the geometry, its positions, the indices and the triangle count
-  _triGeometry(p, range, reverse = false) {
+  // flat-coloured triangles of a surface payload: the geometry, its positions, the indices and the triangle count.
+  // fixed: the red-is-bad turbo scale of the mesh-quality views (not the user's colour map)
+  _triGeometry(p, range, fixed = false) {
     const pos = b64(p.positions, Float32Array), idx = b64(p.indices, Uint32Array), val = b64(p.values, Float32Array);
     const [lo, hi] = range || [p.min, p.max];
     const span = (hi - lo) || 1;
+    // p.categories: the values are indices into a list of colours (bodies, surfaces); p.scale 'log': equal steps of the ratio
+    const cats = p.categories ? p.categories.map(c => [1, 3, 5].map(i => parseInt(c.color.slice(i, i + 2), 16) / 255)) : null;
+    const log = p.scale === 'log' && lo > 0 && hi > lo, llo = log ? Math.log(lo) : 0, lspan = log ? Math.log(hi) - llo : span;
     const nt = idx.length / 3;
     const P = new Float32Array(nt * 9), C = new Float32Array(nt * 9);
     for (let t = 0; t < nt; t++) {
@@ -917,8 +1052,10 @@ export class Viewer {
         const v = idx[t * 3 + k];
         P[t * 9 + k * 3] = pos[v * 3]; P[t * 9 + k * 3 + 1] = pos[v * 3 + 1]; P[t * 9 + k * 3 + 2] = pos[v * 3 + 2];
         const s = p.per === 'vertex' ? val[v] : val[t];
-        const c = Number.isFinite(s) ? turbo(reverse ? 1 - (s - lo) / span : (s - lo) / span) : [0.6, 0.6, 0.6];
-        C[t * 9 + k * 3] = c[0]; C[t * 9 + k * 3 + 1] = c[1]; C[t * 9 + k * 3 + 2] = c[2];
+        const u = log ? (Math.log(Math.max(s, lo)) - llo) / lspan : (s - lo) / span;
+        const c = !Number.isFinite(s) ? [0.6, 0.6, 0.6] : cats ? cats[Math.max(0, Math.min(cats.length - 1, Math.round(s)))]
+          : fixed ? turbo(1 - u) : cmap(u, true);
+        C[t * 9 + k * 3] = toLin(c[0]); C[t * 9 + k * 3 + 1] = toLin(c[1]); C[t * 9 + k * 3 + 2] = toLin(c[2]);
       }
     }
     const g = new THREE.BufferGeometry();
@@ -946,7 +1083,7 @@ export class Viewer {
     tex.format = THREE.RedFormat; tex.type = THREE.UnsignedByteType; tex.unpackAlignment = 1;
     tex.minFilter = tex.magFilter = THREE.LinearFilter; tex.needsUpdate = true;
     const lut = new Uint8Array(256 * 4);
-    for (let i = 0; i < 256; i++) { const c = turbo(i / 255); lut.set([c[0] * 255, c[1] * 255, c[2] * 255, 255], i * 4); }
+    for (let i = 0; i < 256; i++) { const c = cmap(i / 255); lut.set([c[0] * 255, c[1] * 255, c[2] * 255, 255], i * 4); }
     const lt = new THREE.DataTexture(lut, 256, 1, THREE.RGBAFormat); lt.minFilter = lt.magFilter = THREE.LinearFilter; lt.needsUpdate = true;
     const mat = new THREE.ShaderMaterial({
       glslVersion: THREE.GLSL3, side: THREE.BackSide, transparent: true, depthWrite: false, depthTest: false,
@@ -1064,7 +1201,7 @@ export class Viewer {
       sc.set(L * thick, L, L * thick);
       M.compose(new THREE.Vector3(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]), q, sc);
       im.setMatrixAt(i, M);
-      const t = turbo((sp - lo) / span); c.setRGB(t[0], t[1], t[2]); im.setColorAt(i, c);
+      const t = cmap((sp - lo) / span); c.setRGB(t[0], t[1], t[2]); im.setColorAt(i, c);
     }
     im.instanceMatrix.needsUpdate = true; if (im.instanceColor) im.instanceColor.needsUpdate = true;
     this.arrowMesh = im; this.scene.add(im);
@@ -1108,7 +1245,7 @@ export class Viewer {
       const L = a.len[i];
       if (L < 3) { for (let k = 0; k < 3; k++) pp[i * 3 + k] = NaN; continue; }
       const s = Math.floor((tau + a.phase[i]) % L), base = i * a.S;
-      const col = turbo((a.V[base + s] - lo) / span);
+      const col = cmap((a.V[base + s] - lo) / span);
       for (let k = 0; k < 3; k++) { pp[i * 3 + k] = a.P[(base + s) * 3 + k]; pc[i * 3 + k] = col[k]; }
       for (let j = 0; j < K; j++) {
         const o = (i * K + j) * 6, ia = s - j, ib = s - j - 1, ok = ib >= 0, f = 1 - j / K;
@@ -1132,27 +1269,77 @@ export class Viewer {
       const { g } = this._triGeometry(payload, range);
       const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide,
         transparent: opacity < 1, opacity, depthWrite: opacity >= 1 }));
-      m.renderOrder = 2;
+      m.renderOrder = SEE_THROUGH_ORDER;
+      centreOrigin(m);
       this.contourGroup.add(m);
     }
   }
 
-  setOverlay(p, { range, wire = false, opacity = 1, reverse = false, animate = true } = {}) {
+  // opts: range [lo, hi]; wire; opacity; fixed (the mesh-quality scale instead of the chosen colour map); animate (false: no
+  // swinging shapes - probing, video); deform {mode: 'animate' | 'static' | 'off', scale: number | null (auto)}; outline
+  // (the undeformed edges behind a deformed shape). A payload with disp: disp_kind 'static' (metres: the displacement
+  // of a load case, drawn scale x larger) or 'mode' (a relative mode shape, drawn scale x 8 % of the model size).
+  // Returns {extrema: {min, max} ({value, ids}), deform: {kind, auto, scale, animated} | null}.
+  setOverlay(p, { range, wire = false, opacity = 1, fixed = false, animate = true, deform = null, outline = false } = {}) {
     this.clearOverlay();
-    this._anim = null;
-    if (!p || !p.n_tris) return;
-    const { g, P, idx, nt, val, per } = this._triGeometry(p, range, reverse);
-    if (p.disp && animate) {
-      // mode shape: oscillate the vertices; largest motion = 8 % of the model size (flat shading needs no normals)
-      const dv = b64(p.disp, Float32Array), D = new Float32Array(nt * 9);
-      for (let t = 0; t < nt; t++) for (let k = 0; k < 3; k++) {
-        const v = idx[t * 3 + k];
-        for (let c = 0; c < 3; c++) D[t * 9 + k * 3 + c] = dv[v * 3 + c];
+    this._anim = null; this._ovPos = null; this._ovStats = null; this._ovBase = null;
+    if (!p || !p.n_tris) { this.setExtrema(null); return null; }
+    const { g, P, idx, nt, val, per } = this._triGeometry(p, range, fixed);
+    const info = { deform: null, extrema: null };
+    // extreme values (drawn corners they sit at) and the area-weighted values for the histogram
+    const ta = new Float32Array(nt), tv = new Float32Array(nt);
+    let mn = Infinity, mx = -Infinity, imn = null, imx = null;
+    for (let t = 0; t < nt; t++) {
+      const o = t * 9;
+      const ux = P[o + 3] - P[o], uy = P[o + 4] - P[o + 1], uz = P[o + 5] - P[o + 2];
+      const wx = P[o + 6] - P[o], wy = P[o + 7] - P[o + 1], wz = P[o + 8] - P[o + 2];
+      ta[t] = 0.5 * Math.hypot(uy * wz - uz * wy, uz * wx - ux * wz, ux * wy - uy * wx);
+      let sum = 0, cnt = 0;
+      for (let k = 0; k < 3; k++) {
+        const v = per === 'vertex' ? val[idx[t * 3 + k]] : val[t];
+        if (!Number.isFinite(v)) continue;
+        sum += v; cnt++;
+        if (v < mn) { mn = v; imn = per === 'vertex' ? [t * 3 + k] : [t * 3, t * 3 + 1, t * 3 + 2]; }
+        if (v > mx) { mx = v; imx = per === 'vertex' ? [t * 3 + k] : [t * 3, t * 3 + 1, t * 3 + 2]; }
       }
-      g.computeBoundingBox();
-      const size = g.boundingBox.getSize(new THREE.Vector3()).length();
-      this._anim = { attr: g.attributes.position, base: P.slice(), D, amp: 0.08 * size, t0: performance.now() };
+      tv[t] = cnt ? sum / cnt : NaN;
     }
+    this._ovStats = { ta, tv, n: nt };
+    if (imn) info.extrema = { min: { value: mn, ids: imn }, max: { value: mx, ids: imx } };
+    // deformation
+    let defOutline = null;
+    this._ovBase = P;
+    if (p.disp && deform && deform.mode !== 'off') {
+      const kind = p.disp_kind || 'mode';
+      const mode = animate ? deform.mode : (kind === 'static' ? 'static' : 'off');   // (a mode shape is not drawn still)
+      if (mode !== 'off') {
+        const dv = b64(p.disp, Float32Array), D = new Float32Array(nt * 9);
+        let umax = 0;
+        for (let t = 0; t < nt; t++) for (let k = 0; k < 3; k++) {
+          const v = idx[t * 3 + k];
+          for (let c = 0; c < 3; c++) D[t * 9 + k * 3 + c] = dv[v * 3 + c];
+          umax = Math.max(umax, Math.hypot(dv[v * 3], dv[v * 3 + 1], dv[v * 3 + 2]));
+        }
+        g.computeBoundingBox();
+        const size = g.boundingBox.getSize(new THREE.Vector3()).length();
+        // static: auto = the factor that moves the largest displacement by 8 % of the model size; a mode: 8 % of the
+        // size per unit of shape, so the scale is a multiple of that (1 = the usual swing)
+        const auto = kind === 'static' ? (umax > 0 ? 0.08 * size / umax : 1) : 1;
+        const sc = deform.scale != null && Number.isFinite(deform.scale) ? deform.scale : auto;
+        const amp = kind === 'static' ? sc : 0.08 * size * sc;
+        this._ovBase = P.slice();   // (the part as it was: the line plot reads its points off it)
+        if (outline) { defOutline = new THREE.BufferGeometry(); defOutline.setAttribute('position', new THREE.BufferAttribute(P.slice(), 3)); }
+        if (mode === 'static') {
+          const A = g.attributes.position.array;
+          for (let i = 0; i < A.length; i++) A[i] = P[i] + amp * D[i];
+          g.attributes.position.needsUpdate = true;
+        } else {
+          this._anim = { attr: g.attributes.position, base: P.slice(), D, amp, kind, t0: performance.now() };
+        }
+        info.deform = { kind, auto, scale: sc, animated: mode === 'animate', umax };
+      }
+    }
+    this._ovPos = g.attributes.position.array;
     const mesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({
       vertexColors: true, roughness: 0.8, side: THREE.DoubleSide, flatShading: true,
       polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1, transparent: opacity < 1, opacity }));
@@ -1162,6 +1349,12 @@ export class Viewer {
       const w = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: 0x10141c, wireframe: true, transparent: true, opacity: 0.35 }));
       this.overlayGroup.add(w);
     }
+    if (defOutline) {   // the part as it was: its sharp edges, thin
+      const ol = new THREE.LineSegments(new THREE.EdgesGeometry(defOutline, 25), new THREE.LineBasicMaterial({ color: 0x10141c, transparent: true, opacity: 0.6 }));
+      defOutline.dispose();
+      this.overlayGroup.add(ol);
+    }
+    return info;
   }
 
   // boundary-condition glyphs: [{faces:[ids], color:'#rrggbb', label?, far?} + one of dir:[x,y,z] | normal:'in'|'out'

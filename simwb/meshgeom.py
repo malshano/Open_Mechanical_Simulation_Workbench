@@ -142,7 +142,7 @@ def build(gmsh, path, fmt, scale, study, domain, flow_dir=(1, 0, 0), span=None, 
     allbb = np.r_[np.min([b[:3] for b in bb_of], 0), np.max([b[3:] for b in bb_of], 0)]
     L = float(np.max(allbb[3:] - allbb[:3]))
     domain_info = {}
-    if study in ("heat_conduction", "vibration_modal", "static_structural", "cht_enclosure"):
+    if study in ("heat_conduction", "vibration_modal", "static_structural", "aeroelastic_flutter", "cht_enclosure"):
         for k, lp in enumerate(loops):
             solid_tags.append(geo.addVolume([lp]))
     box = None

@@ -512,7 +512,10 @@ def solve(mesh: dict, body_props: dict, bcs: list, n_modes: int = 10, band_hz=No
         if not rigid[i]:
             cum += frac
         based = bool(fixed_nodes) and not rigid[i]  # effective mass needs a base to shake: not for free parts
+        # the returned shape is u / umax (largest displacement 1); its generalised mass is 1 / umax^2 (mass-normalised
+        # eigenvector: phi^T M phi = 1), which the flutter study needs to rebuild the modal model
         modes.append({"mode": i + 1, "frequency_Hz": f_hz, "rigid_body": bool(rigid[i]),
+                      "generalized_mass_kg": float(1.0 / umax ** 2),
                       "effective_mass_fraction": {"x": float(frac[0]), "y": float(frac[1]), "z": float(frac[2])}
                       if based else None,
                       "dominant_direction": "xyz"[int(np.argmax(frac))] if based else None})

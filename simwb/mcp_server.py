@@ -61,20 +61,49 @@ def _via_gui(name, pid, args):
         return None
 
 
+def _content(text):
+    """The text of a tool result as MCP content; a 'SCREENSHOT: <file>' line (ui_screenshot) also attaches the picture, so that the
+    model sees it."""
+    import base64
+    import re
+
+    out = [types.TextContent(type="text", text=text)]
+    m = re.search(r"^SCREENSHOT: (.+\.png)$", text, re.M)
+    if m:
+        try:
+            with open(m.group(1), "rb") as f:
+                out.append(types.ImageContent(type="image", data=base64.b64encode(f.read()).decode(), mimeType="image/png"))
+        except OSError:
+            pass
+    return out
+
+
 def _err(text):
     return types.CallToolResult(content=[types.TextContent(type="text", text=text)], is_error=True)
+
+
+def _control_token() -> str:
+    """The secret of the running desktop window (code execution needs it): read from its file in this user's workspace, never supplied
+    by the model."""
+    import json
+
+    try:
+        return json.loads((P.WORKSPACE / ".ui" / "control.json").read_text()).get("token", "")
+    except (OSError, ValueError):
+        return ""
 
 
 async def call_tool(ctx, params):
     name = params.name
     args = dict(params.arguments or {})
     pid = args.pop("project_id", None)
+    if name == "ui_eval":
+        args["token"] = _control_token()
     # the running GUI owns projects, jobs and its workspace: forward there first
     text = await asyncio.to_thread(_via_gui, name, pid, args) if T.REMOTE_GUI else None
     if text is not None:
         body = text.split("\n", 1)[1] if text.startswith("[project:") and "\n" in text else text
-        return types.CallToolResult(content=[types.TextContent(type="text", text=text)],
-                                    is_error=body.startswith("ERROR"))
+        return types.CallToolResult(content=_content(text), is_error=body.startswith("ERROR"))
     # GUI not running: work on the local workspace in this process
     pr = None
     if name not in PROJECT_FREE or (name in PROJECT_OPTIONAL and pid):
@@ -94,7 +123,7 @@ async def call_tool(ctx, params):
     is_error = text.startswith("ERROR")
     if pr is not None:
         text = f"[project: {pr.data.get('name')} (id {pr.id})]\n" + text
-    return types.CallToolResult(content=[types.TextContent(type="text", text=text)], is_error=is_error)
+    return types.CallToolResult(content=_content(text), is_error=is_error)
 
 
 server = Server("simwb", version="0.1.0", instructions=SYSTEM_PROMPT, on_list_tools=list_tools,

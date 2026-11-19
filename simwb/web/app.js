@@ -1,5 +1,5 @@
 // Mechanical Simulation Workbench - GUI
-import { Viewer, turbo } from '/static/viewer.js';
+import { Viewer, turbo, cmap, setColormap, getColormap, COLORMAP_NAMES } from '/static/viewer.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -24,7 +24,14 @@ const S = {
   step: 'geometry', activeBc: null, jobs: {}, results: null, field: null, range: null, clip: { axis: '', pos: 500 },
   hideAir: true, chatBusy: false, foam: null, faceVersion: null, solveLog: null, autoRange: true,
   hiddenBodies: new Set(), hiddenParts: new Set(), fitPending: false,
+  rtab: 'summary', showExtrema: true, deform: { mode: 'animate', scale: null, outline: true }, tLimit: null,
 };
+// the colour map of the results is a per-viewer convenience: kept in the browser
+try {
+  const c = JSON.parse(localStorage.getItem('simwb.cmap') || 'null');
+  if (c && COLORMAP_NAMES.includes(c.name)) setColormap({ name: c.name, reverse: !!c.reverse, bands: Math.max(0, +c.bands || 0) });
+} catch { /* private window: the default map */ }
+function saveCmap() { try { localStorage.setItem('simwb.cmap', JSON.stringify(getColormap())); } catch { /* not kept */ } }
 
 // Simple / Expert: Simple hides the tools and settings marked "expert" and shows a hint for the next step. A
 // browser that has used the workbench before starts in Expert, so nothing a user relies on disappears.
@@ -771,23 +778,34 @@ function welcomePanel() {
 function renderWelcome() {
   const st = S.meta.studies;
   const saveDir = localStorage.getItem('simwb.saveDir') || '';
-  const icons = { thermo: '🌡️', fan: '🌀', drone: '🚁', wave: '📳', beam: '🏗️' };
+  const icons = { thermo: '🌡️', fan: '🌀', drone: '🚁', wave: '📳', beam: '🏗️', flutter: '✈️' };
+  // tabs: the single-physics studies, and one tab "Multiphysics" for the studies that couple several physics
+  // (a study with category 'multiphysics')
+  const multi = Object.entries(st).filter(([, s]) => s.category === 'multiphysics');
+  const tabs = [{ id: 'studies', label: 'Studies' }, ...(multi.length ? [{ id: 'multiphysics', label: 'Multiphysics', multi: true }] : [])];
+  if (!tabs.some(t => t.id === S.welcomeTab)) S.welcomeTab = 'studies';
+  const card = ([k, s]) => `
+      <div class="card"><div class="ico">${icons[s.icon] || '◆'}</div><h3>${esc(s.label)}</h3><p>${esc(s.description)}</p>
+      <span class="badge" title="${s.solver === 'builtin_fem' ? 'Solved by the workbench itself: nothing else to install' : 'Flow simulation with OpenFOAM, set up by the workbench on the first run'}">${s.solver === 'builtin_fem' ? 'Built-in solver · seconds to minutes' : 'OpenFOAM flow simulation · minutes to hours'}</span>
+      <div class="row"><button data-new="${k}">Use my STEP file</button>
+      ${s.examples.map(e => `<button class="ghost" data-new="${k}" data-ex="${esc(e)}">${s.examples.length > 1 ? 'Example: ' + esc(e.replace('.step', '').replace(/_/g, ' ')) : 'Try example'}</button>`).join('')}</div></div>`;
+  const tabBody = S.welcomeTab === 'studies'
+    ? `<div class="cards">${Object.entries(st).filter(([, s]) => s.category !== 'multiphysics').map(card).join('')}</div>`
+    : `<p class="muted small" style="margin:14px 0 0">Several kinds of physics solved together: the result of one changes the other.</p>
+      <div class="cards">${multi.map(([k, s]) => card([k, s]).replace('<p>', `<div class="coupled">${(s.physics || []).map(x => `<span class="chip">${esc(x)}</span>`).join('<span class="muted">⇄</span>')}</div><p>`)).join('')}</div>`;
   $('#welcome').innerHTML = `<div class="welcomeInner">
     <h1>What do you want to simulate?</h1>
     <div class="saveIn"><label class="field" title="Every new study asks where to save it: the folder chooser opens at this folder. The study gets its own sub-folder there, with a CLAUDE.md so that Claude Code started in it knows the study"><span>Studies are saved where you choose (the chooser opens at)</span>
       <span style="display:flex;gap:6px"><input type="text" id="saveDir" value="${esc(saveDir)}" placeholder="${esc(S.meta.workspace || '')}" spellcheck="false">
       <button class="ghost small" id="pickDir">Browse…</button><button class="ghost small" id="openDir" title="Add a study you saved earlier (a folder with a project.json) to the list">Open a saved study…</button></span></label></div>
-    <div class="cards">${Object.entries(st).map(([k, s]) => `
-      <div class="card"><div class="ico">${icons[s.icon] || '◆'}</div><h3>${esc(s.label)}</h3><p>${esc(s.description)}</p>
-      <span class="badge" title="${s.solver === 'builtin_fem' ? 'Solved by the workbench itself: nothing else to install' : 'Flow simulation with OpenFOAM, set up by the workbench on the first run'}">${s.solver === 'builtin_fem' ? 'Built-in solver · seconds to minutes' : 'OpenFOAM flow simulation · minutes to hours'}</span>
-      <div class="row"><button data-new="${k}">Use my STEP file</button>
-      ${s.examples.map(e => `<button class="ghost" data-new="${k}" data-ex="${esc(e)}">Try example</button>`).join('')}</div></div>`).join('')}
-    </div>
+    <div class="wtabs" role="tablist">${tabs.map(t => `<button role="tab" class="${t.id === S.welcomeTab ? 'active' : ''}" data-wtab="${esc(t.id)}" title="${t.multi ? 'Multiphysics: several kinds of physics solved together' : 'Studies of one kind of physics'}">${t.multi ? '⚛ ' : ''}${esc(t.label)}</button>`).join('')}</div>
+    ${tabBody}
     ${S.projects.length ? `<h3 class="muted">Recent projects</h3><div class="recent">${S.projects.map(p => `
       <div class="item" data-open="${esc(p.id)}"><span><b>${esc(p.name)}</b> <span class="muted small">${esc(st[p.study]?.label || p.study)}</span><br><span class="muted small">${esc(p.path || '')}</span></span>
       <span class="row"><span class="muted small">${esc(p.updated || '')}</span>
       <button class="ghost small" data-del="${esc(p.id)}" title="Delete this study and all its files">🗑</button></span></div>`).join('')}</div>` : ''}
   </div>`;
+  $('#welcome').querySelectorAll('[data-wtab]').forEach(b => b.onclick = () => { S.welcomeTab = b.dataset.wtab; renderWelcome(); });
   $('#welcome').querySelectorAll('[data-new]').forEach(b => b.onclick = async () => {
     const study = b.dataset.new, ex = b.dataset.ex;
     const name = ex ? ex.replace('.step', '').replace(/_/g, ' ') : st[study].label.split(' ')[0] + ' study';
@@ -1087,7 +1105,7 @@ function panelSetup() {
   }
   if (p.study === 'external_aero' || p.study === 'cht_enclosure') h += movingZonesHtml();
   if (spec.settings.length) {
-    h += `<h3>${p.study === 'external_aero' ? 'Flow condition' : p.study === 'vibration_modal' ? 'Modes and vibration source' : p.study === 'static_structural' ? 'Loads' : 'Flow & solver settings'}</h3>
+    h += `<h3>${p.study === 'external_aero' ? 'Flow condition' : p.study === 'vibration_modal' ? 'Modes and vibration source' : p.study === 'aeroelastic_flutter' ? 'Air flow and modes' : p.study === 'static_structural' ? 'Loads' : 'Flow & solver settings'}</h3>
       <div class="grid2">${paramInputs(spec.settings.filter(q => q.key !== 'n_procs'), p.settings, 'data-setting')}</div>`;  // (cores: Solve step)
     if (p.study === 'external_aero') h += endTimeAdviceHtml(p) + aeroInfo();
   }
@@ -1524,7 +1542,8 @@ function meshLayersHtml() {
   const L = S.p.mesh.layers || { n: 0, growth: 1.2, first: null };
   return `<details class="expert" ${L.n ? 'open' : ''}><summary>Wall layers (prism / inflation)${L.n ? ` · ${L.n}` : ''}</summary>
     <p class="small muted" style="margin:4px 0">Thin cells stacked on the walls to resolve the boundary layer (friction, separation, y+).
-      OpenFOAM adds them before the run (snappyHexMesh, layer-only); where the space is too tight it leaves them out, and the run log reports the coverage.</p>
+      ${S.p.mesh.method === 'hex' ? 'They are made together with the hex-dominant mesh (snappyHexMesh); the Mesh statistics report how much of the wall got them.'
+        : 'OpenFOAM adds them before the run (snappyHexMesh, layer-only); where the space is too tight it leaves them out, and the run log reports the coverage.'}</p>
     <div class="grid2"><label class="field"><span>Number of layers</span><input type="number" min="0" max="20" step="1" data-layers="n" value="${L.n}" title="0 = off"></label>
       <label class="field"><span>Growth ratio</span><input type="number" min="1" max="2" step="0.05" data-layers="growth" value="${L.growth}"></label>
       <label class="field"><span>First layer <span class="unit">[mm]</span></span><input type="number" step="any" data-layers="first_mm" placeholder="auto"
@@ -1535,7 +1554,14 @@ function panelMesh() {
   if (p.geometry.status !== 'ready') return `<p class="muted">Import geometry first.</p>`;
   const presets = [['quick', 'Quick look'], ['coarse', 'Coarse'], ['medium', 'Medium'], ['fine', 'Fine'], ['very_fine', 'Very fine']];
   const running = S.jobs.mesh?.status === 'running';
+  const hexOn = m.method === 'hex' && p.study === 'external_aero';
   let h = `<h2>Mesh</h2>
+    ${p.study === 'external_aero' ? `<h3>Mesh type</h3><div class="seg">
+      <button data-meshmethod="tet" class="${hexOn ? '' : 'on'}" title="Tetrahedral cells made by Gmsh. Works for everything: rotors, moving zones, symmetry planes, any air volume.">Tetrahedral</button>
+      <button data-meshmethod="hex" class="${hexOn ? 'on' : ''}" ${p.hex_unsupported ? 'disabled' : ''}
+        title="${esc(p.hex_unsupported || 'Mostly hexahedral cells made by OpenFOAM snappyHexMesh: usually fewer, more orthogonal cells and a finer wake. Body in the automatic box of air.')}">Hex-dominant</button></div>
+      ${p.hex_unsupported ? `<p class="small muted" style="margin:4px 0">Hex-dominant: ${esc(p.hex_unsupported)}</p>`
+        : hexOn ? `<p class="small muted" style="margin:4px 0">snappyHexMesh (OpenFOAM): background box, surface refinement by the preset, a wake region and wall layers. About a minute per 100,000 cells.</p>` : ''}` : ''}
     <h3>Resolution</h3><div class="seg">${presets.map(([k, l]) => `<button data-preset="${k}" class="${m.preset === k ? 'on' : ''}">${l}</button>`).join('')}</div>
     <details class="expert" ${m.size_max || m.size_min || m.defeature ? 'open' : ''}><summary>Advanced sizes and defeaturing</summary><div class="grid2">
       <label class="field"><span>Max cell size <span class="unit">[mm]</span></span><input type="number" step="any" data-mesh="size_max_mm" placeholder="auto" value="${m.size_max ? fmt(m.size_max * 1000) : ''}"></label>
@@ -1554,7 +1580,18 @@ function panelMesh() {
       ${s.foam_quality ? `<span>Max non-orthogonality</span><b>${fmt1(s.foam_quality.non_orthogonality_max)}°</b>
         <span>Max skewness</span><b>${fmt(s.foam_quality.skewness_max, 2)}</b>` : ''}
       ${s.defeatured_faces ? `<span>Defeatured faces</span><b>${s.defeatured_faces}</b>` : ''}
+      ${s.method === 'hex' && s.cell_types ? `<span>Hexahedra</span><b>${(100 * s.cell_types.hexahedra / Math.max(s.cells, 1)).toFixed(0)} %</b>
+        <span>Prisms / polyhedra</span><b>${s.cell_types.prisms.toLocaleString()} / ${s.cell_types.polyhedra.toLocaleString()}</b>
+        <span>Max aspect ratio</span><b>${fmt1(s.hex.aspect_ratio_max)}</b>
+        ${s.hex.layers_extruded_percent != null ? `<span>Wall faces with layers</span><b>${fmt1(s.hex.layers_extruded_percent)} %</b>` : ''}` : ''}
       <span>Time</span><b>${s.seconds} s</b></div>
+      <h3>Colour the mesh by</h3><div class="seg">${[['quality', 'Quality', 'How close each cell is to a perfect one (1 = perfect, red = poor)'],
+        ['size', 'Cell size', 'The edge length of each cell, on a log scale: shows how the mesh grows from the walls and refinement zones into the air'],
+        ['region', 'Region', 'Which body each cell belongs to; in a flow study the surface of the object (where it was cut out of the air) and the far-field']]
+        .map(([k, l, t]) => `<button data-meshcolor="${k}" class="${S.meshColor === k ? 'on' : ''}" title="${t}">${l}</button>`).join('')}</div>
+      <h3>Cut through the mesh</h3><div class="seg">${[['', 'Off'], ['x', 'X'], ['y', 'Y'], ['z', 'Z']]
+        .map(([k, l]) => `<button data-meshcut="${k}" class="${(S.clip.axis || '') === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <p class="small muted" style="margin:4px 0">A cut shows the cells inside: the air around the object, where it was cut out of the air, and how the cells grow with distance. Move the cut with the slider above the view.</p>
       <h3>Cell quality</h3><canvas class="chart" id="histo" style="height:110px"></canvas>
       <div class="row" style="gap:6px;align-items:center;margin:4px 0" title="Show only the cells below this quality, on the CAD model, to see where the mesher struggles (thin gaps, small faces, sharp corners)">
         <label class="row" style="gap:4px"><input type="checkbox" id="poorOn" ${S.meshPoor.on ? 'checked' : ''} style="width:auto"> Show cells below</label>
@@ -1567,7 +1604,25 @@ function panelMesh() {
   return h;
 }
 
+function hexVerdict(s) {
+  // the hex-dominant (snappyHexMesh) mesh: judged by checkMesh's numbers, the layers and the cell limit
+  const f = s.foam_quality, x = s.hex, warn = [], info = [];
+  info.push(`Surface cells ${fmt(x.surface_cell_mm)} mm; background ${fmt(x.base_mm)} mm (${x.levels} refinement levels).`);
+  if (f.non_orthogonality_max > 70) warn.push(`Max non-orthogonality ${fmt1(f.non_orthogonality_max)}°: above 70° OpenFOAM may be unstable.`);
+  if (f.skewness_max > 4) warn.push(`Max skewness ${fmt(f.skewness_max, 2)} is above 4.`);
+  if ((x.problems || []).length) warn.push(...x.problems.map(t => `checkMesh: ${t}`));
+  if (x.layers_extruded_percent != null && S.p.mesh.layers?.n && x.layers_extruded_percent < 50)
+    warn.push(`Only ${fmt1(x.layers_extruded_percent)} % of the wall faces got layers: the parts are thin for these cells. Use a finer preset or refine the thin faces.`);
+  else if (x.layers_extruded_percent != null && S.p.mesh.layers?.n) info.push(`${fmt1(x.layers_extruded_percent)} % of the wall faces got layers.`);
+  warn.push(...(x.warnings || []));
+  const infoHtml = `<div class="small muted" style="margin-top:6px">${info.map(esc).join('<br>')}</div>`;
+  const real = warn.filter(w => !/concave/i.test(w));
+  const cls = real.length ? 'note warn' : 'note';
+  return `<div class="${cls}">${real.length ? '' : '✓ Mesh looks good.'}${warn.map(esc).join('<br>')}${infoHtml}</div>`;
+}
+
 function meshVerdict(s) {
+  if (s.method === 'hex' && s.hex) return hexVerdict(s);
   const q = s.quality, f = s.foam_quality, st = S.p.study;
   const warn = [], info = [];
   // 1. cell shape
@@ -1581,7 +1636,7 @@ function meshVerdict(s) {
     warn.push(`~${fmt(s.sizes.cells_across_gap, 2)} cells across the air gaps: use at least 6 for final numbers.`);
   if (st === 'external_aero' && across < 2) warn.push('Thin parts have < 2 cells across: use a finer preset.');
   if (st === 'heat_conduction' && across < 1.5) warn.push('Thin parts are ~1 cell thick: Medium or Fine is more accurate.');
-  if ((st === 'vibration_modal' || st === 'static_structural') && across < 1.5) warn.push('Thin walls are ~1 element thick: check with Fine.');
+  if ((st === 'vibration_modal' || st === 'static_structural' || st === 'aeroelastic_flutter') && across < 1.5) warn.push('Thin walls are ~1 element thick: check with Fine.');
   if (st === 'external_aero') {
     // flat-plate estimate of y+ of the first cell centre (tets: ~0.2 h from the wall)
     const set = S.p.settings, V = Math.max(set.speed, 1), L = S.p.geometry.info.ref_length;
@@ -1737,7 +1792,7 @@ function coresFor(p, n = p.settings.n_procs) {
   return n || Math.max(1, Math.min(cores, Math.floor((p.mesh.stats?.cells || 0) / 20000)));
 }
 
-const SOLID_STUDIES = ['heat_conduction', 'vibration_modal', 'static_structural'];
+const SOLID_STUDIES = ['heat_conduction', 'vibration_modal', 'static_structural', 'aeroelastic_flutter'];
 // serial run time from the reference runs: seconds per cell per iteration and typical iterations to auto-stop
 const RUN_COST = { cht_enclosure: [5.1e-6, 1700], external_aero: [6.2e-6, 500] };
 function runTimeEstimate(p) {
@@ -1922,25 +1977,184 @@ function drawResiduals(c, res) {
 }
 
 // ---- results
+// The Results step has four tabs (Summary: the numbers and charts of the study; Display: what the 3D view shows and how;
+// Probe: values and a plot along a line; Checks: how far the numbers can be trusted). All four are in the page at once
+// (the tab only hides the others), so every control exists whichever tab is open.
 function hasResults() { return ['done', 'stale'].includes(S.p?.solve.status) && S.p.solve.summary; }
+const DEFORM_STUDIES = ['static_structural', 'vibration_modal', 'aeroelastic_flutter'];
+const lsGet = k => { try { return localStorage.getItem(k); } catch { return null; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch { /* not kept */ } };
 function panelResults() {
   const p = S.p;
   if (!hasResults()) return `<h2>Results</h2><p class="muted">${S.jobs.solve?.status === 'running' ? 'Running…' : 'No results yet.'}</p>`;
   const stale = p.solve.status === 'stale'
     ? `<div class="note warn" style="margin-bottom:8px">Out of date: setup changed. <a href="#" data-goto="solve">Re-run</a></div>` : '';
-  return `<h2>Results</h2>${stale}<div id="resSummary"></div>
-    <h3>Display</h3><div class="grid2">
-      <label class="field"><span>Field</span><select id="fieldSel"></select></label>
-      <div id="timeBar" class="field full"></div>
-      <label class="field"><span>Min</span><input type="number" step="any" id="rngMin"></label>
-      <label class="field"><span>Max</span><input type="number" step="any" id="rngMax"></label>
-      <label class="field"><span>Automatic range</span><input type="checkbox" id="autoRange" ${S.autoRange ? 'checked' : ''} style="width:auto"></label>
-      ${(p.symmetry || []).length ? `<label class="field full" title="The solved part was cut at ${p.symmetry.length === 1 ? 'a symmetry plane' : 'symmetry planes'}: show its mirror image${p.symmetry.length === 1 ? '' : 's'} (the model and every result drawn) to see the whole body"><span>Show mirrored half</span><input type="checkbox" id="mirrorOn" ${S.mirror !== false ? 'checked' : ''} style="width:auto"></label>` : ''}
-      <label class="field" title="See-through surfaces and sections, to look at the vortices and contour planes behind them"><span>Opacity</span><input type="range" id="surfOp" min="0.1" max="1" step="0.05" value="${S.surfOpacity ?? 1}"></label></div>
-    <div id="isoBox"></div><div id="contourBox"></div><div id="visBox"></div>
-    <h3>Export</h3><p class="row"><button class="ghost small" data-action="exportReport" title="The study as one page: setup, mesh, key results, warnings and the picture of the 3D view as it is now. Opens in any browser; print it to PDF from there.">Report</button>
+  const cm = getColormap(), sym = (p.symmetry || []).length, structural = DEFORM_STUDIES.includes(p.study);
+  const tab = (id, label) => `<button data-rtab="${id}" class="${S.rtab === id ? 'on' : ''}">${label}</button>`;
+  const pane = (id, body) => `<div class="rpane ${S.rtab === id ? 'on' : ''}" data-rpane="${id}">${body}</div>`;
+  const deform = structural ? `<h3>Deformation${tip(p.study === 'static_structural'
+      ? 'The part drawn as it deforms under the load. The real deformation is far too small to see, so it is drawn larger: the scale factor says how much (Auto: the largest movement is 8 % of the model size; 1 = the true size). The thin outline is the part before it deformed.'
+      : 'The part swinging in the shape of the mode shown. The swing is drawn at about 8 % of the model size (the real amplitude depends on the excitation); the amplitude is a multiple of that.')}</h3>
+    <div class="grid2">
+      <label class="field"><span>Show deformed</span><select id="defMode"><option value="animate">animated</option>${p.study === 'static_structural' ? '<option value="static">end state</option>' : ''}<option value="off">off</option></select></label>
+      <label class="field"><span id="defScaleLbl">${p.study === 'static_structural' ? 'Scale factor' : 'Amplitude (× usual)'}</span><input type="number" step="any" min="0" id="defScale" placeholder="auto"></label>
+      <div class="field full row" style="gap:6px"><button class="ghost small" id="defAuto" title="Automatic scale">Auto</button>${p.study === 'static_structural' ? '<button class="ghost small" id="defTrue" title="Draw the true deformation (scale factor 1)">True size ×1</button>' : ''}
+        <label class="row small" style="margin-left:auto"><input type="checkbox" id="defOutline" style="width:auto"> Outline of the undeformed part</label></div>
+      <div class="field full small muted" id="defNote"></div></div>` : '';
+  return `<h2>Results</h2>${stale}
+    <div class="rtabs">${tab('summary', 'Summary')}${tab('display', 'Display')}${tab('probe', 'Probe')}${tab('checks', 'Checks')}</div>
+    ${pane('summary', `<div id="resSummary"></div>
+      <h3>Export</h3><p class="row"><button class="ghost small" data-action="exportReport" title="The study as one page: setup, mesh, key results, warnings and the picture of the 3D view as it is now. Opens in any browser; print it to PDF from there.">Report</button>
       <button class="ghost small" data-action="exportCsv" title="A table with one row per mesh node: position and every result (opens in Excel)">CSV table</button>
-      <button class="ghost small expert" data-action="exportVtu" title="The mesh with every result field as a VTK file, for ParaView, PyVista or VisIt">VTK (ParaView)</button></p>`;
+      <button class="ghost small expert" data-action="exportVtu" title="The mesh with every result field as a VTK file, for ParaView, PyVista or VisIt">VTK (ParaView)</button></p>`)}
+    ${pane('display', `<h3>Field</h3><div class="grid2">
+        <label class="field"><span>Field</span><select id="fieldSel"></select></label>
+        <div id="timeBar" class="field full"></div></div>
+      <h3>Colours${tip('The colour map and the range the colours run over. Drag over the bars of the distribution below to set the range to the part that matters (double-click to go back to automatic); the share of the surface outside the range is shown in grey text.')}</h3><div class="grid2">
+        <label class="field"><span>Colour map</span><select id="cmapSel">${COLORMAP_NAMES.map(n => `<option ${n === cm.name ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+        <div class="field full"><div id="cmapPrev" class="cmapPrev"></div></div>
+        <label class="field"><span>Reverse</span><input type="checkbox" id="cmapRev" ${cm.reverse ? 'checked' : ''} style="width:auto"></label>
+        <label class="field"><span>Colour bands</span><select id="cmapBands">${[[0, 'smooth'], [6, '6'], [8, '8'], [10, '10'], [12, '12'], [16, '16']].map(([v, l]) => `<option value="${v}" ${v === cm.bands ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+        <label class="field"><span>Automatic range</span><input type="checkbox" id="autoRange" ${S.autoRange ? 'checked' : ''} style="width:auto"></label>
+        <label class="field"><span>Min</span><input type="number" step="any" id="rngMin"></label>
+        <label class="field"><span>Max</span><input type="number" step="any" id="rngMax"></label>
+        <div class="field full"><canvas id="histCanvas" class="chart" style="height:70px;cursor:col-resize" title="Distribution of the field over the surface drawn (share of the area; square-root scale). Drag to set the colour range."></canvas><div id="histInfo" class="small muted"></div></div></div>
+      <h3>Model</h3><div class="grid2">
+        <label class="field" title="See-through surfaces and sections, to look at the vortices and contour planes behind them"><span>Opacity</span><input type="range" id="surfOp" min="0.1" max="1" step="0.05" value="${S.surfOpacity ?? 1}"></label>
+        <label class="field" title="Labels at the highest and the lowest value of the field on the surface drawn"><span>Min / max labels</span><input type="checkbox" id="extOn" ${S.showExtrema ? 'checked' : ''} style="width:auto"></label>
+        ${sym ? `<label class="field" title="The solved part was cut at ${sym === 1 ? 'a symmetry plane' : 'symmetry planes'}: show its mirror image${sym === 1 ? '' : 's'} (the model and every result drawn) to see the whole body"><span>Show mirrored half</span><input type="checkbox" id="mirrorOn" ${S.mirror !== false ? 'checked' : ''} style="width:auto"></label>` : ''}</div>
+      ${deform}
+      <div id="isoBox"></div><div id="contourBox"></div><div id="visBox"></div>`)}
+    ${pane('probe', `<h3>Line plot${tip('The field along a straight line between two points: for example through the thickness of a wall, across a fillet or along a fin. Pick the two points on the coloured model, or take the line from the lowest to the highest value. A line that runs through the part is sampled inside it, not only on the surface.')}</h3>
+      <div class="row"><button class="small" id="lnPick" title="Click two points on the coloured model">Pick two points</button>
+        <button class="ghost small" id="lnExt" title="The line from the lowest to the highest value of the field on the surface drawn">Min → max</button>
+        <button class="ghost small" id="lnCopy" title="Copy the values as a table (distance in mm, value) for a spreadsheet">Copy data</button>
+        <button class="ghost small" id="lnClear">Clear</button></div>
+      <div id="lineBox" style="margin-top:6px"><p class="small muted">No line yet. Press “Pick two points”, then click point A and point B on the model.</p></div>
+      <h3>Pinned values${tip('⌖ Probe (above the 3D view) pins the value of the field at the point you click. The labels stay until the field, the time or the section changes.')}</h3>
+      <div id="pinList" class="small"></div>`)}
+    ${pane('checks', `<div id="resChecks"></div>`)}`;
+}
+
+// the colour strip shown under the colour map choice
+function cmapPreview() {
+  const el = $('#cmapPrev'); if (!el) return;
+  const B = getColormap().bands, n = B > 1 ? B : 24;
+  const col = t => `rgb(${cmap(t, true).map(x => x * 255 | 0).join(',')})`;
+  const stops = B > 1 ? Array.from({ length: B }, (_, b) => `${col((b + 0.5) / B)} ${b / B * 100}%,${col((b + 0.5) / B)} ${(b + 1) / B * 100}%`)
+    : Array.from({ length: n + 1 }, (_, i) => `${col(i / n)} ${i / n * 100}%`);
+  el.style.background = `linear-gradient(90deg,${stops.join(',')})`;
+}
+
+// ---- the distribution of the drawn field (like the histogram of ParaView): drag over it to set the colour range
+function drawFieldHist() {
+  const c = $('#histCanvas'), info = $('#histInfo');
+  if (!c || !c.clientWidth || !S.shownRange) return;
+  const h = S.hist, [lo, hi] = S.shownRange, dp = devicePixelRatio;
+  const W = c.width = c.clientWidth * dp, H = c.height = c.clientHeight * dp, g = c.getContext('2d');
+  if (!h) { info.textContent = ''; return; }
+  const n = h.bins.length, mx = Math.max(...h.bins.map(Math.sqrt), 1e-9), base = H - 12 * dp, bw = W / n;
+  h.bins.forEach((b, i) => {
+    const col = cmap((i + 0.5) / n, true), bh = Math.sqrt(b) / mx * (base - 3 * dp);
+    g.fillStyle = `rgb(${col.map(x => x * 255 | 0).join(',')})`; g.fillRect(i * bw + 0.5 * dp, base - bh, bw - dp, bh);
+  });
+  g.strokeStyle = 'rgba(127,127,127,.5)'; g.beginPath(); g.moveTo(0, base + 0.5); g.lineTo(W, base + 0.5); g.stroke();
+  g.font = `${9 * dp}px sans-serif`; g.fillStyle = 'rgba(160,168,180,.95)';
+  g.fillText(fmt(lo, 4), 2, H - 2);
+  const e = fmt(hi, 4); g.fillText(e, W - g.measureText(e).width - 2, H - 2);
+  if (Number.isFinite(h.mean) && hi > lo && h.mean >= lo && h.mean <= hi) {   // the area-weighted mean
+    const x = (h.mean - lo) / (hi - lo) * W; g.strokeStyle = '#fff'; g.setLineDash([3 * dp, 3 * dp]); g.beginPath(); g.moveTo(x, 0); g.lineTo(x, base); g.stroke(); g.setLineDash([]);
+    const t = 'mean'; g.fillStyle = '#fff'; g.fillText(t, Math.min(Math.max(x - g.measureText(t).width / 2, 2), W - 30 * dp), 9 * dp);
+  }
+  const pct = v => v >= 0.0005 ? `${fmt(v * 100, 2)} %` : '';
+  info.textContent = `mean ${fmt(h.mean, 4)} ${S.legendInfo?.unit || ''}${pct(h.below) ? ` · ${pct(h.below)} of the surface below the range` : ''}${pct(h.above) ? ` · ${pct(h.above)} above it` : ''}`;
+}
+function bindFieldHist() {
+  const c = $('#histCanvas'); if (!c) return;
+  let a = null;
+  const val = ev => { const r = c.getBoundingClientRect(), [lo, hi] = S.shownRange || [0, 1]; return lo + (hi - lo) * Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width)); };
+  const apply = (x0, x1) => {
+    if (Math.abs(x1 - x0) < 1e-12) return;
+    S.autoRange = false; S.range = [Math.min(x0, x1), Math.max(x0, x1)]; $('#autoRange').checked = false;
+    $('#rngMin').value = fmt(S.range[0], 4); $('#rngMax').value = fmt(S.range[1], 4);
+    clearTimeout(S.histT); S.histT = setTimeout(showResults, 80);
+  };
+  c.onpointerdown = ev => { a = val(ev); c.setPointerCapture(ev.pointerId); };
+  c.onpointermove = ev => { if (a != null) apply(a, val(ev)); };
+  c.onpointerup = c.onpointercancel = () => { a = null; };
+  c.ondblclick = () => { S.autoRange = true; S.range = null; $('#autoRange').checked = true; showResults(); };
+}
+
+// ---- the deformation controls
+function updateDeformUi(info) {
+  const d = info?.deform, note = $('#defNote'), sc = $('#defScale'), mode = $('#defMode');
+  if (!note || !sc || !mode) return;
+  mode.value = S.deform.mode; $('#defOutline').checked = !!S.deform.outline;
+  const stat = S.p.study === 'static_structural';
+  if (!d) {
+    sc.placeholder = 'auto';
+    note.textContent = S.deform.mode === 'off' ? 'The model is drawn undeformed.' : S.clip.axis ? 'A section plane is drawn undeformed: switch the section off to see the deformed part.' : 'This field has no deformation to draw.';
+    return;
+  }
+  sc.placeholder = `auto ${fmt(d.auto, 3)}`;
+  if (document.activeElement !== sc) sc.value = S.deform.scale != null ? S.deform.scale : '';
+  note.textContent = stat
+    ? `Drawn ${fmt(d.scale, 3)} times the true deformation${S.deform.scale == null ? ' (auto)' : ''}: the largest movement, ${fmt(d.umax * 1e3, 3)} mm, is shown as ${fmt(d.umax * d.scale * 1e3, 3)} mm.`
+    : 'Mode shapes have no absolute size: the swing is drawn at about 8 % of the model size, times the amplitude.';
+}
+function bindDeform() {
+  const re = () => showResults();
+  $('#defMode')?.addEventListener('change', e => { S.deform.mode = e.target.value; re(); });
+  $('#defScale')?.addEventListener('change', e => { const v = parseFloat(e.target.value); S.deform.scale = Number.isFinite(v) && v >= 0 ? v : null; re(); });
+  $('#defAuto')?.addEventListener('click', () => { S.deform.scale = null; $('#defScale').value = ''; re(); });
+  $('#defTrue')?.addEventListener('click', () => { S.deform.scale = 1; $('#defScale').value = 1; re(); });
+  $('#defOutline')?.addEventListener('change', e => { S.deform.outline = e.target.checked; re(); });
+}
+
+// ---- min / max labels on the model
+function extremaLabels(info, unit) {
+  if (!S.showExtrema || S.recording || S.line || !info?.extrema) { viewer.setExtrema(null); return; }   // (a line's A / B labels would sit on them)
+  const { min, max } = info.extrema;
+  if (!(max.value > min.value) || unit === 'relative') { viewer.setExtrema(null); return; }   // (a uniform field, or a mode shape that has no absolute size: nothing to point at)
+  const u = unit ? ' ' + unit : '';
+  viewer.setExtrema([{ ids: max.ids, text: `Max ${fmt(max.value, 4)}${u}`, color: '#ff6b6b' }, { ids: min.ids, text: `Min ${fmt(min.value, 4)}${u}`, color: '#4dabf7' }]);
+}
+
+// ---- summary / checks panes
+function renderSummary() {
+  const el = $('#resSummary'); if (!el || !S.results) return;
+  const sm = S.results.summary || S.p.solve.summary;
+  el.innerHTML = summaryHtml(sm) + warningsHtml(sm);
+  const ck = $('#resChecks'); if (ck) ck.innerHTML = checksHtml(sm);
+  const sel = $('#fieldSel');
+  for (const root of [el, ck]) root?.querySelectorAll('[data-action]').forEach(b => b.onclick = ev => action(b.dataset.action, b, ev));
+  el.querySelectorAll('[data-mode]').forEach(tr => tr.onclick = () => selectMode(tr.dataset.mode));
+  el.querySelectorAll('[data-field]').forEach(tr => tr.onclick = () => {   // (flutter and divergence shapes)
+    S.field = tr.dataset.field; S.range = null; S.autoRange = true; if (sel) sel.value = S.field;
+    el.querySelectorAll('[data-mode],[data-field]').forEach(x => x.classList.toggle('sel', x === tr));
+    showResults();
+  });
+  el.querySelectorAll('[data-showfield]').forEach(b => b.onclick = () => {
+    if (!S.results.fields.some(f => f.name === b.dataset.showfield)) return;
+    S.field = b.dataset.showfield; S.range = null; S.autoRange = true; S.showExtrema = true; if ($('#extOn')) $('#extOn').checked = true;
+    if (sel) sel.value = S.field; renderTree(); showResults();
+  });
+  const anim = $('#animModes');
+  if (anim) anim.onchange = () => { S.deform.mode = anim.checked ? 'animate' : (S.p.study === 'static_structural' ? 'static' : 'off'); updateDeformUi(S.ovInfo); showResults(); };
+  const tl = $('#tLimit');
+  if (tl) tl.onchange = () => { const v = parseFloat(tl.value); S.tLimit = Number.isFinite(v) ? v : null; lsSet('simwb.tlimit.' + S.pid, S.tLimit == null ? '' : String(S.tLimit)); renderSummary(); };
+  if (sm?.history) drawHistory($('#histChart'), sm.history);
+  if (sm?.convergence?.history) drawResidualHistory($('#resChart'), sm.convergence.history);
+  if (sm?.sine) drawSweep($('#sineChart'), sm.sine.frequency_Hz, sm.sine.max_stress_MPa, 'MPa', sm.sine.peaks);
+  if (sm?.modes && $('#specChart')) drawSpectrum($('#specChart'), sm);
+  if (sm?.sweep) { drawFlutter($('#flutterF'), sm.sweep, 'f', sm.critical?.speed_m_s); drawFlutter($('#flutterD'), sm.sweep, 'd', sm.critical?.speed_m_s); }
+}
+function selectMode(m) {
+  S.field = 'Mode ' + m; S.range = null; S.autoRange = true;
+  const sel = $('#fieldSel'); if (sel) sel.value = S.field;
+  $('#resSummary')?.querySelectorAll('[data-mode]').forEach(x => x.classList.toggle('sel', x.dataset.mode === String(m)));
+  drawSpectrum($('#specChart'), S.results?.summary || S.p.solve.summary);
+  showResults();
 }
 
 async function loadResultsPanel() {
@@ -1949,7 +2163,18 @@ async function loadResultsPanel() {
     try { S.results = await api(P('/results/fields')); S.timeIdx = null; renderTree(); } catch (e) { toast(e.message, true); return; }
   }
   const r = S.results;
-  if (!S.field || !r.fields.find(f => f.name === S.field)) S.field = r.fields[0]?.name;
+  if (!S.field || !r.fields.find(f => f.name === S.field)) S.field = r.fields.find(f => f.name === 'Flutter mode' || f.name === 'Divergence shape')?.name || r.fields[0]?.name;
+  if (S.deformStudy !== S.p.study) {   // (a static result is drawn at rest at first, a mode shape swinging)
+    S.deformStudy = S.p.study; S.deform = { mode: S.p.study === 'static_structural' ? 'static' : 'animate', scale: null, outline: true };
+  }
+  if (S.tLimitPid !== S.pid) { S.tLimitPid = S.pid; const v = parseFloat(lsGet('simwb.tlimit.' + S.pid)); S.tLimit = Number.isFinite(v) ? v : null; }
+  // tabs
+  document.querySelectorAll('#panel [data-rtab]').forEach(b => b.onclick = () => {
+    S.rtab = b.dataset.rtab;
+    document.querySelectorAll('#panel [data-rtab]').forEach(x => x.classList.toggle('on', x === b));
+    document.querySelectorAll('#panel [data-rpane]').forEach(x => x.classList.toggle('on', x.dataset.rpane === S.rtab));
+    drawFieldHist(); drawLineChart(); drawSpectrum($('#specChart'), r.summary || S.p.solve.summary);
+  });
   const ib = $('#isoBox'); if (ib) { ib.innerHTML = isoHtml(); bindIso(); }
   const cb = $('#contourBox'); if (cb) { cb.innerHTML = contourHtml(); bindContours(); }
   // (volume cloud, arrows and particles are views of a flow: not offered for studies of solid parts)
@@ -1984,23 +2209,107 @@ async function loadResultsPanel() {
     S.autoRange = false; $('#autoRange').checked = false;
     S.range = [parseFloat($('#rngMin').value), parseFloat($('#rngMax').value)]; showResults();
   };
-  const sm = r.summary || S.p.solve.summary;
-  $('#resSummary').innerHTML = summaryHtml(sm) + extrasHtml(sm);
-  $('#resSummary').querySelectorAll('[data-action]').forEach(b => b.onclick = ev => action(b.dataset.action, b, ev));
-  $('#resSummary').querySelectorAll('[data-mode]').forEach(tr => tr.onclick = () => {
-    S.field = 'Mode ' + tr.dataset.mode; S.range = null; S.autoRange = true; sel.value = S.field;
-    $('#resSummary').querySelectorAll('[data-mode]').forEach(x => x.classList.toggle('sel', x === tr));
+  // colour map
+  cmapPreview();
+  const cmChange = () => {
+    setColormap({ name: $('#cmapSel').value, reverse: $('#cmapRev').checked, bands: +$('#cmapBands').value });
+    saveCmap(); cmapPreview();
+    for (const k of ['vol', 'vec', 'par']) S[k].key = ''; S.vol.applied = null;   // (their colours are made when they are built)
     showResults();
-  });
-  const anim = $('#animModes');
-  if (anim) anim.onchange = () => { S.animate = anim.checked; showResults(); };
-  if (sm?.history) drawHistory($('#histChart'), sm.history);
-  if (sm?.sine) drawSweep($('#sineChart'), sm.sine.frequency_Hz, sm.sine.max_stress_MPa, 'MPa');
+  };
+  for (const id of ['cmapSel', 'cmapRev', 'cmapBands']) $('#' + id).onchange = cmChange;
+  $('#extOn').onchange = e => { S.showExtrema = e.target.checked; extremaLabels(S.ovInfo, S.probeUnit); };
+  bindFieldHist(); bindDeform(); updateDeformUi(S.ovInfo); bindLinePlot();
+  renderSummary();
   showResults();
 }
 
-// response curve of a sweep on logarithmic axes (peaks span decades)
-function drawSweep(c, f, y, unit) {
+// ---- small display components shared by the study summaries
+// a number tile; tone colours its edge (ok / warn / bad), hint is a line under the value
+function kpi(lbl, val, unit = '', tone = '', hint = '') {
+  return `<div class="kpi ${tone}"><div class="lbl">${esc(lbl)}</div><div class="val">${val}<span class="small muted"> ${esc(unit)}</span></div>${hint ? `<div class="hint">${hint}</div>` : ''}</div>`;
+}
+// horizontal bars, one row each: {label, text, v, tone, mark, markLabel}; scale: the value at the full width; signed: bars
+// grow from the middle (forces, moments); marks: [{v, label, cls}] lines over every bar (a limit, a yield strength)
+function hbars(rows, { max, signed = false, marks = [] } = {}) {
+  const top = max ?? Math.max(...rows.map(r => Math.abs(r.v)), 1e-30);
+  const x = v => Math.min(100, Math.max(0, v / top * 100));
+  return `<div class="hbars">${rows.map(r => {
+    const fill = signed ? `<i class="${r.tone || ''}" style="left:${r.v < 0 ? 50 - x(-r.v) / 2 : 50}%;width:${x(Math.abs(r.v)) / 2}%"></i><u></u>`
+      : `<i class="${r.tone || ''}" style="left:0;width:${x(r.v)}%"></i>`;
+    const mk = [...marks, ...(r.mark != null ? [{ v: r.mark, label: r.markLabel || '', cls: '' }] : [])]
+      .map(m => `<b class="${m.cls || ''}" title="${esc(m.label || '')}" style="left:${signed ? 50 + x(m.v) / 2 : x(m.v)}%"></b>`).join('');
+    return `<div class="hb"><div class="hb-h"><span class="hb-l" title="${esc(r.label)}">${esc(r.label)}</span><span class="hb-v">${r.text}</span></div><div class="hb-t">${fill}${mk}</div></div>`;
+  }).join('')}</div>`;
+}
+// one bar split into parts (where the heat goes): {label, v, color}; total: what the whole bar stands for
+const PART_COLORS = ['#4c9be8', '#f2a541', '#6cc08b', '#c47fd5', '#e56b6f', '#8d96a3'];
+function stackBar(parts, total, unit = 'W') {
+  const T = total > 0 ? total : parts.reduce((a, b) => a + Math.max(b.v, 0), 0) || 1;
+  const segs = parts.filter(p => p.v > 0).map((p, i) => `<i style="width:${Math.min(100, p.v / T * 100)}%;background:${p.color || PART_COLORS[i % PART_COLORS.length]}" title="${esc(p.label)}: ${fmt(p.v)} ${unit}"></i>`).join('');
+  const lg = parts.filter(p => p.v > 0).map((p, i) => `<div class="sb-r"><span class="sw" style="background:${p.color || PART_COLORS[i % PART_COLORS.length]}"></span><span class="sb-l">${esc(p.label)}</span><span class="sb-v">${fmt(p.v)} ${unit} · ${fmt(p.v / T * 100, 3)} %</span></div>`).join('');
+  return `<div class="stack">${segs}</div>${lg}`;
+}
+// bars of the highest temperature of each part on one scale from the coolest to the hottest, the mean as a tick and the
+// allowed temperature (typed in, kept per project) as a red line; rows: [{label, T_max, T_mean?, heat_W?}]
+function tempBars(rows, tLo, unit = '°C') {
+  const lim = S.tLimit;
+  const hi = Math.max(...rows.map(r => r.T_max), lim ?? -Infinity), lo = Math.min(tLo, ...rows.map(r => r.T_max));
+  const span = Math.max(hi - lo, 1e-9);
+  const rel = rows.map(r => ({ label: r.label + (r.heat_W ? ` (${fmt(r.heat_W)} W)` : ''), v: (r.T_max - lo) / span, mark: r.T_mean != null ? (r.T_mean - lo) / span : null, markLabel: 'mean temperature',
+    tone: lim == null ? '' : r.T_max > lim ? 'bad' : lim - r.T_max < 0.1 * (lim - lo) ? 'warn' : 'ok',
+    text: `<b>${fmt1(r.T_max)}</b> ${unit}${r.T_mean != null ? ` · mean ${fmt1(r.T_mean)}` : ''}${lim == null ? '' : ` · <span class="${r.T_max > lim ? 'bad' : ''}">${r.T_max > lim ? '+' : '−'}${fmt1(Math.abs(lim - r.T_max))} K ${r.T_max > lim ? 'over' : 'margin'}</span>`}` }));
+  return `<label class="row small tlimit">Allowed temperature <input type="number" step="any" id="tLimit" value="${lim ?? ''}" placeholder="none" style="width:70px"> ${unit}
+      <span class="muted">(shows the margin of every part)</span></label>
+    ${hbars(rel, { max: 1, marks: lim != null ? [{ v: (lim - lo) / span, label: `limit ${fmt1(lim)} ${unit}`, cls: 'lim' }] : [] })}
+    <p class="small muted" style="margin:2px 0 0">Bars run from ${fmt1(lo)} to ${fmt1(hi)} ${unit}; the tick is each part's mean${lim != null ? '; the red line is the limit' : ''}.</p>`;
+}
+// the share of the heat in that is accounted for, as a chip: green when the balance closes
+function balanceChip(inW, outW) {
+  if (!(inW > 0)) return '';
+  const e = Math.abs(outW - inW) / inW * 100;
+  return `<span class="chip ${e > 5 ? 'bad' : e > 1 ? 'warn' : 'ok'}" title="Heat leaving the model compared with the heat put in: a measure of how well the solution is converged">heat balance ${e > 5 ? '△' : '✓'} ${e < 0.01 ? 'closes' : fmt(e, 2) + ' % off'}</span>`;
+}
+
+// ---- charts on a canvas
+// natural frequencies as stems: the height is the share of the mass that moves in the main direction (effective mass; a
+// stem without data is short), the colour that direction; the excitation range is shaded; the mode shown is brighter
+function drawSpectrum(c, s) {
+  if (!c || !c.clientWidth || !s?.modes) return;
+  const el = s.modes.filter(m => !m.rigid_body);
+  if (!el.length) return;
+  const dp = devicePixelRatio, W = c.width = c.clientWidth * dp, H = c.height = c.clientHeight * dp, g = c.getContext('2d');
+  const fmax = Math.max(...el.map(m => m.frequency_Hz), s.excitation_band_Hz?.[1] || 0) * 1.06 || 1;
+  const padL = 30 * dp, padB = 14 * dp, X = f => padL + (W - padL - 8 * dp) * f / fmax, Y = v => 6 * dp + (H - padB - 6 * dp) * (1 - v);
+  g.font = `${9 * dp}px sans-serif`; g.fillStyle = 'rgba(160,168,180,.95)'; g.strokeStyle = 'rgba(127,127,127,.25)';
+  for (let i = 0; i <= 4; i++) { const v = i / 4, y = Y(v); g.beginPath(); g.moveTo(padL, y); g.lineTo(W, y); g.stroke(); g.fillText(`${v * 100 | 0} %`, 2, y + 3 * dp); }
+  const step = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000].find(v => fmax / v <= 6) || 20000;
+  for (let f = 0; f <= fmax; f += step) { g.fillText(`${fmtS(f)}`, X(f) - 6 * dp, H - 2); g.beginPath(); g.moveTo(X(f), 0); g.lineTo(X(f), H - padB); g.stroke(); }
+  g.fillText('Hz', W - 14 * dp, H - 2);
+  const b = s.excitation_band_Hz;
+  if (b && b[1] >= b[0]) { g.fillStyle = 'rgba(248,81,73,.22)'; g.fillRect(X(b[0]), 0, Math.max(X(b[1]) - X(b[0]), 2 * dp), H - padB); }
+  const dirCol = { x: '#ef5350', y: '#66bb6a', z: '#42a5f5' };
+  c._stems = [];
+  el.forEach(m => {
+    const e = m.effective_mass_fraction, d = e ? ['x', 'y', 'z'].reduce((a, k) => e[k] > e[a] ? k : a, 'x') : null, v = e ? e[d] : 0.04;
+    const sel = S.field === 'Mode ' + m.elastic_index, x = X(m.frequency_Hz);
+    g.strokeStyle = d ? dirCol[d] : '#8d96a3'; g.globalAlpha = sel ? 1 : 0.72; g.lineWidth = (sel ? 3.2 : 2) * dp;
+    g.beginPath(); g.moveTo(x, Y(0)); g.lineTo(x, Y(v)); g.stroke();
+    g.fillStyle = g.strokeStyle; g.beginPath(); g.arc(x, Y(v), (sel ? 4 : 2.8) * dp, 0, 2 * Math.PI); g.fill(); g.globalAlpha = 1;
+    if (sel || el.length <= 12) { g.fillStyle = sel ? '#fff' : 'rgba(200,206,214,.9)'; g.fillText(String(m.elastic_index), x - 3 * dp, Math.max(Y(v) - 6 * dp, 9 * dp)); }
+    c._stems.push({ x: x / dp, mode: m.elastic_index });
+  });
+  g.lineWidth = 1;
+  if (!c._bound) {
+    c._bound = true; c.style.cursor = 'pointer';
+    c.onclick = ev => {
+      const x = ev.clientX - c.getBoundingClientRect().left, hit = c._stems.map(t => [Math.abs(t.x - x), t.mode]).sort((a, b) => a[0] - b[0])[0];
+      if (hit && hit[0] < 14) selectMode(hit[1]);
+    };
+  }
+}
+// the largest stress against the shaking frequency (logarithmic axes); the peaks listed under it are dotted
+function drawSweep(c, f, y, unit, peaks) {
   if (!c || !f?.length) return;
   const dp = devicePixelRatio, W = c.width = c.clientWidth * dp, H = c.height = c.clientHeight * dp, g = c.getContext('2d');
   const pos = y.filter(v => v > 0);
@@ -2017,6 +2326,159 @@ function drawSweep(c, f, y, unit) {
   const end = `${fmtS(f[f.length - 1])} Hz`; g.fillText(end, W - g.measureText(end).width - 2, H - 2);
   g.strokeStyle = '#ff9f1c'; g.lineWidth = 1.5 * dp; g.beginPath();
   f.forEach((v, i) => i ? g.lineTo(X(v), Y(y[i])) : g.moveTo(X(v), Y(y[i]))); g.stroke();
+  g.fillStyle = '#ffd43b';
+  for (const k of peaks || []) { if (k.max_stress_MPa > 0) { g.beginPath(); g.arc(X(k.frequency_Hz), Y(k.max_stress_MPa), 3.2 * dp, 0, 2 * Math.PI); g.fill(); } }
+}
+// solver residuals against the iteration (logarithmic): {iters, series: {name: [..]}}; they fall as the run converges
+function drawResidualHistory(c, h) {
+  if (!c || !c.clientWidth || !h?.iters?.length) return;
+  const dp = devicePixelRatio, W = c.width = c.clientWidth * dp, H = c.height = c.clientHeight * dp, g = c.getContext('2d');
+  const names = Object.keys(h.series), vals = names.flatMap(k => h.series[k].filter(v => v > 0));
+  if (!vals.length) return;
+  const lx = Math.log10, y1 = Math.ceil(lx(Math.max(...vals))), y0 = Math.min(Math.floor(lx(Math.min(...vals))), y1 - 2), n1 = h.iters[h.iters.length - 1] || 1;
+  const padL = 34 * dp, padB = 14 * dp, X = i => padL + (W - padL - 6 * dp) * i / n1, Y = v => 6 * dp + (H - padB - 6 * dp) * (y1 - lx(Math.max(v, 10 ** y0))) / (y1 - y0);
+  g.font = `${9 * dp}px sans-serif`; g.strokeStyle = 'rgba(127,127,127,.25)'; g.fillStyle = 'rgba(160,168,180,.95)';
+  for (let e = y0; e <= y1; e++) { const yy = Y(10 ** e); g.beginPath(); g.moveTo(padL, yy); g.lineTo(W, yy); g.stroke(); g.fillText(`1e${e}`, 2, yy + 3 * dp); }
+  g.fillText('0', padL, H - 2); const e = `${fmt(n1)} iterations`; g.fillText(e, W - g.measureText(e).width - 2, H - 2);
+  names.forEach((k, si) => {
+    const col = turbo((si + 0.5) / names.length);
+    g.strokeStyle = `rgb(${col.map(x => x * 255 | 0).join(',')})`; g.lineWidth = 1.2 * dp; g.beginPath();
+    let pen = false; h.series[k].forEach((v, i) => { if (!(v > 0)) { pen = false; return; } const x = X(h.iters[i]), y = Y(v); if (pen) g.lineTo(x, y); else g.moveTo(x, y); pen = true; });
+    g.stroke();
+  });
+  g.lineWidth = 1;
+}
+
+// ---- line plot: the field along a line between two points of the model
+// S.line = {a, b (points as stored in the mesh), shownA, shownB (where the labels sit), res (the sampled values)}
+function bindLinePlot() {
+  $('#lnPick').onclick = () => {
+    S.linePick = { n: 0 }; setProbe(true);
+    toast('Click point A on the coloured model.', false, 5000);
+  };
+  $('#lnExt').onclick = () => {
+    const e = S.ovInfo?.extrema;
+    if (!e || !(e.max.value > e.min.value)) { toast('This field has no highest and lowest point to join (it is uniform).'); return; }
+    S.line = { a: viewer.extremumPoint(e.min.ids, true), b: viewer.extremumPoint(e.max.ids, true), shownA: viewer.extremumPoint(e.min.ids), shownB: viewer.extremumPoint(e.max.ids) };
+    viewer.setSegment(S.line.shownA, S.line.shownB); extremaLabels(S.ovInfo, S.probeUnit); fetchLine();
+  };
+  $('#lnClear').onclick = () => { S.line = null; S.linePick = null; viewer.setSegment(null); lineBox(); extremaLabels(S.ovInfo, S.probeUnit); };
+  $('#lnCopy').onclick = () => {
+    const r = S.line?.res; if (!r) return;
+    const csv = `distance_mm,${S.line.field} [${r.unit}]\n` + r.s.map((s, i) => `${(s * 1000).toPrecision(6)},${r.values[i] ?? ''}`).join('\n');
+    navigator.clipboard?.writeText(csv).then(() => toast('Line data copied: paste it into a spreadsheet'), () => toast('The browser did not allow copying.', true));
+  };
+  lineBox(); pinList();
+  if (S.line?.res) viewer.setSegment(S.line.shownA, S.line.shownB);
+}
+function lineBox() {
+  const el = $('#lineBox'); if (!el) return;
+  const r = S.line?.res;
+  if (!S.line) { el.innerHTML = `<p class="small muted">No line yet. Press “Pick two points”, then click point A and point B on the model.</p>`; return; }
+  if (!r) { el.innerHTML = `<p class="small muted">Sampling…</p>`; return; }
+  const tr = S.results.times?.length > 1 ? ` at ${fmtTime(S.results.times[S.timeIdx ?? S.results.times.length - 1])}` : '';
+  el.innerHTML = `<canvas id="lineChart" class="chart" style="height:150px"></canvas>
+    <div class="small muted" id="lineInfo">${r.n_inside ? `${esc(S.line.field)}${tr}: min ${fmt(r.min, 4)} · mean ${fmt(r.mean, 4)} · max ${fmt(r.max, 4)} ${esc(r.unit)} over ${fmt(r.length * 1000, 4)} mm. Move over the plot to read it.` : 'The line is outside the solved region.'}</div>`;
+  drawLineChart();
+}
+async function fetchLine() {
+  const L = S.line; if (!L) return;
+  L.field = S.field; lineBox();
+  const hide = S.hideAir ? (S.results.summary?.default_hidden_regions || []).join(',') : '';
+  const ti = S.results.times?.length > 1 ? `&time=${S.timeIdx ?? -1}` : '';
+  try {
+    const res = await api(P(`/results/line?field=${encodeURIComponent(S.field)}&p0=${L.a.join(',')}&p1=${L.b.join(',')}&n=160&hide=${hide}${ti}`));
+    if (S.line !== L) return;   // (cleared or replaced while it loaded)
+    L.res = res; lineBox();
+  } catch (e) { toast(e.message, true); }
+}
+function drawLineChart(hover = null) {
+  const c = $('#lineChart'), r = S.line?.res;
+  if (!c || !c.clientWidth || !r) return;
+  const dp = devicePixelRatio, W = c.width = c.clientWidth * dp, H = c.height = c.clientHeight * dp, g = c.getContext('2d');
+  const ok = r.values.map((v, i) => v != null ? i : -1).filter(i => i >= 0);
+  if (!ok.length) return;
+  let lo = Math.min(...ok.map(i => r.values[i])), hi = Math.max(...ok.map(i => r.values[i]));
+  if (hi - lo < 1e-12 * Math.max(1, Math.abs(hi))) { lo -= 1; hi += 1; }
+  const pad = 0.06 * (hi - lo); lo -= pad; hi += pad;
+  const padL = 46 * dp, padB = 14 * dp, L = r.length * 1000, X = s => padL + (W - padL - 6 * dp) * s * 1000 / L, Y = v => 6 * dp + (H - padB - 6 * dp) * (hi - v) / (hi - lo);
+  g.font = `${9 * dp}px sans-serif`; g.strokeStyle = 'rgba(127,127,127,.25)'; g.fillStyle = 'rgba(160,168,180,.95)';
+  const dec = Math.min(6, Math.max(0, Math.ceil(-Math.log10((hi - lo) / 4))));
+  for (let i = 0; i <= 4; i++) { const v = lo + (hi - lo) * i / 4, y = Y(v); g.beginPath(); g.moveTo(padL, y); g.lineTo(W, y); g.stroke(); g.fillText(v.toFixed(dec), 2, y + 3 * dp); }
+  g.fillText('A  0', padL, H - 2); const e = `${fmt(L, 4)} mm  B`; g.fillText(e, W - g.measureText(e).width - 2, H - 2);
+  // the stretch inside the solved region as a filled line (gaps where the line leaves it)
+  g.strokeStyle = '#3d8bfd'; g.fillStyle = 'rgba(61,139,253,.18)'; g.lineWidth = 1.6 * dp;
+  let run = [];
+  const flush = () => { if (run.length > 1) { g.beginPath(); run.forEach((i, k) => k ? g.lineTo(X(r.s[i]), Y(r.values[i])) : g.moveTo(X(r.s[i]), Y(r.values[i]))); g.stroke(); g.lineTo(X(r.s[run.at(-1)]), Y(lo)); g.lineTo(X(r.s[run[0]]), Y(lo)); g.fill(); } run = []; };
+  r.values.forEach((v, i) => { if (v == null) flush(); else run.push(i); }); flush();
+  g.lineWidth = 1;
+  g.fillStyle = '#ff6b6b'; g.beginPath(); g.arc(X(r.s_max), Y(r.max), 3 * dp, 0, 2 * Math.PI); g.fill();
+  g.fillStyle = '#4dabf7'; g.beginPath(); g.arc(X(r.s_min), Y(r.min), 3 * dp, 0, 2 * Math.PI); g.fill();
+  if (hover != null && r.values[hover] != null) {
+    g.strokeStyle = '#fff'; g.beginPath(); g.moveTo(X(r.s[hover]), 0); g.lineTo(X(r.s[hover]), H - padB); g.stroke();
+    g.fillStyle = '#fff'; g.beginPath(); g.arc(X(r.s[hover]), Y(r.values[hover]), 3.5 * dp, 0, 2 * Math.PI); g.fill();
+  }
+  if (!c._bound) {
+    c._bound = true;
+    c.onmousemove = ev => {
+      const R = S.line?.res; if (!R) return;
+      const rect = c.getBoundingClientRect(), f = Math.min(1, Math.max(0, ((ev.clientX - rect.left) / rect.width * c.width / dp - padL / dp) / ((c.width - padL - 6 * dp) / dp)));
+      const i = Math.round(f * (R.s.length - 1));
+      drawLineChart(i);
+      $('#lineInfo').textContent = R.values[i] == null ? `${fmt(R.s[i] * 1000, 4)} mm: outside the solved region` : `${fmt(R.s[i] * 1000, 4)} mm from A: ${fmt(R.values[i], 5)} ${R.unit}`;
+      if (S.line.a && R.values[i] != null) { const t = R.s[i] / R.length, A = S.line.shownA, B = S.line.shownB; viewer.setSegment(A, B, A.map((v, k) => v + t * (B[k] - v))); }
+    };
+    c.onmouseleave = () => { drawLineChart(); if (S.line) viewer.setSegment(S.line.shownA, S.line.shownB); const R = S.line?.res; if (R && $('#lineInfo')) $('#lineInfo').textContent = `${S.line.field}: min ${fmt(R.min, 4)} · mean ${fmt(R.mean, 4)} · max ${fmt(R.max, 4)} ${R.unit}`; };
+  }
+}
+// a click on the model while the line is being picked: point A, then point B
+function linePicked(hit) {
+  const st = S.linePick;
+  if (!st) return false;
+  if (st.n === 0) {
+    st.a = hit.base || hit.point; st.shownA = hit.point; st.n = 1;
+    viewer.setSegment(hit.point, hit.point); toast('Now click point B.', false, 5000);
+  } else {
+    S.line = { a: st.a, b: hit.base || hit.point, shownA: st.shownA, shownB: hit.point };
+    S.linePick = null; setProbe(false); viewer.setSegment(S.line.shownA, S.line.shownB);
+    S.rtab = 'probe'; document.querySelectorAll('#panel [data-rtab]').forEach(x => x.classList.toggle('on', x.dataset.rtab === 'probe'));
+    document.querySelectorAll('#panel [data-rpane]').forEach(x => x.classList.toggle('on', x.dataset.rpane === 'probe'));
+    fetchLine();
+  }
+  return true;
+}
+function pinList() {
+  const el = $('#pinList'); if (!el) return;
+  const pins = S.probes || [];
+  el.innerHTML = pins.length ? `<table class="summary">${pins.map((q, i) => `<tr><td>${i + 1}</td><td>${esc(q.text)}</td><td class="muted">${q.point.map(v => fmt(v * 1000, 4)).join(' / ')} mm</td></tr>`).join('')}</table>
+    <p><button class="ghost small" id="pinClear">Clear pinned values</button></p>` : `<p class="muted">None yet: press ⌖ Probe above the 3D view and click the model.</p>`;
+  $('#pinClear')?.addEventListener('click', () => { S.probes = []; viewer.setProbes([]); pinList(); });
+}
+
+// flutter diagrams: one line per mode against the air speed (frequency in Hz, damping ratio in %); a dashed line
+// marks the critical speed and the damping chart has its zero line
+function drawFlutter(c, sw, what, vf) {
+  if (!c || !sw?.speed_m_s?.length) return;
+  const dp = devicePixelRatio, W = c.width = c.clientWidth * dp, H = c.height = c.clientHeight * dp, g = c.getContext('2d');
+  const V = sw.speed_m_s, key = what === 'f' ? 'frequency_Hz' : 'damping_percent';
+  const vals = sw.roots.flatMap(r => r[key]);
+  let lo = what === 'f' ? 0 : Math.max(-30, Math.min(...vals, -1)), hi = what === 'f' ? Math.max(...vals) * 1.05 : Math.min(30, Math.max(...vals, 1));
+  if (!(hi > lo)) hi = lo + 1;
+  const padL = 40 * dp, padB = 14 * dp, x0 = V[0], x1 = V[V.length - 1];
+  const X = v => padL + (W - padL - 6) * (v - x0) / Math.max(x1 - x0, 1e-9), Y = v => 6 + (H - padB - 6) * (hi - v) / (hi - lo);
+  g.strokeStyle = 'rgba(127,127,127,.25)'; g.fillStyle = 'rgba(127,127,127,.9)'; g.font = `${9 * dp}px sans-serif`; g.lineWidth = dp;
+  const ticks = 4;
+  for (let i = 0; i <= ticks; i++) { const v = lo + (hi - lo) * i / ticks, yy = Y(v); g.beginPath(); g.moveTo(padL, yy); g.lineTo(W, yy); g.stroke(); g.fillText(fmtS(v), 2, yy + 3); }
+  g.fillText(`${fmtS(x0)}`, padL, H - 2); const end = `${fmtS(x1)} m/s`; g.fillText(end, W - g.measureText(end).width - 2, H - 2);
+  if (what === 'd') { g.strokeStyle = 'rgba(127,127,127,.9)'; g.beginPath(); g.moveTo(padL, Y(0)); g.lineTo(W, Y(0)); g.stroke(); }
+  if (vf) { g.strokeStyle = '#e4572e'; g.setLineDash([4 * dp, 3 * dp]); g.beginPath(); g.moveTo(X(vf), 0); g.lineTo(X(vf), H - padB); g.stroke(); g.setLineDash([]); g.fillStyle = '#e4572e'; g.fillText(`${fmtS(vf)} m/s`, Math.min(X(vf) + 3, W - 60 * dp), 12 * dp); }
+  const colors = ['#2563eb', '#e4572e', '#2a9d8f', '#8338ec', '#ff9f1c', '#06aed5', '#d62828', '#6a994e'];
+  g.lineWidth = 1.6 * dp;
+  sw.roots.forEach((r, i) => {
+    g.strokeStyle = colors[i % colors.length]; g.beginPath();
+    r[key].forEach((v, k) => { const yy = Y(Math.min(Math.max(v, lo), hi)); k ? g.lineTo(X(V[k]), yy) : g.moveTo(X(V[k]), yy); });
+    g.stroke();
+  });
 }
 
 // transient results: time slider + play
@@ -2072,7 +2534,7 @@ function timeBar() {
 // MP4 of the transient result: each saved time is shown, drawn into a picture with the colour scale and the time,
 // and the pictures are encoded on the server (even frame rate however long a time takes to load)
 // for scripts that drive the page (storyboards, screenshots): the state, the 3D view and the drawing functions
-window.simwb = { S, viewer, showResults, videoOverlay: (...a) => videoOverlay(...a) };
+window.simwb = { S, viewer, showResults, videoOverlay: (...a) => videoOverlay(...a), summaryHtml: (...a) => summaryHtml(...a), checksHtml: (...a) => checksHtml(...a) };
 async function recordVideo(go) {
   const ts = S.results?.times || [], turn = ts.length < 2;   // (a steady result: a turntable, no time)
   if (!S.results || S.recording) return;
@@ -2202,7 +2664,7 @@ function videoOverlay(c, t, extra) {
     g.fillStyle = 'rgba(20,24,30,0.75)'; g.fillRect(x - 8 * k, pad - 6 * k, w + 16 * k, 62 * k);
     g.fillStyle = '#fff'; g.fillText(`${L.name} [${L.unit}]`, x, pad);
     const gr = g.createLinearGradient(x, 0, x + w, 0);
-    for (let i = 0; i <= 10; i++) gr.addColorStop(i / 10, `rgb(${turbo(L.reverse ? 1 - i / 10 : i / 10).map(v => v * 255 | 0).join(',')})`);
+    for (let i = 0; i <= 10; i++) gr.addColorStop(i / 10, `rgb(${legendColor(L.fixed, i / 10)})`);
     g.fillStyle = gr; g.fillRect(x, y, w, h);
     g.fillStyle = '#fff';
     const ticks = [L.range[0], (L.range[0] + L.range[1]) / 2, L.range[1]];
@@ -2277,23 +2739,23 @@ function fmtVec(v, ref = v) {
   const big = Math.max(...ref.map(Math.abs), ...v.map(Math.abs));
   return v.map(x => Math.abs(x) < 1e-9 * big ? '0' : fmt(x)).join(' / ');
 }
-function kpi(lbl, val, unit = '') { return `<div class="kpi"><div class="lbl">${esc(lbl)}</div><div class="val">${val}<span class="small muted"> ${esc(unit)}</span></div></div>`; }
 
 function convergenceHtml(c) {
   if (!c) return '';
+  const hist = !c.transient && c.history ? `<canvas class="chart" id="resChart" style="height:110px;margin-top:6px"></canvas><div class="small muted">Solver residuals against the iteration (logarithmic): they fall as the solution settles. The run also counts as converged when the key results stop changing.</div>` : '';
   if (c.transient) return `<div class="note small ${c.completed ? '' : 'warn'}" style="margin-bottom:8px">${esc(c.note)}${c.time_step_s ? ` Time step ${fmtTime(c.time_step_s.min)}–${fmtTime(c.time_step_s.max)}${c.max_courant != null ? `, max Courant number ${fmt(c.max_courant, 2)}` : ''}.` : ''}</div>`;
   const canContinue = S.p.solve.status === 'done' && !S.p.solve.setup_changed;
-  if (c.converged) return `<div class="note small" style="margin-bottom:8px">✓ Converged after ${c.iterations} iterations. ${esc(c.note || '')}</div>`;
+  if (c.converged) return `<div class="note small" style="margin-bottom:8px">✓ Converged after ${c.iterations} iterations. ${esc(c.note || '')}${hist}</div>`;
   return `<div class="note warn" style="margin-bottom:8px"><b>Not converged</b> after ${c.iterations} iterations: preliminary numbers.
     ${canContinue ? `<div class="row" style="margin-top:6px">Continue for <input type="number" id="contIters" value="1000" style="width:80px"> iterations
-    <button class="small" data-action="continueRun">Continue run</button></div>` : ''}</div>`;
+    <button class="small" data-action="continueRun">Continue run</button></div>` : ''}${hist}</div>`;
 }
 
-function extrasHtml(s) {
+function checksHtml(s) {
   let h = '';
   const mc = S.p.mesh_check;
   const running = S.jobs.check?.status === 'running';
-  h += `<h3>Mesh sensitivity</h3>`;
+  h += `<h3>Mesh sensitivity${tip('Solves the study again on a finer mesh and compares the key results: how much they still change with the mesh.')}</h3>`;
   if (mc) {
     h += `<table class="summary"><tr><td><b>Output</b></td><td><b>${esc(mc.from)} → ${esc(mc.to)}${mc.to2 ? ' → ' + esc(mc.to2) : ''}</b></td></tr>
       ${mc.rows.map(r => `<tr><td>${esc(r.name)}</td><td>${fmt(r.coarse)} → ${fmt(r.fine)} ${esc(r.unit)} (${fmt(r.change_percent, 2)}%${r.raw_change_percent != null && Math.abs(r.raw_change_percent - r.change_percent) > 0.5 ? `; ${fmt(r.raw_change_percent, 1)}% of its own value` : ''}${r.resolved === false ? '; within the iteration error' : ''})${r.fine2 != null ? ` → ${fmt(r.fine2)} ${esc(r.unit)}${r.convergence_type === 'oscillatory' && r.gci_percent != null ? ` · oscillating: ±${fmt(r.gci_percent, 2)} % (half range)` : r.gci_percent != null ? ` · GCI ${fmt(r.gci_percent, 2)} %, order ${fmt(r.order, 2)}${r.order_limited_to ? ` (above the formal ${r.order_limited_to}: GCI uses ${r.order_limited_to})` : ''}` : ` · ${esc(r.convergence_type || '')}`}` : ''}</td></tr>`).join('')}</table>
@@ -2336,11 +2798,13 @@ function extrasHtml(s) {
     if (rows.length) h += `<details><summary>Compared with the previous run (${esc(prev.finished)})</summary><table class="summary">
       ${rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${fmt(v)} → ${fmt(cur[k])}</td></tr>`).join('')}</table></details>`;
   }
+  if (s.assumptions?.length) h += `<h3>Model assumptions</h3><ul class="small">${s.assumptions.map(a => `<li>${esc(a)}</li>`).join('')}</ul>`;
+  return h;
+}
+function warningsHtml(s) {
   const notes = [...(s.warnings || [])];
   if (s.warning_stale) notes.push(s.warning_stale);
-  if (notes.length) h += `<div class="note warn small" style="margin-top:8px">${notes.map(esc).join('<br>')}</div>`;
-  if (s.assumptions?.length) h += `<details><summary>Model assumptions</summary><ul class="small">${s.assumptions.map(a => `<li>${esc(a)}</li>`).join('')}</ul></details>`;
-  return h;
+  return notes.length ? `<div class="note warn small" style="margin-top:8px"><b>Read before you rely on these numbers</b><br>${notes.map(esc).join('<br>')}</div>` : '';
 }
 
 function summaryHtml(s) {
@@ -2362,24 +2826,31 @@ function summaryHtml(s) {
   if (st === 'heat_conduction') {
     const tr = s.transient;
     if (tr) h += `<p class="small muted">Transient: ${fmtTime(tr.end_time_s)} in ${tr.steps} steps of ${fmtTime(tr.time_step_s)}. Numbers below are at the end time${tr.T_max_any_time > s.T_max + 0.05 ? `; the highest temperature at any time was ${fmt1(tr.T_max_any_time)} °C` : ''}.</p>`;
-    h += `<div class="kpis">${kpi('Max temperature', fmt1(s.T_max), '°C')}${kpi('Min temperature', fmt1(s.T_min), '°C')}</div>
-      <h3>Parts</h3><table class="summary">${Object.values(s.bodies).map(b => `<tr><td>${esc(b.name)}</td><td>max ${fmt1(b.T_max)} °C · mean ${fmt1(b.T_mean)} °C</td></tr>`).join('')}</table>
-      <h3>Heat flow by boundary</h3><table class="summary">${Object.entries(s.boundaries).map(([k, b]) =>
-        `<tr><td>${esc(k)}</td><td>${b.heat_out_W != null ? fmt(b.heat_out_W) + ' W out' : b.heat_in_W != null ? fmt(b.heat_in_W) + ' W in' : ''}${b.heat_out_radiation_W != null ? ` (${fmt(b.heat_out_convection_W)} convection + ${fmt(b.heat_out_radiation_W)} radiation)` : ''} · ${fmt1(b.T_mean)} °C avg${b.h_mean_W_m2K != null ? ` · h ${fmt(b.h_mean_W_m2K, 2)} W/m²K mean (${fmt(b.h_range_W_m2K[0], 2)}–${fmt(b.h_range_W_m2K[1], 2)}, computed)` : ''}</td></tr>`).join('')}</table>
-      <p class="small muted">Heat in ${fmt(s.energy_balance.heat_in_W)} W = out ${fmt(s.energy_balance.heat_out_W)} W${s.energy_balance.heat_stored_W != null ? ` + stored ${fmt(s.energy_balance.heat_stored_W)} W (at the end time)` : ''}</p>`;
+    const lim = S.tLimit, eb = s.energy_balance, bnd = Object.entries(s.boundaries);
+    const outs = bnd.filter(([, b]) => b.heat_out_W > 0).map(([k, b]) => ({ label: k, v: b.heat_out_W }));
+    if (eb.heat_stored_W > 0) outs.push({ label: 'Stored in the parts (still heating)', v: eb.heat_stored_W, color: '#8d96a3' });
+    h += `<div class="kpis">${kpi('Max temperature', fmt1(s.T_max), '°C', lim == null ? '' : s.T_max > lim ? 'bad' : 'ok', lim == null ? '<span class="lnk" data-showfield="Temperature">show on model</span>' : `${s.T_max > lim ? 'over' : 'under'} the ${fmt1(lim)} °C limit`)}${kpi('Min temperature', fmt1(s.T_min), '°C')}
+      ${kpi('Heat in', fmt(eb.heat_in_W), 'W')}${kpi('Heat out', fmt(eb.heat_out_W), 'W', '', balanceChip(eb.heat_in_W, eb.heat_out_W + (eb.heat_stored_W || 0)))}</div>
+      <h3>Parts</h3>${tempBars(Object.values(s.bodies).map(b => ({ label: b.name, T_max: b.T_max, T_mean: b.T_mean })), s.T_min)}
+      <h3>Where the heat goes</h3>${stackBar(outs, eb.heat_in_W)}
+      <details><summary>Heat flow by boundary in detail</summary><table class="summary">${bnd.map(([k, b]) =>
+        `<tr><td>${esc(k)}</td><td>${b.heat_out_W != null ? fmt(b.heat_out_W) + ' W out' : b.heat_in_W != null ? fmt(b.heat_in_W) + ' W in' : ''}${b.heat_out_radiation_W != null ? ` (${fmt(b.heat_out_convection_W)} convection + ${fmt(b.heat_out_radiation_W)} radiation)` : ''} · ${fmt1(b.T_mean)} °C avg${b.h_mean_W_m2K != null ? ` · h ${fmt(b.h_mean_W_m2K, 2)} W/m²K mean (${fmt(b.h_range_W_m2K[0], 2)}–${fmt(b.h_range_W_m2K[1], 2)}, computed)` : ''}</td></tr>`).join('')}</table></details>
+      <p class="small muted">Heat in ${fmt(eb.heat_in_W)} W = out ${fmt(eb.heat_out_W)} W${eb.heat_stored_W != null ? ` + stored ${fmt(eb.heat_stored_W)} W (at the end time)` : ''}</p>`;
   } else if (st === 'vibration_modal') {
     const el = s.modes.filter(m => !m.rigid_body), band = s.excitation_band_Hz;
     const pct = x => x < 5e-4 ? '0' : fmt(100 * x, 2);  // (below 0.05 %: no participation worth quoting)
-    h += `<div class="kpis">${kpi('First natural frequency', fmt(s.first_frequency_Hz), 'Hz')}${kpi('Mass', fmt(s.mass_kg * 1000), 'g')}
-      ${band ? kpi('Modes in excitation range', String((s.modes_in_band || []).length), `of ${el.length}`) : ''}</div>
+    h += `<div class="kpis">${kpi('First natural frequency', fmt(s.first_frequency_Hz), 'Hz', band && el[0] && (el[0].in_excitation_band ? 'bad' : el[0].near_excitation_band ? 'warn' : 'ok'), band ? (el[0]?.in_excitation_band ? 'inside the excitation range' : el[0]?.near_excitation_band ? 'close to the excitation range' : 'clear of the excitation range') : '')}${kpi('Mass', fmt(s.mass_kg * 1000), 'g')}
+      ${band ? kpi('Modes in excitation range', String((s.modes_in_band || []).length), `of ${el.length}`, (s.modes_in_band || []).length ? 'bad' : 'ok') : ''}</div>
       ${s.band_note ? `<div class="note small ${s.band_caution ? 'warn' : ''}">${s.band_caution ? '△' : '✓'} ${esc(s.band_note)}</div>` : ''}
-      <h3>Natural frequencies</h3><p class="small muted">Click a mode to show it.</p>
+      <h3>Natural frequencies</h3>
+      <canvas class="chart" id="specChart" style="height:120px"></canvas>
+      <p class="small muted">Each stem is a mode: its height is the share of the mass that moves in its main direction (<span style="color:#ef5350">x</span> <span style="color:#66bb6a">y</span> <span style="color:#42a5f5">z</span>)${band ? '; the red band is the excitation range' : ''}. Click a stem or a row to show the mode.</p>
       <table class="summary modes"><tr><td><b>Mode</b></td><td><b>Frequency</b></td><td><b>Effective mass x / y / z</b></td></tr>
       ${el.map(m => `<tr data-mode="${m.elastic_index}" class="${S.field === 'Mode ' + m.elastic_index ? 'sel' : ''}" style="cursor:pointer"><td>${m.elastic_index}</td>
         <td>${m.in_excitation_band ? '⚠ ' : m.near_excitation_band ? '<span title="Within 1.4x of the excitation range: below the recommended margin" style="color:#d08700">△</span> ' : ''}<b>${fmt(m.frequency_Hz)}</b> Hz</td>
         <td>${m.effective_mass_fraction ? `${pct(m.effective_mass_fraction.x)} / ${pct(m.effective_mass_fraction.y)} / ${pct(m.effective_mass_fraction.z)} %` : '<span class="muted">n/a (free part)</span>'}</td></tr>`).join('')}
       ${s.cumulative_mass_fraction ? `<tr><td colspan="2" class="muted">Sum of these modes</td><td class="muted">${pct(s.cumulative_mass_fraction.x)} / ${pct(s.cumulative_mass_fraction.y)} / ${pct(s.cumulative_mass_fraction.z)} %</td></tr>` : ''}</table>
-      <label class="row small" style="margin-top:6px"><input type="checkbox" id="animModes" ${S.animate !== false ? 'checked' : ''}> Animate</label>
+      <label class="row small" style="margin-top:6px"><input type="checkbox" id="animModes" ${S.deform.mode === 'animate' ? 'checked' : ''}> Animate</label>
       <p class="small muted">${s.unknowns?.toLocaleString()} unknowns · ${fmt(s.seconds)} s${s.added_mass_kg ? ` · added mass ${fmt(s.added_mass_kg * 1000)} g` : ''}${s.n_rigid_body_modes ? ` · ${s.n_rigid_body_modes} rigid-body modes hidden` : ''} · colours = relative motion</p>`;
     if (s.sine) {
       const q = s.sine, w = q.worst;
@@ -2391,33 +2862,68 @@ function summaryHtml(s) {
         ${q.peaks.length ? `<table class="summary"><tr><td><b>Mode</b></td><td><b>Frequency</b></td><td><b>Stress</b></td><td><b>Movement</b></td><td><b>Acceleration</b></td></tr>
         ${q.peaks.map(k => `<tr style="white-space:nowrap"><td>${k.mode}</td><td>${fmt(k.frequency_Hz)} Hz</td><td><b>${fmt(k.max_stress_MPa)}</b> MPa</td><td>${fmtS(k.max_displacement_mm)} mm</td><td>${fmt(k.max_acceleration_g)} g</td></tr>`).join('')}</table>` : ''}`;
     }
+  } else if (st === 'aeroelastic_flutter') {
+    const fl = s.flutter, dv = s.divergence, cr = s.critical, mg = s.margin;
+    const el = (s.modes || []).filter(m => !m.rigid_body);
+    h += cr
+      ? `<div class="kpis">${kpi(cr.type === 'flutter' ? 'Flutter speed' : 'Divergence speed', fmt(cr.speed_m_s), 'm/s')}
+          ${fl && cr.type === 'flutter' ? kpi('Flutter frequency', fmt(fl.frequency_Hz), 'Hz') : ''}
+          ${kpi('Mach', fmt(cr.mach, 3))}${mg ? kpi('Margin on design speed', fmt(mg.ratio, 3), `(needs ≥ ${fmt(mg.required, 3)})`) : ''}</div>
+        ${mg && mg.ratio < mg.required ? `<div class="note warn small">△ Flutter margin ${fmt(mg.ratio, 3)} is below the ${fmt(mg.required, 3)} usually required.</div>` : mg ? `<div class="note small">✓ Margin ${fmt(mg.ratio, 3)} on the design speed ${fmt(mg.design_speed_m_s)} m/s.</div>` : ''}`
+      : `<div class="kpis">${kpi('First natural frequency', fmt(s.first_frequency_Hz), 'Hz')}${kpi('Highest speed examined', fmt(s.speed_range_m_s[1]), 'm/s')}</div>
+        <div class="note small">✓ No flutter or divergence up to ${fmt(s.speed_range_m_s[1])} m/s.</div>`;
+    if (fl) h += `<p class="small">Flutter motion: ${fl.mode_content.map(c => `mode ${c.mode} (${fmt(c.share_percent, 3)} %)`).join(' with ')} - the modes merge at ${fmt(fl.frequency_Hz)} Hz. Equivalent airspeed ${fmt(fl.equivalent_airspeed_m_s)} m/s.</p>`;
+    if (dv) h += `<p class="small">Divergence (static instability): ${fmt(dv.speed_m_s)} m/s (Mach ${fmt(dv.mach, 3)}).</p>`;
+    else if (s.divergence_speed_any_m_s) h += `<p class="small muted">Divergence would occur at ${fmt(s.divergence_speed_any_m_s)} m/s, above the speeds examined.</p>`;
+    h += `<h3>Frequency against air speed</h3><canvas class="chart" id="flutterF" style="height:140px"></canvas>
+      <h3>Damping against air speed</h3><canvas class="chart" id="flutterD" style="height:120px"></canvas>
+      <p class="small muted">Each line follows one mode as the air speed rises. The motion grows where a damping line crosses zero (flutter); the modes approach each other in frequency just before.</p>
+      <h3>Shapes</h3><p class="small muted">Click a row to show it${fl ? ' (the flutter motion is shown at the phase of its largest movement)' : ''}.</p>
+      <table class="summary modes"><tr><td><b>Shape</b></td><td><b>Frequency</b></td></tr>
+      ${fl ? `<tr data-field="Flutter mode" class="${S.field === 'Flutter mode' ? 'sel' : ''}" style="cursor:pointer"><td><b>Flutter mode</b></td><td>${fmt(fl.frequency_Hz)} Hz at ${fmt(fl.speed_m_s)} m/s</td></tr>` : ''}
+      ${dv ? `<tr data-field="Divergence shape" class="${S.field === 'Divergence shape' ? 'sel' : ''}" style="cursor:pointer"><td><b>Divergence shape</b></td><td>at ${fmt(dv.speed_m_s)} m/s</td></tr>` : ''}
+      ${el.map(m => `<tr data-mode="${m.elastic_index}" class="${S.field === 'Mode ' + m.elastic_index ? 'sel' : ''}" style="cursor:pointer"><td>Mode ${m.elastic_index}</td><td>${fmt(m.frequency_Hz)} Hz</td></tr>`).join('')}</table>
+      <label class="row small" style="margin-top:6px"><input type="checkbox" id="animModes" ${S.deform.mode === 'animate' ? 'checked' : ''}> Animate</label>
+      <p class="small muted">Air ${fmt(s.air.density_kg_m3, 3)} kg/m³ at ${fmt(s.air.altitude_m)} m · ${s.strips.count} strips · span ${fmt(s.strips.span_m * 1000)} mm · aspect ratio ${fmt(s.strips.aspect_ratio, 3)} · structure ${fmt(s.structure_mass_kg * 1000)} g · ${fmt(s.seconds)} s</p>`;
   } else if (st === 'static_structural') {
-    const sf = s.min_safety_factor;
-    h += `<div class="kpis">${kpi('Max von Mises stress', fmt(s.max_von_mises_MPa), 'MPa')}${kpi('Max deformation', fmt(s.max_displacement_mm), 'mm')}
-      ${sf != null ? kpi('Safety factor (yield)', fmt(sf, 2), '') : ''}</div>
-      <h3>Parts</h3><table class="summary">${s.bodies.map(b => `<tr><td>${esc(b.name)}</td><td>max ${fmt(b.max_von_mises_MPa)} MPa${b.yield_MPa ? ` · yield ${fmt(b.yield_MPa)} MPa · <b>SF ${fmt(b.safety_factor, 2)}</b>` : ' · no yield strength (brittle/composite)'} · ${fmt(b.max_displacement_mm)} mm</td></tr>`).join('')}</table>
+    const sf = s.min_safety_factor, tone = sf == null ? '' : sf < 1 ? 'bad' : sf < 1.5 ? 'warn' : 'ok';
+    const withY = s.bodies.filter(b => b.yield_MPa), util = withY.length === s.bodies.length;
+    const peak = Math.max(...s.bodies.map(b => b.max_von_mises_MPa), 1e-30);
+    const pbars = hbars(s.bodies.map(b => ({ label: b.name, v: util ? b.max_von_mises_MPa / b.yield_MPa : b.max_von_mises_MPa / peak,
+      tone: b.safety_factor == null ? '' : b.safety_factor < 1 ? 'bad' : b.safety_factor < 1.5 ? 'warn' : 'ok',
+      text: `<b>${fmt(b.max_von_mises_MPa)}</b> MPa${b.yield_MPa ? ` · SF <b>${fmt(b.safety_factor, 2)}</b>` : ' · no yield strength'} · ${fmt(b.max_displacement_mm)} mm` })),
+      util ? { max: Math.max(1.1, ...s.bodies.map(b => b.max_von_mises_MPa / b.yield_MPa * 1.05)), marks: [{ v: 1, label: 'yield strength', cls: 'lim' }] } : { max: 1 });
+    const sup = Object.entries(s.boundary_conditions || {}).filter(([, b]) => b.reaction_N);
+    h += `<div class="kpis">${kpi('Max von Mises stress', fmt(s.max_von_mises_MPa), 'MPa', '', '<span class="lnk" data-showfield="Von Mises stress">show on model</span>')}${kpi('Max deformation', fmt(s.max_displacement_mm), 'mm', '', '<span class="lnk" data-showfield="Total deformation">show on model</span>')}
+      ${sf != null ? kpi('Safety factor (yield)', fmt(sf, 2), '', tone, sf < 1 ? 'yields: it will deform permanently' : sf < 1.5 ? 'low margin' : 'adequate margin') : ''}${kpi('Mass', fmt(s.mass_kg * 1000), 'g')}</div>
+      <h3>Parts${tip(util ? 'The bar is the highest von Mises stress of the part as a share of its yield strength; the line is the yield strength (100 %). Past it the part deforms permanently.' : 'The bar is the highest von Mises stress of the part, relative to the most stressed part.')}</h3>${pbars}
+      ${util ? `<p class="small muted" style="margin:2px 0 0">Bars: stress as a share of the yield strength (line = 100 %).</p>` : ''}
       <p class="small">Load ${fmtVec(s.applied_force_N)} N · reaction ${fmtVec(s.reaction_force_N, s.applied_force_N)} N (x / y / z)</p>
-      ${Object.entries(s.boundary_conditions || {}).some(([, b]) => b.reaction_N) ? `<details><summary class="small">Force at each support</summary><table class="summary">${Object.entries(s.boundary_conditions).filter(([, b]) => b.reaction_N).map(([k, b]) => `<tr><td>${esc(k)}</td><td>${fmtVec(b.reaction_N, s.applied_force_N)} N</td></tr>`).join('')}</table></details>` : ''}
-      <label class="row small" style="margin-top:6px"><input type="checkbox" id="animModes" ${S.animate !== false ? 'checked' : ''}> Animate deformation</label>
+      ${sup.length ? `<details><summary class="small">Force at each support</summary>${hbars(sup.map(([k, b]) => ({ label: k, v: Math.hypot(...b.reaction_N), text: `<b>${fmtVec(b.reaction_N, s.applied_force_N)}</b> N` })))}</details>` : ''}
+      <label class="row small" style="margin-top:6px"><input type="checkbox" id="animModes" ${S.deform.mode === 'animate' ? 'checked' : ''}> Animate deformation</label>
       <p class="small muted">${s.n_dof?.toLocaleString()} unknowns · ${fmt(s.solve_time_s)} s · unaveraged peak ${fmt(s.peak_von_mises_unaveraged_MPa)} MPa${s.stress_error_percent != null ? ` · <span title="How far the stress of the single elements is from the smoothed stress, in the energy norm. Below about 10 %: the mesh resolves the stress field well. The field 'Stress error estimate' shows where it is largest.">estimated stress error ${fmt(s.stress_error_percent, 2)} %</span>` : ''}</p>`;
   } else if (st === 'cht_enclosure' && s.natural) {
     const eb = s.energy_imbalance_percent;
     if (eb > 5) h += `<div class="note warn" style="margin-bottom:8px">Energy balance: ${fmt(s.heat_out_W)} W leave of ${fmt(s.heat_input_W)} W (${fmt(eb, 2)}% off). Continue the run or refine the mesh before trusting the temperatures.</div>`;
-    h += `<div class="kpis">${kpi('Hottest: ' + (s.hottest_part?.label || ''), fmt1(s.hottest_part?.T_max), '°C')}${kpi('Thermal resistance (to the room)', fmt(s.thermal_resistance_K_per_W), 'K/W')}
+    const hot = S.tLimit != null && s.hottest_part?.T_max > S.tLimit;
+    h += `<div class="kpis">${kpi('Hottest: ' + (s.hottest_part?.label || ''), fmt1(s.hottest_part?.T_max), '°C', S.tLimit == null ? '' : hot ? 'bad' : 'ok', S.tLimit == null ? '<span class="lnk" data-showfield="Temperature">show on model</span>' : `${hot ? 'over' : 'under'} the ${fmt1(S.tLimit)} °C limit`)}${kpi('Thermal resistance (to the room)', fmt(s.thermal_resistance_K_per_W), 'K/W')}
       ${kpi('Max air speed', fmt(s.velocity_max, 2), 'm/s')}${kpi('Room', fmt1(s.room_T), '°C')}</div>
-      <h3>Parts</h3><table class="summary">${Object.entries(s.solids).map(([k, b]) => `<tr><td>${esc(b.label || k)}${b.heat_W ? ` (${fmt(b.heat_W)} W)` : ''}</td><td>max ${fmt1(b.T_max)} °C</td></tr>`).join('')}</table>
-      <h3>Where the heat goes (no fan)</h3><table class="summary">
+      <h3>Parts</h3>${tempBars(Object.entries(s.solids).map(([k, b]) => ({ label: b.label || k, T_max: b.T_max, heat_W: b.heat_W })), s.room_T)}
+      <h3>Where the heat goes (no fan)</h3>${stackBar([{ label: 'Warm air rising out of the openings', v: s.heat_carried_by_air_W }, ...(s.radiation ? [{ label: 'Radiation out to the room', v: s.heat_radiated_out_W }] : []), ...(s.heat_through_walls_W ? [{ label: 'Through cooled walls', v: s.heat_through_walls_W }] : [])], s.heat_input_W)}
+      <details><summary>How these numbers arise</summary><table class="summary">
         <tr><td>Warm air rising out of the openings</td><td>${fmt(s.heat_carried_by_air_W)} W (${fmt(s.flow_m3_per_h, 2)} m³/h${s.heat_conducted_at_openings_W ? `; ${fmt(s.heat_conducted_at_openings_W, 2)} W of it conducted where room air comes in next to warm air - a larger air box makes this smaller` : ''})</td></tr>
         ${s.radiation ? `<tr><td>Radiation out to the room</td><td>${fmt(s.heat_radiated_out_W)} W</td></tr>` : ''}
         ${s.heat_through_walls_W ? `<tr><td>Through cooled walls</td><td>${fmt(s.heat_through_walls_W)} W</td></tr>` : ''}
-        <tr><td><b>Total</b></td><td>${fmt(s.heat_out_W)} W of ${fmt(s.heat_input_W)} W in${eb != null ? ` (${fmt(eb, 2)} % off)` : ''}</td></tr></table>
+        <tr><td><b>Total</b></td><td>${fmt(s.heat_out_W)} W of ${fmt(s.heat_input_W)} W in${eb != null ? ` (${fmt(eb, 2)} % off)` : ''}</td></tr></table></details>
       <p class="small muted">${esc(s.flow_regime?.note || '')}.${s.radiation ? '' : ' Radiation is off: with no fan it often carries 30-50 % of the heat, so these temperatures are on the high side.'}</p>`;
   } else if (st === 'cht_enclosure') {
     const eb = s.transient ? 0 : s.energy_imbalance_percent ?? (s.heat_input_W ? Math.abs(s.heat_carried_by_air_W - s.heat_input_W) / s.heat_input_W * 100 : 0);  // (transient: heat is still being stored)
     if (eb > 5) h += `<div class="note warn" style="margin-bottom:8px">Energy balance: the air carries away ${fmt(s.heat_carried_by_air_W)} W of ${fmt(s.heat_input_W)} W (${fmt(eb, 2)}% off). Continue the run or refine the mesh before trusting the temperatures.</div>`;
-    h += `<div class="kpis">${kpi('Hottest: ' + (s.hottest_part?.label || ''), fmt1(s.hottest_part?.T_max), '°C')}${kpi('Thermal resistance', fmt(s.thermal_resistance_K_per_W), 'K/W')}
+    const hot = S.tLimit != null && s.hottest_part?.T_max > S.tLimit;
+    h += `<div class="kpis">${kpi('Hottest: ' + (s.hottest_part?.label || ''), fmt1(s.hottest_part?.T_max), '°C', S.tLimit == null ? '' : hot ? 'bad' : 'ok', S.tLimit == null ? '<span class="lnk" data-showfield="Temperature">show on model</span>' : `${hot ? 'over' : 'under'} the ${fmt1(S.tLimit)} °C limit`)}${kpi('Thermal resistance', fmt(s.thermal_resistance_K_per_W), 'K/W')}
       ${kpi('Air temperature rise', fmt1((s.outlet_T_mixed ?? s.outlet_T_area_avg) - s.inlet_T), 'K')}${kpi('Pressure drop (total)', fmt(s.pressure_drop_Pa), 'Pa')}</div>
-      <h3>Parts</h3><table class="summary">${Object.entries(s.solids).map(([k, b]) => `<tr><td>${esc(b.label || k)}${b.heat_W ? ` (${fmt(b.heat_W)} W)` : ''}</td><td>max ${fmt1(b.T_max)} °C</td></tr>`).join('')}</table>
+      <h3>Parts</h3>${tempBars(Object.entries(s.solids).map(([k, b]) => ({ label: b.label || k, T_max: b.T_max, heat_W: b.heat_W })), s.inlet_T)}
+      <h3>Where the heat goes</h3>${stackBar([{ label: 'Carried away by the air', v: s.heat_carried_by_air_W }, { label: s.transient ? 'Still heating the parts' : 'Not accounted for', v: Math.max(0, s.heat_input_W - s.heat_carried_by_air_W), color: '#8d96a3' }], s.heat_input_W)}
       <p class="small muted">Air flow ${fmt(s.flow_m3_per_h)} m³/h · outlet ${fmt1(s.outlet_T_mixed ?? s.outlet_T_area_avg)} °C (mixed mean)${s.static_pressure_drop_Pa != null ? ` · static pressure drop ${fmt(s.static_pressure_drop_Pa)} Pa` : ''}.
       ${s.transient ? `At the end time the air carries away ${fmt(s.heat_carried_by_air_W)} W of ${fmt(s.heat_input_W)} W; the rest is still heating the parts.` : `Energy balance: the air carries away ${fmt(s.heat_carried_by_air_W)} W of ${fmt(s.heat_input_W)} W (${fmt(eb, 2)}% off).`}
       ${s.flow_regime?.note && !s.flow_regime.transitional ? '<br>' + esc(s.flow_regime.note) + '.' : ''}</p>
@@ -2432,6 +2938,7 @@ function summaryHtml(s) {
     h += `<div class="kpis">${s.drag_N != null ? kpi(rotDrag ? 'Frame drag' : 'Drag', fmt(s.drag_N), 'N') : ''}${rotDrag ? kpi('Rotor drag (model)', fmt(s.rotor_drag_N), 'N') : ''}${s.CdA_m2 != null ? kpi('Frame CdA', fmt(s.CdA_m2 * 1e4), 'cm²') : ''}
       ${S.p.rotors?.length ? kpi('Aero vertical force', fmt(s.vertical_aero_force_N), 'N') + kpi('Rotor thrust', fmt(s.rotor_thrust_total_N), 'N')
         : (s.coefficients ? kpi('Drag coefficient', fmt(s.coefficients.CD, 3), '') + kpi('Lift', fmt(s.coefficients.lift_N), 'N') : '')}</div>
+      ${aeroBars(s)}
       ${s.coefficients ? `<p class="small muted">Coefficients (reference area ${fmt(s.coefficients.A_ref_m2 * 1e4)} cm², ${esc(s.coefficients.A_ref_source)}; reference length ${fmt(s.coefficients.L_ref_m * 1e3)} mm): C<sub>D</sub> ${fmt(s.coefficients.CD, 3)}, C<sub>L</sub> ${fmt(s.coefficients.CL, 3)}, C<sub>S</sub> ${fmt(s.coefficients.CS, 3)}${s.coefficients.Cm != null ? `, C<sub>m</sub> ${fmt(s.coefficients.Cm, 3)} (pitch, nose-up +), C<sub>l</sub> ${fmt(s.coefficients.Cl, 3)} (roll), C<sub>n</sub> ${fmt(s.coefficients.Cn, 3)} (yaw)` : ''}.${s.aero_moment_Nm && !S.p.rotors?.length ? ` Moments about the moment point: pitch ${fmt(s.aero_moment_Nm.pitch)}, roll ${fmt(s.aero_moment_Nm.roll)}, yaw ${fmt(s.aero_moment_Nm.yaw)} N·m.` : ''}</p>` : ''}
       ${rotDrag ? `<p class="small muted">Rotor drag model k = ${fmt(s.rotor_drag_coeff_s_per_m, 3)} s/m</p>` : ''}
       ${s.trim_history_note ? `<div class="note" style="margin-top:8px">${esc(s.trim_history_note)} First run: pitch ${fmt1(s.trim_history[0].pitch_deg)}°, frame drag ${fmt(s.trim_history[0].drag_N)} N.</div>` : ''}
@@ -2476,24 +2983,45 @@ async function showResults() {
   const range = S.autoRange || !S.range ? (fi ? [fi.min, fi.max] : gr || robustP || [d.min, d.max]) : S.range;
   if (S.autoRange) { const a = $('#rngMin'), b = $('#rngMax'); if (a) { a.value = fmt(range[0], 4); b.value = fmt(range[1], 4); } }
   // probing reads the picture as drawn: no swinging shape while it is on; labels belong to one field / time / cut
-  viewer.setOverlay(d, { range, opacity: S.surfOpacity ?? 1, animate: S.animate !== false && !S.recording && !S.probeOn });
+  // (the deformation is off while probing or picking a line: the points are read off the part as it is)
+  S.ovInfo = viewer.setOverlay(d, { range, opacity: S.surfOpacity ?? 1, animate: !S.recording && !S.probeOn, outline: S.deform.outline,
+    deform: S.probeOn ? { mode: 'off' } : S.deform });
   const pk = [S.field, S.timeIdx ?? -1, S.clip.axis, S.clip.axis ? S.clip.pos : 0].join('|');
-  if (pk !== S.probeKey) { S.probeKey = pk; S.probes = []; }
+  if (pk !== S.probeKey) { S.probeKey = pk; S.probes = []; pinList(); }
   S.probeUnit = d.unit; viewer.setProbes(S.probes || []);
+  extremaLabels(S.ovInfo, d.unit);
+  updateDeformUi(S.ovInfo);
   await showIso(ti);
   S.shownRange = range;   // (the contour planes of this field use it too)
   await showContours(ti);
   await showVis(ti);
   const mode = S.p.study === 'vibration_modal' && (S.results.summary || S.p.solve.summary)?.modes?.find(m => 'Mode ' + m.elastic_index === S.field);
-  legend(mode ? `${S.field} – ${fmt(mode.frequency_Hz)} Hz` : S.field, d.unit, range);
+  const fs = S.p.study === 'aeroelastic_flutter' ? (S.results.summary || S.p.solve.summary) : null;
+  const fmode = fs?.modes?.find(m => 'Mode ' + m.elastic_index === S.field);
+  const flabel = fs && (S.field === 'Flutter mode' && fs.flutter ? `Flutter mode – ${fmt(fs.flutter.frequency_Hz)} Hz at ${fmt(fs.flutter.speed_m_s)} m/s`
+    : S.field === 'Divergence shape' && fs.divergence ? `Divergence shape – at ${fmt(fs.divergence.speed_m_s)} m/s` : fmode ? `${S.field} – ${fmt(fmode.frequency_Hz)} Hz` : null);
+  legend(flabel || (mode ? `${S.field} – ${fmt(mode.frequency_Hz)} Hz` : S.field), d.unit, range);
+  S.hist = viewer.histogram(range[0], range[1]); drawFieldHist();
+  if (S.line && S.line.field !== S.field) { S.line.field = S.field; fetchLine(); }   // (the line follows the field and the time shown)
 }
 
 // the parts inside a rotating zone (the propeller), from their own force monitor: thrust, torque, coefficients
 function propHtml(q) {
   const g = q.thrust_N / 9.81 * 1000;
-  return `thrust <b>${fmt(q.thrust_N)} N</b> (${fmt(g, 3)} gf)<br>torque <b>${fmt(q.torque_Nm)} N·m</b> · power <b>${fmt(q.power_W)} W</b>`
-    + (q.CT != null ? `<br><span class="small">C<sub>T</sub> ${fmt(q.CT, 3)} · C<sub>P</sub> ${fmt(q.CP, 3)} · J ${fmt(q.J, 3)}${q.efficiency ? ` · η ${fmt(100 * q.efficiency, 3)} %` : ''} · D ${fmt1(q.diameter_m * 1000)} mm · tip Mach ${fmt(q.tip_mach, 2)}</span>` : '')
-    + `<br><span class="muted small">averaged over the ${esc(q.average_over)}${q.thrust_fluctuation_percent != null ? `; thrust varies ±${fmt(q.thrust_fluctuation_percent, 2)} %` : ''}</span>`;
+  return `<div class="kpis mini">${kpi('Thrust', fmt(q.thrust_N), `N (${fmt(g, 3)} gf)`)}${kpi('Torque', fmt(q.torque_Nm), 'N·m')}${kpi('Power', fmt(q.power_W), 'W')}${q.efficiency ? kpi('Efficiency', fmt(100 * q.efficiency, 3), '%') : kpi('Diameter', fmt1(q.diameter_m * 1000), 'mm')}</div>`
+    + (q.CT != null ? `<span class="small">C<sub>T</sub> ${fmt(q.CT, 3)} · C<sub>P</sub> ${fmt(q.CP, 3)} · J ${fmt(q.J, 3)} · D ${fmt1(q.diameter_m * 1000)} mm · tip Mach ${fmt(q.tip_mach, 2)}</span><br>` : '')
+    + `<span class="muted small">averaged over the ${esc(q.average_over)}${q.thrust_fluctuation_percent != null ? `; thrust varies ±${fmt(q.thrust_fluctuation_percent, 2)} %` : ''}</span>`;
+}
+// the aerodynamic forces on the body along the flow (drag), up (lift) and sideways, and its moments, as bars from zero
+function aeroBars(s) {
+  const co = s.coefficients, rows = [];
+  if (s.drag_N != null) rows.push({ label: 'Drag (along the flow)', v: s.drag_N, tone: '', text: `<b>${fmt(s.drag_N)}</b> N${co ? ` · C<sub>D</sub> ${fmt(co.CD, 3)}` : ''}` });
+  if (co) rows.push({ label: 'Lift (across the flow, up)', v: co.lift_N, tone: co.lift_N < 0 ? 'neg' : '', text: `<b>${fmt(co.lift_N)}</b> N · C<sub>L</sub> ${fmt(co.CL, 3)}` },
+    { label: 'Side force', v: co.side_force_N, tone: co.side_force_N < 0 ? 'neg' : '', text: `<b>${fmt(co.side_force_N)}</b> N · C<sub>S</sub> ${fmt(co.CS, 3)}` });
+  const m = s.aero_moment_Nm, mrows = m ? [['Pitch (nose-up +)', m.pitch, co?.Cm], ['Roll', m.roll, co?.Cl], ['Yaw', m.yaw, co?.Cn]].map(([l, v, c]) => ({ label: l, v, tone: v < 0 ? 'neg' : '', text: `<b>${fmt(v)}</b> N·m${c != null ? ` · C ${fmt(c, 3)}` : ''}` })) : [];
+  if (!rows.length) return '';
+  return `<h3>Forces on the body${tip('The aerodynamic force of the air on the body, split along the flow (drag), across it (lift, along the tilted up axis) and sideways. Bars grow from the centre line: to the right is positive.')}</h3>${hbars(rows, { signed: true })}
+    ${mrows.length ? `<h3>Moments${tip('About the moment point (the centre of gravity when it is set). Pitch is nose-up positive.')}</h3>${hbars(mrows, { signed: true })}` : ''}`;
 }
 // sliding zones of a transient result: the CAD parts inside them (drawn behind a section) turn with the mesh, so
 // the propeller is where the flow saw it at that time - in the view, when playing and in the video
@@ -2810,12 +3338,43 @@ function bindIso() {
   $('#isoOp')?.addEventListener('change', e => { S.iso.opacity = +e.target.value; re(); });
 }
 
-function legend(name, unit, [lo, hi], reverse = false) {
-  S.legendInfo = { name, unit, range: [lo, hi], reverse };
+// round tick values (1, 2, 5 x 10^n) inside [lo, hi], about n of them
+function niceTicks(lo, hi, n = 5) {
+  const span = hi - lo; if (!(span > 0) || !Number.isFinite(span)) return [lo];
+  const raw = span / n, mag = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / mag;
+  const step = (f < 1.5 ? 1 : f < 3.5 ? 2 : f < 7.5 ? 5 : 10) * mag, out = [];
+  for (let v = Math.ceil(lo / step - 1e-9) * step; v <= hi + step * 1e-9 && out.length < 12; v += step) out.push(+v.toPrecision(12));
+  return out;
+}
+// colour of position t (0..1) on a legend bar: the chosen colour map, or (fixed) the red-is-bad scale of the mesh quality
+const legendColor = (fixed, t) => (fixed ? turbo(1 - t) : cmap(t, true)).map(x => x * 255 | 0).join(',');
+// 1, 2, 5 x 10^n inside [lo, hi] (a log scale)
+function logTicks(lo, hi) {
+  const out = [];
+  for (let e = Math.floor(Math.log10(lo)); e <= Math.ceil(Math.log10(hi)); e++) for (const m of [1, 2, 5]) { const v = m * 10 ** e; if (v >= lo * 0.999 && v <= hi * 1.001) out.push(v); }
+  return out;
+}
+// legend of a view coloured by category (bodies, surfaces): a swatch and a name for each one drawn
+function legendCats(d) {
+  S.legendInfo = null;
   const el = $('#legend');
-  const stops = Array.from({ length: 11 }, (_, i) => `rgb(${turbo(reverse ? 1 - i / 10 : i / 10).map(x => x * 255 | 0).join(',')}) ${i * 10}%`).join(',');
-  el.innerHTML = `<b>${esc(name)}</b> <span class="muted">[${esc(unit)}]</span><div class="bar" style="background:linear-gradient(90deg,${stops})"></div>
-    <div class="ticks"><span>${fmt(lo, 4)}</span><span>${fmt((lo + hi) / 2, 4)}</span><span>${fmt(hi, 4)}</span></div>`;
+  el.innerHTML = `<div class="lgTitle"><b>Region</b></div>` + (d.present || []).map(i => d.categories[i]).filter(Boolean)
+    .map(c => `<div class="lgCat"><i style="background:${c.color}"></i>${esc(c.name)}</div>`).join('');
+  el.classList.remove('hidden');
+}
+function legend(name, unit, [lo, hi], fixed = false, log = false) {
+  log = log && lo > 0 && hi > lo;
+  S.legendInfo = { name, unit, range: [lo, hi], fixed, log };
+  const el = $('#legend');
+  const B = getColormap().bands, n = !fixed && B > 1 ? B : 10;
+  const stops = fixed || B < 2 ? Array.from({ length: 11 }, (_, i) => `rgb(${legendColor(fixed, i / 10)}) ${i * 10}%`).join(',')
+    : Array.from({ length: B }, (_, b) => `rgb(${legendColor(false, (b + 0.5) / B)}) ${b / B * 100}%,rgb(${legendColor(false, (b + 0.5) / B)}) ${(b + 1) / B * 100}%`).join(',');
+  const at = v => (log ? (Math.log(v) - Math.log(lo)) / (Math.log(hi) - Math.log(lo)) : hi > lo ? (v - lo) / (hi - lo) : 0) * 100;
+  const tk = (log ? logTicks(lo, hi) : niceTicks(lo, hi, 5)).map(v => { const f = at(v);
+    return `<span style="left:${f.toFixed(1)}%" class="${f < 7 ? 'l' : f > 93 ? 'r' : ''}">${fmt(v, 3)}</span>`; }).join('');
+  el.innerHTML = `<div class="lgTitle"><b>${esc(name)}</b> <span class="muted">${esc(unit)}</span></div>
+    <div class="bar" style="background:linear-gradient(90deg,${stops})"></div>
+    <div class="ticks">${tk}</div><div class="lgRange">${fmt(lo, 4)} <span>to</span> ${fmt(hi, 4)}</div>`;
   el.classList.remove('hidden');
 }
 
@@ -2842,12 +3401,13 @@ function clipValue() {
 }
 
 S.meshPoor = { on: false, thr: 0.1, worst: null };
+S.meshColor = 'quality';   // what the mesh is coloured by: quality | size | region
 async function showMesh() {
   if (S.p.mesh.status !== 'ready' && S.p.mesh.status !== 'stale') { viewer.clearOverlay(); viewer.showGeometry(true); return; }
   if (S.meshPoor.on) {  // mesh metrics: only the poor cells, on the CAD model
     try {
       const d = await api(P(`/mesh/view?poor=${S.meshPoor.thr}`));
-      viewer.setOverlay(d, { wire: true, range: [0, S.meshPoor.thr], reverse: true });
+      viewer.setOverlay(d, { wire: true, range: [0, S.meshPoor.thr], fixed: true });
       viewer.setZoneWire(null);
       viewer.showGeometry(true);
       S.meshPoor.worst = d.worst || null;
@@ -2857,22 +3417,40 @@ async function showMesh() {
     } catch (e) { toast(e.message, true); }
     return;
   }
+  // a flow study meshes the air around the object: a new mesh opens cut through the middle, so the air, the place the object
+  // was cut out of it and the growth of the cells show (the skin alone is only the object)
+  const cutKey = S.pid + '|' + (S.p.mesh.stats?.cells ?? '') + '|' + (S.p.mesh.stats?.seconds ?? '');
+  if (S.meshCutKey !== cutKey) {
+    S.meshCutKey = cutKey;
+    if (['external_aero', 'cht_enclosure'].includes(S.p.study) && !S.clip.axis) {
+      S.clip = { axis: 'y', pos: 500 }; $('#clipAxis').value = 'y'; $('#clipPos').value = 500; clipLabel(); S.fitMesh = true; renderPanel();
+    }
+  }
   const hideFluid = S.p.study === 'cht_enclosure' && S.hideAir;
-  const q = S.clip.axis ? `?clip_axis=${S.clip.axis}&clip_pos=${clipValue()}&hide_fluid=${hideFluid}` : `?hide_fluid=${hideFluid && S.p.study === 'cht_enclosure'}`;
+  const q = (S.clip.axis ? `?clip_axis=${S.clip.axis}&clip_pos=${clipValue()}&hide_fluid=${hideFluid}` : `?hide_fluid=${hideFluid && S.p.study === 'cht_enclosure'}`)
+    + `&color=${S.meshColor}`;
   try {
     const d = await api(P('/mesh/view' + q));
-    viewer.setOverlay(d, { wire: true, range: [0, 1], reverse: true });
+    const by = S.meshColor;
+    viewer.setOverlay(d, { wire: true, range: by === 'size' ? [d.min, d.max] : [0, 1], fixed: by === 'quality' });
+    if (S.fitMesh) { S.fitMesh = false; viewer.fitOverlay([0, 1, 0]); }
     viewer.setZoneWire(d.zone_lines);
     viewer.showGeometry(false);
-    legend('Cell quality', '-', [0, 1], true);
+    if (by === 'quality') legend('Cell quality', '-', [0, 1], true);
+    else if (by === 'size') legend('Cell size', 'mm', [d.min, d.max], false, true);
+    else legendCats(d);
   } catch (e) { toast(e.message, true); }
 }
 
 function renderViewportMode() {
   const step = S.step;
   const canProbe = !!S.p && step === 'results' && hasResults();
+  // the results step gets the whole left column: wider, and the outline folds to its title bar (click it to unfold)
+  $('#layout').style.setProperty('--leftw', canProbe ? '410px' : '330px');
+  if (S.treeWide !== canProbe) { S.treeWide = canProbe; S.treeFold = canProbe; }
+  $('#left').classList.toggle('folded', !!S.treeFold);
   $('#probeBtn').classList.toggle('hidden', !canProbe);
-  if (!canProbe) { setProbe(false); viewer.setProbes([]); }
+  if (!canProbe) { setProbe(false); viewer.setProbes([]); viewer.setExtrema(null); viewer.setSegment(null); S.linePick = null; }
   // section: on the CAD faces (to reach faces inside) or on the mesh / results
   const clipOn = S.p && S.p.geometry.status === 'ready' && (step !== 'mesh' || S.p.mesh.status === 'ready' || S.p.mesh.status === 'stale');
   $('#clipTools').classList.toggle('hidden', !clipOn);
@@ -2906,10 +3484,12 @@ function setProbe(on) {
 }
 viewer.onProbe = hit => {
   if (!hit) { toast('Click on the coloured result (the surface or the section).'); return; }
+  if (linePicked(hit)) return;
   (S.probes ||= []).push({ point: hit.point, text: `${fmt(hit.value, 4)} ${S.probeUnit || ''}`.trim() });
-  viewer.setProbes(S.probes);
+  viewer.setProbes(S.probes); pinList();
 };
-$('#probeBtn').onclick = () => { setProbe(!S.probeOn); if (S.step === 'results') showResults(); };
+$('#treeHead').onclick = () => { S.treeFold = !S.treeFold; $('#left').classList.toggle('folded', S.treeFold); };
+$('#probeBtn').onclick = () => { S.linePick = null; setProbe(!S.probeOn); if (S.step === 'results') showResults(); };
 $('#shotBtn').onclick = () => {
   const c = viewer.snapshot();
   const times = S.results?.times || [];
@@ -2973,6 +3553,9 @@ function bindPanel(el) {
     drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); e.dataTransfer.files[0] && upload(e.dataTransfer.files[0]); };
   }
   el.querySelectorAll('[data-action]').forEach(b => b.onclick = ev => action(b.dataset.action, b, ev));
+  el.querySelectorAll('[data-meshmethod]').forEach(b => b.onclick = () => act(async () => {
+    S.p = await api(P('/mesh/settings'), { json: { method: b.dataset.meshmethod } }); renderPanel();
+  }));
   el.querySelectorAll('[data-preset]').forEach(b => b.onclick = () => act(async () => {
     S.p = await api(P('/mesh/settings'), { json: { preset: b.dataset.preset } }); renderPanel();
   }));
@@ -3005,6 +3588,10 @@ function bindPanel(el) {
     else r.size = Math.max(1e-6, parseFloat(inp.value) / 1000 || r.size);
     await savePartSizing(rs);
   }));
+  el.querySelectorAll('[data-meshcolor]').forEach(b => b.onclick = () => { S.meshColor = b.dataset.meshcolor; renderPanel(); showMesh(); });
+  el.querySelectorAll('[data-meshcut]').forEach(b => b.onclick = () => {
+    const sel = $('#clipAxis'); sel.value = b.dataset.meshcut; sel.onchange({ target: sel }); renderPanel();
+  });
   $('#poorOn', el)?.addEventListener('change', e => { S.meshPoor.on = e.target.checked; renderPanel(); showMesh(); });
   $('#poorThr', el)?.addEventListener('change', e => { S.meshPoor.thr = Math.min(0.9, Math.max(0.01, +e.target.value || 0.1)); if (S.meshPoor.on) showMesh(); });
   el.querySelectorAll('[data-defeature]').forEach(i => i.onchange = () => act(async () => {
@@ -3430,6 +4017,7 @@ function chatSuggestions() {
     heat_conduction: ['Help me set up heat sources and cooling for this part', 'Which faces lose the most heat?', 'Explain the results'],
     cht_enclosure: ['Help me set up the air flow and heat loads for this part', 'Is laminar or turbulent flow right here?', 'How can I lower the chip temperature?'],
     external_aero: ['Help me set up the flow for this body', 'What are the drag and lift coefficients?', 'Is the mesh fine enough?'],
+    aeroelastic_flutter: ['Which faces are the aerodynamic surface of this wing?', 'Is the flutter margin enough?', 'How can I raise the flutter speed?'],
     vibration_modal: ['Which faces should be fixed supports for this part?', 'Will it resonate with a motor at 6000-24000 rpm?', 'How can I raise the first frequency?'],
     static_structural: ['Help me set up the supports and loads for this part', 'Is the safety factor acceptable?', 'Where is the stress highest and how can I lower it?'],
   }[st] || [];

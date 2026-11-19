@@ -155,6 +155,9 @@ def write_claude_files(d: Path, port: int | None = None) -> None:
             "approve it when Claude Code asks), not by editing `project.json`, `case/` or `results/` by hand: "
             "the workbench owns them, above all while a job is running.\n"
             "- Start with `get_project_state`. Units: mm for geometry, degC, W.\n"
+            "- When the desktop window (`python -m simwb.qt`) is running you can see and drive it: `ui_state` (what it shows), "
+            "`ui_screenshot`, `ui_do` (any operation), `ui_widget`, `ui_log` (errors and warnings), `ui_wait`; `ui_eval` too when it "
+            "was started with `--debug-api`.\n"
             "- Before starting a solve check that no other job is running and that the machine has free memory: "
             "large CFD runs use most of it.\n"
             "- Put your own notes in `CLAUDE.local.md` (this file is rewritten).\n", encoding="utf-8")
@@ -190,6 +193,7 @@ def create_project(name: str, study: str, location: str | None = None) -> "Proje
         "settings": studies.default_settings(study),
         # OpenFOAM studies start on Coarse (a first run in minutes, not hours); the built-in FEM is instant
         "mesh": {"preset": {"heat_conduction": "medium", "vibration_modal": "medium", "static_structural": "medium",
+                            "aeroelastic_flutter": "medium",
                             "cht_enclosure": "quick"}.get(study, "coarse"),
                  "refinements": [], "status": "none"},
         "solve": {"status": "none"},
@@ -223,6 +227,117 @@ def duplicate_project(pid: str, name: str | None = None) -> "Project":
     with _LOCK:
         _OPEN[pid2] = Project(d)
     return _OPEN[pid2]
+
+
+# files that belong to one machine or one run and are not part of a saved case
+_CASE_SKIP = ("*.tmp", "checks", "_*_job.json", ".mcp.json", "CLAUDE.md")
+
+
+def _register(pid: str, d: Path):
+    """Remember a project folder outside the workspace under its id."""
+    if d.parent.resolve() != WORKSPACE.resolve():
+        _save_locations({**_locations(), pid: str(d)})
+
+
+def save_project_as(pid: str, location: str, name: str | None = None, keep_results: bool = True) -> "Project":
+    """Save a study as a new one in another folder ('Save as'): setup, geometry, mesh and - unless keep_results is False -
+    the solver case, results and videos too. The copy becomes a study of its own (a sub-folder named after it is made in
+    location); the original is not touched."""
+    src = open_project(pid)
+    if src.busy():
+        raise RuntimeError("Please wait: a job is still running for this project (or cancel it).")
+    src.save(quiet=True)
+    name = (name or src.data["name"]).strip()[:120] or src.data["name"]
+    folder = check_folder(location)
+    pid2 = _unique_id(slug(name), folder)
+    d = folder / pid2
+    skip = _CASE_SKIP + (() if keep_results else ("case", "results", "videos"))
+    shutil.copytree(src.dir, d, ignore=shutil.ignore_patterns(*skip))
+    data = json.loads((d / "project.json").read_text())
+    data.update(name=name, created=_now(), updated=_now())
+    if not keep_results:
+        data["solve"] = {"status": "none"}
+    for k in ("hidden", "edited_during_run"):
+        data.pop(k, None)
+    (d / "project.json").write_text(json.dumps(data, indent=1))
+    _register(pid2, d)
+    write_claude_files(d)
+    with _LOCK:
+        _OPEN[pid2] = Project(d)
+    return _OPEN[pid2]
+
+
+def export_project(pid: str, zip_path: str, keep_results: bool = True) -> Path:
+    """The whole study in ONE file (a .zip with project.json at its top): to send, archive or open on another computer
+    with import_project. keep_results False leaves out the solver case, results and videos (the file is much smaller)."""
+    import fnmatch
+    import zipfile
+
+    src = open_project(pid)
+    if src.busy():
+        raise RuntimeError("Please wait: a job is still running for this project (or cancel it).")
+    src.save(quiet=True)
+    out = Path(str(zip_path)).expanduser()
+    if not out.is_absolute():
+        raise ValueError("Give the full path of the file (for example C:\\Simulations\\bracket.simwb.zip)")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    skip = _CASE_SKIP + (() if keep_results else ("case", "results", "videos"))
+    tmp = out.with_name(out.name + ".part")
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in sorted(src.dir.rglob("*")):
+            rel = f.relative_to(src.dir)
+            if f.is_dir() or any(fnmatch.fnmatch(part, pat) for part in rel.parts for pat in skip):
+                continue
+            z.write(f, rel.as_posix())
+    tmp.replace(out)
+    return out
+
+
+def import_project(zip_path: str, location: str | None = None, name: str | None = None) -> "Project":
+    """Open a study saved with export_project: unpacked into a new folder (in location, or the workspace), as a study of its
+    own. Refuses anything that is not such a file, or whose entries would land outside the new folder."""
+    import zipfile
+
+    zp = Path(str(zip_path)).expanduser()
+    try:
+        z = zipfile.ZipFile(zp)
+    except (OSError, zipfile.BadZipFile):
+        raise ValueError(f"{zp.name} is not a saved study (not a zip file)") from None
+    with z:
+        names = z.namelist()
+        if "project.json" not in names:
+            raise ValueError(f"{zp.name} is not a saved study (no project.json at its top)")
+        try:
+            data = json.loads(z.read("project.json"))
+            studies.study(data.get("study", ""))
+        except (ValueError, KeyError):
+            raise ValueError(f"{zp.name} is not a saved study (project.json is unreadable)") from None
+        WORKSPACE.mkdir(parents=True, exist_ok=True)
+        folder = check_folder(location) if location and Path(location).resolve() != WORKSPACE.resolve() else None
+        title = (name or data.get("name") or zp.stem).strip()[:120]
+        pid = _unique_id(slug(title), folder)
+        d = (folder or WORKSPACE) / pid
+        d.mkdir(parents=True)
+        try:
+            root = d.resolve()
+            for info in z.infolist():
+                target = (d / info.filename).resolve()
+                if root != target and root not in target.parents:  # '..' or an absolute path in the file
+                    raise ValueError(f"{zp.name} holds an entry outside the study folder: {info.filename}")
+                z.extract(info, d)
+        except Exception:
+            shutil.rmtree(d, ignore_errors=True)
+            raise
+    data = json.loads((d / "project.json").read_text())
+    data.update(name=title, updated=_now())
+    for k in ("hidden", "edited_during_run"):
+        data.pop(k, None)
+    (d / "project.json").write_text(json.dumps(data, indent=1))
+    _register(pid, d)
+    write_claude_files(d)
+    with _LOCK:
+        _OPEN[pid] = Project(d)
+    return _OPEN[pid]
 
 
 def open_project_folder(path: str) -> "Project":
@@ -421,6 +536,7 @@ class Project:
             d["geometry"] = dict(d["geometry"], pivot=self._parts_center().tolist())  # (what a turn pivots on)
         if self.study == "external_aero":
             d["flow_dir"] = self._flow_dir().tolist()  # free-stream direction (drawn on the air volume)
+            d["hex_unsupported"] = self.hex_unsupported()  # why the hex-dominant mesh cannot be used (None = it can)
         d["edits"] = self.cad_edits()
         d["checks"] = self.check()
         jobs = {}
@@ -516,6 +632,8 @@ class Project:
                 if k in self.data["settings"] and not self.data["settings"][k]:
                     self.data["settings"][k] = v
         self.data["geometry"]["pending"] = {"original_name": original_name or src.name, "scale": scale, "format": fmt}
+        if src.parent.resolve() == EXAMPLES.resolve():
+            self.data["geometry"]["pending"]["example"] = src.name  # (the example's own materials: studies.EXAMPLE_MATERIALS)
         if self.data["geometry"].get("status") in (None, "none", "error"):
             self.data["geometry"]["status"] = "importing"
         self.save()
@@ -1048,8 +1166,10 @@ class Project:
                 same = [ob for ob in old_bodies if ob["role"] == "solid" and ob["name"] == b["name"]]
                 if len(same) == 1:
                     src = old_cfg.get(str(same[0]["id"]))
-            new_cfg[str(b["id"])] = src or {"material": "aluminium_6061", "heat_W": 0.0, "name": b["name"],
-                                            "material_is_default": True}
+            ex_mat = studies.EXAMPLE_MATERIALS.get(self.data["geometry"].get("example"), {}).get(b["name"])
+            new_cfg[str(b["id"])] = src or ({"material": ex_mat, "heat_W": 0.0, "name": b["name"]} if ex_mat else
+                                            {"material": "aluminium_6061", "heat_W": 0.0, "name": b["name"],
+                                             "material_is_default": True})
         self.data["bodies"] = new_cfg
         self._sync_symmetry_bcs()
         if self.study == "external_aero" and not self.data["rotors"] and not self.data.get("symmetry"):
@@ -2044,6 +2164,26 @@ class Project:
             lo, hi = float(s.get("excitation_min_hz") or 0), float(s.get("excitation_max_hz") or 0)
             if hi and lo > hi:
                 err("Excitation 'from' is above 'up to' - swap them", "setup")
+        elif st == "aeroelastic_flutter":
+            s = self.data["settings"]
+            if "fixed_support" not in types:
+                err("Mark the root of the wing (the clamped or bolted face) as 'Fixed support': flutter of a free "
+                    "structure is not covered", "setup")
+            if "aero_surface" not in types:
+                warn("No aerodynamic surface: every face is treated as carrying air loads. Select the upper and "
+                     "lower skin of the wing and add 'Aerodynamic surface'.", "setup")
+            else:
+                ok("Aerodynamic surface marked", "setup")
+            flow = s.get("flow_direction", "+x")
+            if str(flow).lstrip("+-") == s.get("span_axis", "y"):
+                err("The air flows along the span direction: choose a span axis across the flow", "setup",
+                    '[data-setting="span_axis"]')
+            for b in self.data["bcs"]:
+                if b["type"] == "added_mass" and b["faces"] and not float(b["params"].get("mass_kg") or 0):
+                    warn(f"Added mass '{b['name']}' is 0 kg", "setup")
+            if float(s.get("design_speed_ms") or 0) and float(s.get("speed_max_ms") or 0)                     and float(s["design_speed_ms"]) * 1.15 > float(s["speed_max_ms"]):
+                warn("'Highest air speed' is below 1.15 x the design speed: the flutter margin cannot be shown "
+                     "unless the sweep reaches it", "setup", '[data-setting="speed_max_ms"]')
         elif st == "static_structural":
             if not any(t in types for t in ("fixed_support", "frictionless_support", "displacement")):
                 err("Add a support (fixed, frictionless/pin or prescribed displacement) so the part is held", "setup")
@@ -2191,11 +2331,29 @@ class Project:
         return freestream_velocity(s)
 
     # ------------------------------------------------------------------ mesh
+    def hex_unsupported(self):
+        """Why this study cannot use the hex-dominant (snappyHexMesh) mesh; None when it can."""
+        if self.study != "external_aero":
+            return "The hex-dominant mesh is for external aerodynamics."
+        if self.data["geometry"].get("status") != "ready":
+            return "Import geometry first."
+        from .solvers.openfoam import hexmesh
+
+        return hexmesh.unsupported(self.data, self.faces(), self.data["geometry"].get("info") or {})
+
     def set_mesh(self, preset=None, size_max_mm=None, size_min_mm=None, refinements=None, regions=None,
-                 layers=None, defeature_mm=False):
+                 layers=None, defeature_mm=False, method=None):
         if self.busy():
             raise RuntimeError("Please wait: a job is still running for this project (or cancel it).")
         m = self.data["mesh"]
+        if method is not None:
+            if method not in ("tet", "hex"):
+                raise ValueError("Mesh method must be 'tet' (tetrahedral, Gmsh) or 'hex' (hex-dominant, snappyHexMesh)")
+            if method == "hex":
+                why = self.hex_unsupported()
+                if why:
+                    raise ValueError(why)
+            m["method"] = method
         if preset:
             from .gmsh_worker import PRESETS
 
@@ -2279,7 +2437,9 @@ class Project:
                 m["defeature"] = d / 1000
             else:
                 m.pop("defeature", None)
-        only_layers = layers is not None and preset is None and size_max_mm is None and size_min_mm is None             and refinements is None and regions is None
+        # (the tetrahedral mesh gets its layers at the run; the hex-dominant mesh makes them with the mesh)
+        only_layers = (layers is not None and preset is None and size_max_mm is None and size_min_mm is None
+                       and refinements is None and regions is None and method is None and m.get("method") != "hex")
         self.mark_stale(("solve",) if only_layers else ("mesh", "solve"))  # (layers are added at the run)
         self.save()
 
@@ -2288,7 +2448,121 @@ class Project:
             raise ValueError("Import geometry first")
         return JOBS.start("mesh", self.id, self._mesh_work)
 
+    def _hex_mesh_work(self, job: Job, p0=0.0, p1=1.0):
+        """Hex-dominant mesh with snappyHexMesh (see solvers/openfoam/hexmesh.py): plan, write the meshing case, run
+        OpenFOAM's blockMesh / surfaceFeatureExtract / snappyHexMesh / createPatch / checkMesh, then store the result
+        like the tetrahedral mesh (display arrays in mesh.npz, the real OpenFOAM mesh in polyMesh_hex)."""
+        from .solvers.openfoam import cases, hexmesh, runner
+
+        t0 = time.time()
+        why = self.hex_unsupported()
+        if why:
+            raise ValueError(why + " Choose the tetrahedral mesh.")
+        det = runner.detect(refresh=True)
+        if not det["available"]:
+            raise RuntimeError("The hex-dominant mesh needs OpenFOAM, which is not installed: " + runner.install_help())
+        data, faces = self.data, self.faces()
+        info = data["geometry"]["info"]
+        fl = materials.get_fluid(data["settings"].get("fluid", "air"))
+        s2p, patches = cases.build_patches("external_aero", faces, data.get("bcs", []))
+        plan = hexmesh.make_plan(data, faces, info, s2p, patches, cases.freestream_velocity(data["settings"]),
+                                 fl["mu"] / fl["rho"])
+        case = self.mesh_dir / "hexcase"
+        shutil.rmtree(case, ignore_errors=True)
+        case.mkdir(parents=True, exist_ok=True)
+        JOBS.update(job, p0 + 0.05 * (p1 - p0), "Writing the meshing case", log=f"Hex-dominant mesh: {plan['cells_bg']} background "
+                    f"cells of {plan['base'] * 1000:.3g} mm, {plan['levels']} levels, surface cells {plan['h_wall'] * 1000:.3g} mm")
+        hexmesh.write_case(case, plan, faces)
+        prev = data["mesh"].get("status")
+        data["mesh"]["status"] = "meshing"
+        try:
+            ok = False
+            if det["backend"] == "windows":
+                def on_proc(p):
+                    job.proc = p
+                    job.check_cancel()
+
+                def on_line(line):
+                    JOBS.update(job, None, line if line.startswith("$") else None, log=line)
+
+                JOBS.update(job, p0 + 0.1 * (p1 - p0), "Meshing with snappyHexMesh (about a minute per 100,000 cells)")
+                ok = runner.run_steps_windows(case, hexmesh.STEPS, det, on_proc, on_line)
+            else:
+                lines = ["#!/bin/bash", 'cd "${0%/*}" || exit 1']
+                for st in hexmesh.STEPS:
+                    lines.append(f"{st['app']} {' '.join(st['args'])} > {st['log']} 2>&1" + ("" if st.get("allow_fail") else " || exit 1"))
+                (case / "Allmesh").write_text("\n".join(lines) + "\n", newline="\n")
+                cmd = runner.build_command(case, "Allmesh")
+                proc = subprocess.Popen(cmd, cwd=case, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                        bufsize=1, shell=isinstance(cmd, str))
+                job.proc = proc
+                for line in proc.stdout:
+                    if line.strip():
+                        JOBS.update(job, None, None, log=line.rstrip(), quiet=True)
+                ok = proc.wait() == 0
+            job.proc = None
+            job.check_cancel()
+            hexmesh.finalize(case)
+            if not ok:
+                bad = next((st for st in hexmesh.STEPS if not st.get("allow_fail") and (case / st["log"]).exists()
+                            and "FOAM FATAL" in (case / st["log"]).read_text(errors="ignore")), None)
+                tail = ""
+                if bad:
+                    txt = (case / bad["log"]).read_text(errors="ignore")
+                    i = txt.find("FOAM FATAL")
+                    tail = txt[i:i + 700].strip()
+                raise RuntimeError(f"The hex-dominant mesh could not be made ({bad['app'] if bad else 'OpenFOAM'} failed)."
+                                   + (f"\n{tail}" if tail else "") + "\nTry the tetrahedral mesh or a coarser preset.")
+            JOBS.update(job, p0 + 0.85 * (p1 - p0), "Reading the mesh")
+            fluid_id = next(b["id"] for b in self.bodies() if b["role"] == "fluid")
+            arr, pm = hexmesh.display_arrays(case, plan, s2p, patches, faces, fluid_id)
+            lg = hexmesh.parse_logs(case)
+            if not lg["cells"]:
+                raise RuntimeError("The meshing case produced no cells: see " + str(case / "log.snappyHexMesh"))
+            hexdir = self.mesh_dir / "polyMesh_hex"
+            shutil.rmtree(hexdir, ignore_errors=True)
+            shutil.copytree(case / "constant" / "polyMesh", hexdir)
+            np.savez_compressed(self.mesh_dir / "mesh.npz", **arr)
+        except BaseException:
+            data["mesh"]["status"] = "failed" if prev in (None, "none", "failed") else "stale"
+            self.save()
+            raise
+        q = arr["quality"]
+        hist, edges = np.histogram(q, bins=20, range=(0, 1))
+        stats = {
+            "method": "hex", "cells": lg["cells"], "nodes": int(len(pm["points"])), "boundary_triangles": int(len(arr["tris"])),
+            "cells_per_body": {str(fluid_id): lg["cells"]},
+            "cell_types": lg["types"],
+            "quality": {"metric": "1 - worst non-orthogonality of the cell / 90 degrees (display; 1 = orthogonal)",
+                        "min": float(q.min()), "mean": float(q.mean()), "p01": float(np.percentile(q, 1)),
+                        "n_poor": int((q < 0.1).sum()), "histogram": hist.tolist(), "edges": edges.tolist()},
+            "foam_quality": {"non_orthogonality_max": lg["non_orthogonality_max"] or 0.0,
+                             "non_orthogonality_mean": lg["non_orthogonality_mean"] or 0.0, "n_non_ortho_gt70": 0,
+                             "skewness_max": lg["skewness_max"] or 0.0, "n_skew_gt4": 0},
+            "hex": {"levels": plan["levels"], "base_mm": plan["base"] * 1000, "background_cells": plan["cells_bg"],
+                    "surface_cell_mm": plan["h_wall"] * 1000, "aspect_ratio_max": lg["aspect_ratio_max"],
+                    "mesh_ok": lg["mesh_ok"], "failed_checks": lg["failed_checks"], "problems": lg["problems"],
+                    "concave_cells": lg["concave_cells"], "layers": lg["layers"],
+                    "layers_extruded_percent": lg["layers_extruded_percent"], "warnings": lg["warnings"],
+                    "wall_patches": [{"name": p["name"], "levels": sorted({g["level"] for g in p["groups"]})}
+                                     for p in plan["wall_patches"]]},
+            "sizes": {"near_wall": plan["h_wall"], "body": plan["h_body"], "far": plan["base"], "feature": plan["h_wall"],
+                      "min_gap": None, "channels": [], "gap_cell": None, "cells_across_gap": None},
+            "seconds": round(time.time() - t0, 1),
+        }
+        with self._lock:
+            self.data["mesh"]["status"] = "ready"
+            self.data["mesh"]["stats"] = stats
+            self.data["solve"]["status"] = "none"
+            self._results = None
+            self.save()
+        JOBS.update(job, p1, f"Mesh ready: {stats['cells']:,} cells", log=f"Mesh ready: {stats['cells']:,} cells "
+                    f"({lg['types']['hexahedra']:,} hexahedra)")
+        return stats
+
     def _mesh_work(self, job: Job, p0=0.0, p1=1.0):
+        if self.data["mesh"].get("method") == "hex" and self.study == "external_aero":
+            return self._hex_mesh_work(job, p0, p1)
         payload = {
             "study": self.study, "out_dir": str(self.mesh_dir), "brep": str(self.geo_dir / "domain.brep"),
             "bodies_json": str(self.geo_dir / "bodies.json"), "faces_json": str(self.geo_dir / "faces.json"),
@@ -2320,6 +2594,9 @@ class Project:
         "heat_conduction": [("Max temperature", "°C", lambda s: s.get("T_max"))],
         "static_structural": [("Max deformation", "mm", lambda s: s.get("max_displacement_mm")),
                               ("Max von Mises stress", "MPa", lambda s: s.get("max_von_mises_MPa"))],
+        "aeroelastic_flutter": [("Flutter speed", "m/s", lambda s: (s.get("flutter") or {}).get("speed_m_s")),
+                                ("Flutter frequency", "Hz", lambda s: (s.get("flutter") or {}).get("frequency_Hz")),
+                                ("First natural frequency", "Hz", lambda s: s.get("first_frequency_Hz"))],
         "vibration_modal": [(f"Mode {i} frequency", "Hz",
                              (lambda i: lambda s: next((m["frequency_Hz"] for m in s.get("modes", [])
                                                         if m.get("elastic_index") == i), None))(i)) for i in (1, 2, 3)],
@@ -2612,6 +2889,9 @@ class Project:
     def _foam_quality(self):
         from .solvers.openfoam.foamio import polymesh_quality, tet_mesh_to_polymesh
 
+        st = self.data["mesh"].get("stats") or {}
+        if st.get("method") == "hex" and st.get("foam_quality"):
+            return st["foam_quality"]  # (checkMesh's numbers of the real snappyHexMesh mesh)
         m = self.load_mesh()
         pm = tet_mesh_to_polymesh(m["nodes"], m["tets"], np.zeros((0, 3), int), [], [], [])
         return polymesh_quality(pm)
@@ -2620,11 +2900,18 @@ class Project:
         p = self.mesh_dir / "mesh.npz"
         if not p.exists():
             raise ValueError("No mesh yet")
-        return dict(np.load(p))
+        m = dict(np.load(p))
+        if "hex" in m:  # a snappyHexMesh mesh: the arrays are for display, the case takes the OpenFOAM mesh itself
+            m["hex_dir"] = str(self.mesh_dir / "polyMesh_hex")
+        return m
 
-    def mesh_view(self, clip_axis=None, clip_pos=None, hide_fluid=False, poor=None):
-        """Surface (or crinkle-clipped) mesh triangles coloured by quality, for inspection. poor: only the cells
+    def mesh_view(self, clip_axis=None, clip_pos=None, hide_fluid=False, poor=None, color="quality"):
+        """Surface (or crinkle-clipped) mesh triangles for inspection, coloured by color: 'quality' (1 = a perfect cell),
+        'size' (edge length of the cell, mm: how the mesh grades away from the walls) or 'region' (each body, the
+        surface of the object and the far-field of a flow study: how the domain was put together). poor: only the cells
         below this quality (all their faces; the worst 20000), with the box round the worst one."""
+        if color not in ("quality", "size", "region"):
+            raise ValueError("color must be 'quality', 'size' or 'region'")
         m = self.load_mesh()
         if poor is not None:
             q = m["quality"]
@@ -2646,27 +2933,72 @@ class Project:
         regions = [str(b["id"]) for b in bodies]
         reg_index = {b["id"]: i for i, b in enumerate(bodies)}
         tr = np.vectorize(reg_index.get)(m["tet_vol"]) if len(bodies) > 1 else np.zeros(len(m["tets"]), int)
-        rs = ResultSet(m["nodes"], m["tets"], tr, regions, {"Quality": ("cell", m["quality"].astype(float), "-")},
-                       *boundary_from_tets(m["tets"]), np.zeros(0), [])
+        # the other ways to colour the cells: the edge of the equal-volume regular tet (mm) and the body each one is in
+        corner = m["nodes"][m["tets"]]
+        vol = np.abs(np.einsum("ij,ij->i", corner[:, 1] - corner[:, 0],
+                               np.cross(corner[:, 2] - corner[:, 0], corner[:, 3] - corner[:, 0]))) / 6.0
+        size_mm = (6.0 * math.sqrt(2.0) * vol) ** (1.0 / 3.0) * 1000.0
+        rs = ResultSet(m["nodes"], m["tets"], tr, regions,
+                       {"Quality": ("cell", m["quality"].astype(float), "-"), "Cell size": ("cell", size_mm, "mm")},
+                       *((m["tris"].astype(np.int64), m["tri_owner"]) if "tri_owner" in m else boundary_from_tets(m["tets"])),
+                       np.zeros(0), [])
         rs.surf_group = np.zeros(len(rs.surf_tris), np.int32)
+
+        def paint(tris, cells):
+            if color == "region":
+                return self._region_payload(rs, m, tris, cells, bodies, tr)
+            d = rs._tri_payload(tris, cells, "Cell size" if color == "size" else "Quality")
+            if color == "size":
+                d["scale"] = "log"  # (sizes span a factor of 50 or more: equal steps of the ratio, not of the size)
+            return d
+
         hide = [str(b["id"]) for b in bodies if b["role"] == "fluid"] if hide_fluid else []
         if clip_axis is None:
             if hide:
                 keep = ~np.isin(tr, [regions.index(h) for h in hide])
                 sub = np.where(keep)[0]
                 tris, cells = boundary_from_tets(m["tets"][sub])
-                return rs._tri_payload(tris, sub[cells], "Quality")
+                return paint(tris, sub[cells])
             # show the CAD boundary (exterior + body interfaces), without the far-field box planes
             far = [f["id"] for f in self.faces() if f.get("kind") == "farfield"]
             keep = ~np.isin(m["tri_surf"], far)
-            d = rs._tri_payload(m["tris"][keep].astype(np.int64), _owner_of_tris(m)[keep], "Quality")
+            d = paint(m["tris"][keep].astype(np.int64), _owner_of_tris(m)[keep])
             zt = m.get("zone_tris")
             if zt is not None and len(zt):  # moving-zone boundaries (inside the air): their mesh edges as lines
                 e = np.sort(np.vstack([zt[:, [0, 1]], zt[:, [1, 2]], zt[:, [2, 0]]]), axis=1)
                 e = np.unique(e, axis=0)
                 d["zone_lines"] = m["nodes"][e].astype(np.float32).ravel().tolist()
             return d
-        return rs.clip("Quality", "xyz".index(clip_axis), float(clip_pos), hide_regions=hide)
+        tris, cells = rs.clip_tris("xyz".index(clip_axis), float(clip_pos), hide_regions=hide)
+        return paint(tris, cells)
+
+    def _region_payload(self, rs, m, tris, cells, bodies, tr):
+        """The triangles coloured by what they belong to: a category per body and, in an external flow study, the surface
+        of the object (the wall left where it was cut out of the air) and the far-field planes. 'categories' name and
+        colour them, 'present' lists the ones drawn."""
+        pal = ["#4e9fd8", "#6fbf73", "#e0b341", "#c07be0", "#e07b7b", "#5cc7c7", "#a3b86c", "#d98c5f"]
+        cats = [{"name": str(b.get("name") or b["id"]), "color": pal[i % len(pal)]} for i, b in enumerate(bodies)]
+        fv = tr[cells].astype(np.float32) if len(cells) else np.zeros(0, np.float32)
+        if len(tris) and "tri_surf" in m and self.study == "external_aero":
+            kind = {f["id"]: f.get("kind") for f in self.faces()}
+
+            def digest(T):  # one number per triangle, the same for its corners in any order
+                T = np.sort(np.asarray(T, np.int64), axis=1).astype(np.uint64)
+                with np.errstate(over="ignore"):
+                    return T[:, 0] * np.uint64(73856093) ^ T[:, 1] * np.uint64(19349663) ^ T[:, 2] * np.uint64(83492791)
+            h = digest(tris)
+            for label, col, want in (("Object surface", "#f08a24", "body"), ("Far-field", "#7d8799", "farfield")):
+                sel = np.isin(m["tri_surf"], [i for i, k in kind.items() if k == want])
+                if sel.any():
+                    hit = np.isin(h, digest(m["tris"][sel]))
+                    if hit.any():
+                        fv[hit] = len(cats)
+                        cats.append({"name": label, "color": col})
+        d = rs._tri_payload(tris, cells, "Cell size", face_vals=fv)
+        d["unit"] = "-"
+        d["categories"] = cats
+        d["present"] = [int(i) for i in np.unique(fv)] if len(fv) else []
+        return d
 
     # ------------------------------------------------------------------ solve
     def solver_status(self):
@@ -2881,6 +3213,8 @@ class Project:
     def _solve_builtin(self, job: Job):
         if self.study == "vibration_modal":
             return self._solve_modal(job)
+        if self.study == "aeroelastic_flutter":
+            return self._solve_flutter(job)
         if self.study == "static_structural":
             return self._solve_static(job)
         from .solvers import thermal_fem
@@ -2994,6 +3328,49 @@ class Project:
         rep = res["report"]
         self._remember_previous()
         self.data["solve"] = {"status": "done", "backend": engine, "finished": _now(), "summary": rep}
+        self.save()
+        return rep
+
+    def _solve_flutter(self, job: Job):
+        """Flutter study: modal FEM of the structure coupled to strip aerodynamics (simwb.solvers.flutter_study)."""
+        from .solvers import flutter_study
+
+        self.data["solve"] = {"status": "running", "backend": "builtin", "started": _now()}
+        self.save()
+        m = self.load_mesh()
+        props = {}
+        for b in self.bodies():
+            cfg = self.data["bodies"].get(str(b["id"]), {})
+            mat = materials.get_solid(cfg.get("material") or "aluminium_6061")
+            props[b["id"]] = {"E": mat["E"], "nu": mat["nu"], "rho": mat["rho"], "yield": mat.get("Sy"),
+                              "name": cfg.get("name") or b["name"]}
+        log = lambda msg: JOBS.update(job, None, msg, log=msg)  # noqa: E731
+        JOBS.update(job, 0.1, "Structure modes and air forces")
+        try:
+            res = flutter_study.solve_study(m, props, self.data["bcs"], self.data["settings"], log=log)
+        except BaseException as e:
+            self.data["solve"] = {"status": "failed", "backend": "builtin", "error_tail": str(e)}
+            self.save()
+            raise
+        JOBS.update(job, 0.9, "Saving results")
+        bodies = self.bodies()
+        reg_index = {b["id"]: i for i, b in enumerate(bodies)}
+        tr = np.array([reg_index[int(v)] for v in m["tet_vol"]]) if len(bodies) > 1 else np.zeros(len(m["tets"]), int)
+        groups, sgroup = self._tri_groups(m)
+        fields = {}
+        for name, vec in res["fields"].items():  # the flutter and divergence shapes first
+            fields[name] = ("node", vec.astype(np.float32), "relative")
+        for mode, shape in zip(res["modes"], res["shapes"]):
+            if not mode["rigid_body"]:
+                fields[f"Mode {mode['elastic_index']}"] = ("node", shape.astype(np.float32), "relative")
+        rs = ResultSet(m["nodes"], m["tets"], tr, [self._body_view(b)["name"] for b in bodies], fields,
+                       m["tris"], _owner_of_tris(m), sgroup, groups)
+        self.results_dir.mkdir(exist_ok=True)
+        rs.save(self.results_dir / "result.npz")
+        self._results = rs
+        rep = res["report"]
+        self._remember_previous()
+        self.data["solve"] = {"status": "done", "backend": "builtin", "finished": _now(), "summary": rep}
         self.save()
         return rep
 
@@ -3501,7 +3878,22 @@ def _convergence(app_log: Path, it_target: int, meta: dict | None = None, auto_s
                 " behind fins); the averaged quantities are still meaningful."
     return {"converged": converged, "residuals_converged": res_conv, "outputs_stable": bool(mon.get("stable")),
             "iterations": int(h["iters"][-1]) if h["iters"] else 0, "max_iterations": it_target,
-            "final_residuals": last, "worst_residual": worst, "monitor": mon, "note": note}
+            "final_residuals": last, "worst_residual": worst, "monitor": mon, "note": note,
+            "history": _residual_history(h)}
+
+
+def _residual_history(h: dict, points: int = 160, keep: int = 8) -> dict | None:
+    """The residuals of a run for the plot of the results: at most `points` iterations (the last one always) and the
+    `keep` equations that ended highest (the ones that decide when the run is converged)."""
+    iters, res = h.get("iters") or [], h.get("residuals") or {}
+    series = {k: v for k, v in res.items() if any(x is not None for x in v)}
+    if len(iters) < 2 or not series:
+        return None
+    idx = sorted(set(np.linspace(0, len(iters) - 1, min(points, len(iters))).round().astype(int).tolist()))
+    last = lambda v: next((x for x in reversed(v) if x is not None), 0.0)  # noqa: E731
+    top = sorted(series, key=lambda k: -last(series[k]))[:keep]
+    return {"iters": [iters[i] for i in idx],
+            "series": {k: [series[k][i] if i < len(series[k]) else None for i in idx] for k in top}}
 
 
 GCI_RULES = 2  # bump when _gci or the three-level verdict changes: stored checks are recomputed on load
@@ -3595,6 +3987,8 @@ def _energy_check(conv: dict, summary: dict) -> dict:
 
 def _owner_of_tris(m):
     """Index of a tet owning each CAD boundary triangle (for cell-located values)."""
+    if "tri_owner" in m:  # (a snappyHexMesh mesh stores it: the tets there are display tets, far too many to search)
+        return m["tri_owner"]
     loc = np.array([[1, 2, 3], [0, 3, 2], [0, 1, 3], [0, 2, 1]])
     F = np.sort(m["tets"][:, loc].reshape(-1, 3).astype(np.int64), axis=1)
     cells = np.repeat(np.arange(len(m["tets"])), 4)
