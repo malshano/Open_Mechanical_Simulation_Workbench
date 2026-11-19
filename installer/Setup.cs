@@ -3,6 +3,7 @@
 // Built by installer\build_release.ps1 with the C# compiler that ships with Windows (no extra tools needed).
 // SIMWB_QUIET=1 skips the window and uses the defaults (for tests); SIMWB_INSTALL_DIR sets the folder then.
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -60,18 +61,40 @@ static class Setup
         return parent != null && parent.TrimEnd('\\') == Path.GetPathRoot(d).TrimEnd('\\') && !d.StartsWith("\\\\");
     }
 
-    // true when only the user, SYSTEM and Administrators are given any access (the folder is private)
-    static bool OnlyTrusted(DirectorySecurity ds)
+    static bool Trusted(SecurityIdentifier s)
     {
-        SecurityIdentifier me = WindowsIdentity.GetCurrent().User;
-        foreach (FileSystemAccessRule r in ds.GetAccessRules(true, true, typeof(SecurityIdentifier)))
-        {
-            if (r.AccessControlType != AccessControlType.Allow) continue;
-            SecurityIdentifier s = (SecurityIdentifier)r.IdentityReference;
-            if (!s.Equals(me) && !s.IsWellKnown(WellKnownSidType.LocalSystemSid) && !s.IsWellKnown(WellKnownSidType.BuiltinAdministratorsSid))
-                return false;
-        }
+        return s.Equals(WindowsIdentity.GetCurrent().User) || s.IsWellKnown(WellKnownSidType.LocalSystemSid) ||
+               s.IsWellKnown(WellKnownSidType.BuiltinAdministratorsSid);
+    }
+
+    // true when only the user, SYSTEM and Administrators are given any access (the file or folder is private)
+    static bool OnlyTrusted(FileSystemSecurity fs)
+    {
+        foreach (FileSystemAccessRule r in fs.GetAccessRules(true, true, typeof(SecurityIdentifier)))
+            if (r.AccessControlType == AccessControlType.Allow && !Trusted((SecurityIdentifier)r.IdentityReference)) return false;
         return true;
+    }
+
+    // Every file and folder inside an existing install folder: not a link, owned by the user / SYSTEM / Administrators,
+    // and open to nobody else. null when all are fine, otherwise the first that is not.
+    static string TreeProblem(string dir)
+    {
+        Stack<string> todo = new Stack<string>();
+        todo.Push(dir);
+        while (todo.Count > 0)
+        {
+            foreach (string e in Directory.EnumerateFileSystemEntries(todo.Pop()))
+            {
+                FileAttributes a = File.GetAttributes(e);
+                if ((a & FileAttributes.ReparsePoint) != 0) return e + " is a link.";
+                bool isDir = (a & FileAttributes.Directory) != 0;
+                FileSystemSecurity fs = isDir ? (FileSystemSecurity)new DirectoryInfo(e).GetAccessControl() : new FileInfo(e).GetAccessControl();
+                if (!Trusted((SecurityIdentifier)fs.GetOwner(typeof(SecurityIdentifier))) || !OnlyTrusted(fs))
+                    return e + " belongs to, or can be changed by, another user.";
+                if (isDir) todo.Push(e);
+            }
+        }
+        return null;
     }
 
     // null when the folder can be used, otherwise the reason
@@ -104,12 +127,19 @@ static class Setup
         if (UnderProfile(dir)) { Directory.CreateDirectory(dir); return; }
         string why = Problem(dir);
         if (why != null) throw new InvalidOperationException(why);
-        bool existed = Directory.Exists(dir), wasEmpty = existed && Directory.GetFileSystemEntries(dir).Length == 0;
+        bool existed = Directory.Exists(dir);
+        // decided once, before anything is changed: a folder that is not private now must still be empty after it is locked
+        bool wasPrivate = existed && OnlyTrusted(new DirectoryInfo(dir).GetAccessControl());
+        if (existed && wasPrivate && Directory.GetFileSystemEntries(dir).Length > 0)
+        {
+            why = TreeProblem(dir);   // (an existing install: nothing inside may come from, or be open to, another user)
+            if (why != null) throw new InvalidOperationException(why + " Uninstall it first, or choose another folder.");
+        }
         if (!existed) Directory.CreateDirectory(dir, Locked());   // created with the permissions, never open
         else new DirectoryInfo(dir).SetAccessControl(Locked());
         why = Problem(dir);   // (another user cannot have won a race: the owner is checked again)
         if (why != null) throw new InvalidOperationException(why);
-        if (wasEmpty && Directory.GetFileSystemEntries(dir).Length > 0)
+        if (existed && !wasPrivate && Directory.GetFileSystemEntries(dir).Length > 0)
             throw new InvalidOperationException(dir + " changed while it was being made private: nothing was installed.");
     }
 
@@ -233,6 +263,7 @@ static class Setup
             "-NoProfile -ExecutionPolicy Bypass -File \"" + script + "\" -InstallDir \"" + app + "\"");
         psi.UseShellExecute = false;
         if (!c.Desktop) psi.EnvironmentVariables["SIMWB_NO_DESKTOP_SHORTCUT"] = "1";
+        psi.EnvironmentVariables["SIMWB_DIR_PREPARED"] = "1";   // (the folder was just checked and locked: not walked again)
         using (Process p = Process.Start(psi))
         {
             p.WaitForExit();

@@ -53,15 +53,27 @@ function Test-InstallDir([string]$Dir) {      # $null when usable, otherwise the
     if (-not (Test-Path -LiteralPath $Dir)) { return $null }
     if ((Get-Item -LiteralPath $Dir -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { return "$Dir is a link, not a folder." }
     $acl = Get-Acl -LiteralPath $Dir
-    $me = [Security.Principal.WindowsIdentity]::GetCurrent().User
-    $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier])
-    if (-not $owner.Equals($me) -and -not $owner.IsWellKnown([Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid)) { return "$Dir already exists and belongs to another user." }
+    if (-not (Test-TrustedSid $acl.GetOwner([Security.Principal.SecurityIdentifier]))) { return "$Dir already exists and belongs to another user." }
     # files in a folder that others could write to may have been planted: only an empty folder or a private one
-    $others = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | Where-Object {
-        $_.AccessControlType -eq 'Allow' -and -not ($_.IdentityReference.Equals($me) -or
-            $_.IdentityReference.IsWellKnown([Security.Principal.WellKnownSidType]::LocalSystemSid) -or
-            $_.IdentityReference.IsWellKnown([Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid)) })
-    if ($others.Count -gt 0 -and @(Get-ChildItem -LiteralPath $Dir -Force).Count -gt 0) { return "$Dir already holds files and is not private to you: choose an empty folder." }
+    if (-not (Test-OnlyTrusted $acl) -and @(Get-ChildItem -LiteralPath $Dir -Force).Count -gt 0) { return "$Dir already holds files and is not private to you: choose an empty folder." }
+    $null
+}
+function Test-TrustedSid($sid) {
+    $sid.Equals([Security.Principal.WindowsIdentity]::GetCurrent().User) -or
+        $sid.IsWellKnown([Security.Principal.WellKnownSidType]::LocalSystemSid) -or
+        $sid.IsWellKnown([Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid)
+}
+function Test-OnlyTrusted($acl) {      # only the user, SYSTEM and Administrators are given any access
+    -not @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) |
+        Where-Object { $_.AccessControlType -eq 'Allow' -and -not (Test-TrustedSid $_.IdentityReference) })
+}
+function Test-TreeTrusted([string]$Dir) {   # every file and folder inside: not a link, trusted owner, open to nobody else
+    foreach ($e in [IO.Directory]::EnumerateFileSystemEntries($Dir, '*', [IO.SearchOption]::AllDirectories)) {
+        $a = [IO.File]::GetAttributes($e)
+        if ($a -band [IO.FileAttributes]::ReparsePoint) { return "$e is a link." }
+        $fs = if ($a -band [IO.FileAttributes]::Directory) { (New-Object IO.DirectoryInfo $e).GetAccessControl() } else { (New-Object IO.FileInfo $e).GetAccessControl() }
+        if (-not (Test-TrustedSid $fs.GetOwner([Security.Principal.SecurityIdentifier])) -or -not (Test-OnlyTrusted $fs)) { return "$e belongs to, or can be changed by, another user." }
+    }
     $null
 }
 function New-LockedDirectory([string]$Dir) {
@@ -76,11 +88,16 @@ function New-LockedDirectory([string]$Dir) {
         $sec.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
     }
     $existed = Test-Path -LiteralPath $Dir
-    $wasEmpty = $existed -and (@(Get-ChildItem -LiteralPath $Dir -Force).Count -eq 0)
+    # decided once, before anything is changed: a folder that is not private now must still be empty after it is locked
+    $wasPrivate = $existed -and (Test-OnlyTrusted (Get-Acl -LiteralPath $Dir))
+    if ($existed -and $wasPrivate -and @(Get-ChildItem -LiteralPath $Dir -Force).Count -gt 0) {
+        $why = Test-TreeTrusted $Dir    # an existing install: nothing inside may come from, or be open to, another user
+        if ($why) { throw "$why Uninstall it first, or choose another folder." }
+    }
     if ($existed) { (Get-Item -LiteralPath $Dir -Force).SetAccessControl($sec) }
     else { [IO.Directory]::CreateDirectory($Dir, $sec) | Out-Null }   # created with the permissions, never open
     $why = Test-InstallDir $Dir; if ($why) { throw $why }
-    if ($wasEmpty -and @(Get-ChildItem -LiteralPath $Dir -Force).Count -gt 0) { throw "$Dir changed while it was being made private: nothing was installed." }
+    if ($existed -and -not $wasPrivate -and @(Get-ChildItem -LiteralPath $Dir -Force).Count -gt 0) { throw "$Dir changed while it was being made private: nothing was installed." }
 }
 
 if (-not $InstallDir) {
@@ -212,7 +229,7 @@ $ramGB = [Math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemor
 if ($ramGB -lt 8) { Warn "$ramGB GB of memory: fine for small studies, flow simulations of bigger meshes want 16 GB or more." } else { Ok "$ramGB GB memory, $([Environment]::ProcessorCount) logical cores" }
 if ($DryRun) { Line ''; C '  Dry run finished: this computer is ready for the setup.' Green; Line ''; exit 0 }
 
-try { New-LockedDirectory $InstallDir } catch { Line ''; C '  ✗ ' Red; Line "$_" Red; Line '    Choose another folder with -InstallDir.' Gray; if (-not $Quiet) { Read-Host '  Press Enter to close' | Out-Null }; exit 1 }
+try { if (-not ($env:SIMWB_DIR_PREPARED -and (Test-Path -LiteralPath $InstallDir))) { New-LockedDirectory $InstallDir } } catch { Line ''; C '  ✗ ' Red; Line "$_" Red; Line '    Choose another folder with -InstallDir.' Gray; if (-not $Quiet) { Read-Host '  Press Enter to close' | Out-Null }; exit 1 }
 Add-Content -Path $Log -Value ("=== SimWB setup {0} ===" -f (Get-Date))
 
 # 2 ---------------------------------------------------------------------------------------- the workbench files
