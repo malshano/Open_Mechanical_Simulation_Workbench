@@ -54,7 +54,7 @@ Environment variables (read in the named files):
 |---|---|---|
 | `SIMWB_HOME` | `simwb/project.py` (`WORKSPACE`) | Default study folder. Tests set it to a temporary folder and `importlib.reload` the modules. |
 | `SIMWB_PORT`, `SIMWB_NO_BROWSER`, `SIMWB_GUI_URL` | `simwb/server.py`, `simwb/mcp_server.py` | Port; skip the browser; GUI URL the MCP server forwards to. |
-| `SIMWB_OPENFOAM_DIR`, `SIMWB_OPENFOAM_CMD`, `SIMWB_AUTO_OPENFOAM`, `SIMWB_OPENFOAM_URL` + `SIMWB_OPENFOAM_SHA256` (another installer: both required), `SIMWB_DOCKER_IMAGE`, `SIMWB_MPI_DIR` | `simwb/solvers/openfoam/runner.py`, `installer.py` | OpenFOAM location and auto-install. |
+| `SIMWB_OPENFOAM_DIR`, `SIMWB_OPENFOAM_CMD`, `SIMWB_AUTO_OPENFOAM`, `SIMWB_OPENFOAM_URL` + `SIMWB_OPENFOAM_SHA256` (another installer: both required), `SIMWB_DOCKER_IMAGE`, `SIMWB_USE_DOCKER` (Windows only: use Docker instead of the built-in install), `SIMWB_MPI_DIR` | `simwb/solvers/openfoam/runner.py`, `installer.py` | OpenFOAM location and auto-install. |
 | `SIMWB_MEM_LIMIT_GB` | `simwb/memlimit.py` | Memory cap for helper processes. |
 | `SIMWB_GMSH_DEBUG` | `simwb/gmsh_worker.py` | Extra gmsh output. |
 | `SIMWB_ALLOWED_HOSTS` | `simwb/server.py` | Extra host names the server answers to (comma separated; default 127.0.0.1, localhost, [::1]). |

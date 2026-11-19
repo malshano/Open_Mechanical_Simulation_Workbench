@@ -422,6 +422,12 @@ STUDIES = {
 
 
 # ---- plain-language explanations shown in the GUI when a study or a model option is selected
+# Settings a bundled example (examples/*.step) gets when it is imported, so that it can run at once. They are
+# assumptions for the example, not data of the CAD model: the user changes them in Setup.
+EXAMPLE_SETTINGS = {
+    "quadcopter.step": {"mass_kg": 1.2},  # all-up mass of a ~450 mm class quad (rotors carry it: ~2.9 N each in hover)
+}
+
 EXPLAIN = {
     "heat_conduction": (
         "Heat conduction inside solid parts (Fourier's law), solved with the built-in finite-element solver. The air "

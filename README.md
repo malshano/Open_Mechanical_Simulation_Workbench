@@ -55,7 +55,8 @@ physical cores for large meshes (about one core per 20k cells), or pick a number
 (`decomposePar`), solved with `mpiexec`, and the latest result joined (`reconstructPar`) automatically.
 
 * An OpenFOAM that is already installed is used instead (`SIMWB_OPENFOAM_CMD`, Linux/macOS install, WSL,
-  `%USERPROFILE%\OpenFOAM`, Docker image `opencfd/openfoam-default:2606`).
+  `%USERPROFILE%\OpenFOAM`). Docker is not needed: on Windows it is used only with `SIMWB_USE_DOCKER=1`
+  (image `opencfd/openfoam-default:2512`); on Linux/macOS it is a fallback.
 * `SIMWB_OPENFOAM_DIR` moves the built-in copy; `SIMWB_AUTO_OPENFOAM=0` turns the automatic setup off.
 * Linux/macOS: install OpenFOAM from openfoam.com (e.g. `apt install openfoam2606-default`); it is found automatically.
 * OpenFOAM is free software (GPL) by OpenCFD Ltd; its licence files are in `openfoam\licenses`.

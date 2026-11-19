@@ -23,6 +23,55 @@ def test_custom_installer_url_needs_checksum(monkeypatch):
     assert installer.installer_source() == ("https://mirror.invalid/of.exe", "ab" * 32)
 
 
+def _fake_docker(monkeypatch, image_exists):
+    """Docker is installed and running, no native OpenFOAM anywhere; `image_exists` decides the image lookups."""
+    def run(cmd, timeout=20):
+        if cmd[:2] == ["docker", "info"]:
+            return 0, "27.0"
+        if cmd[:2] in (["docker", "image"], ["docker", "manifest"]):
+            return (0 if image_exists else 1), ""
+        return 1, ""
+    monkeypatch.setattr(runner, "_run", run)
+    monkeypatch.setattr(runner.shutil, "which", lambda n: "docker" if n == "docker" else None)
+    monkeypatch.setattr(runner, "find_windows_install", lambda: None)
+    monkeypatch.delenv("SIMWB_OPENFOAM_CMD", raising=False)
+    monkeypatch.delenv("WM_PROJECT_DIR", raising=False)
+
+
+def test_docker_without_the_image_is_not_openfoam(monkeypatch):
+    """A running Docker whose OpenFOAM image does not exist made every run fail with 'not found' while the workbench
+    said OpenFOAM was available (instead of offering the built-in installer)."""
+    monkeypatch.setattr(runner.sys, "platform", "linux")
+    monkeypatch.setattr(runner.glob, "glob", lambda p: [])
+    _fake_docker(monkeypatch, image_exists=False)
+    res = runner.detect(refresh=True)
+    assert not res["available"] and runner.DOCKER_IMAGE in res["detail"] and res["help"]
+    _fake_docker(monkeypatch, image_exists=True)
+    res = runner.detect(refresh=True)
+    assert res["available"] and res["backend"] == "docker"
+    runner._CACHE.clear()
+
+
+def test_a_running_docker_never_replaces_the_built_in_install_on_windows(monkeypatch):
+    """The first start sets up the native Windows OpenFOAM when none is found. A Docker Desktop that is running (even
+    with its image) must not count as OpenFOAM there: the install was skipped and runs failed."""
+    monkeypatch.setattr(runner.sys, "platform", "win32")
+    monkeypatch.delenv("SIMWB_USE_DOCKER", raising=False)
+    monkeypatch.setattr(runner.shutil, "which", lambda n: None)
+    _fake_docker(monkeypatch, image_exists=True)
+    monkeypatch.setattr(runner.shutil, "which", lambda n: "docker" if n == "docker" else None)
+    res = runner.detect(refresh=True)
+    assert not res["available"] and res["installable"]
+    started = []
+    monkeypatch.setattr(installer, "supported", lambda: True)
+    monkeypatch.setattr(installer, "start", lambda jm: started.append(jm) or "job")
+    monkeypatch.delenv("SIMWB_AUTO_OPENFOAM", raising=False)
+    assert installer.auto_start(object()) == "job" and started        # the built-in install starts
+    monkeypatch.setenv("SIMWB_USE_DOCKER", "1")                       # Docker only when asked for
+    assert runner.detect(refresh=True)["backend"] == "docker"
+    runner._CACHE.clear()
+
+
 def test_tampered_installer_is_refused(tmp_path):
     import hashlib
     f = tmp_path / "of.exe"

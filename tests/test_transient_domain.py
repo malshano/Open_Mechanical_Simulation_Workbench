@@ -164,6 +164,26 @@ def test_c_domain_cooling_case(workspace, tmp_path):
     assert meta["inlets"][0]["area"] == pytest.approx(A, rel=0.03)
 
 
+def test_example_quadcopter_arrives_with_its_mass_and_a_missing_mass_points_to_its_input(workspace, tmp_path):
+    """The bundled quadcopter must be ready to set up (no empty vehicle mass), and when a mass is missing the message
+    carries the input that fixes it (the GUI jumps there on a click)."""
+    P = workspace
+    pr = P.create_project("Quad", "external_aero")
+    _wait(pr.import_step(ROOT / "examples" / "quadcopter.step", original_name="quadcopter.step"))
+    assert pr.data["settings"]["mass_kg"] > 0
+    assert not [c for c in pr.check() if c["level"] == "error" and "mass" in c["message"]]
+    pr.set_settings(mass_kg=0)
+    miss = [c for c in pr.check() if c["level"] == "error" and "vehicle mass" in c["message"]]
+    assert miss and miss[0]["target"] == '[data-setting="mass_kg"]'
+    # a user's own file with the same name, from another folder, gets no assumed mass
+    import shutil
+    mine = tmp_path / "quadcopter.step"
+    shutil.copy(ROOT / "examples" / "quadcopter.step", mine)
+    pr2 = P.create_project("Mine", "external_aero")
+    _wait(pr2.import_step(mine))
+    assert not pr2.data["settings"]["mass_kg"]
+
+
 def test_transient_aero_case(workspace):
     P = workspace
     pr = P.create_project("Quad", "external_aero")

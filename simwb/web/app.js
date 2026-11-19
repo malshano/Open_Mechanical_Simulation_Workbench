@@ -744,9 +744,10 @@ function renderDock() {
   if (S.dock.tab === 'msgs') {
     const cs = S.p.checks || [];
     const ic = { error: '✕', warning: '⚠', ok: '✓', info: 'ℹ' };
-    body.innerHTML = cs.length ? cs.map(c => `<div class="msg ${c.level}" data-step="${c.step || ''}"><span class="lv">${ic[c.level] || '·'}</span>
+    body.innerHTML = cs.length ? cs.map(c => `<div class="msg ${c.level}" data-step="${c.step || ''}" data-target="${esc(c.target || '')}" ${c.target ? 'title="Click to go to the input that fixes this"' : ''}><span class="lv">${ic[c.level] || '·'}</span>
       <span class="stp">${esc(c.step || '')}</span><span>${esc(c.message || c.text || '')}</span></div>`).join('') : '<span class="muted">No messages.</span>';
-    body.querySelectorAll('.msg').forEach(m => m.onclick = () => m.dataset.step && goStep(m.dataset.step));
+    // a click goes to the step, and to the input that fixes the message when it has one (scrolled to, opened, flashed)
+    body.querySelectorAll('.msg').forEach(m => m.onclick = () => m.dataset.step && treeGo(m.dataset.step + (m.dataset.target ? '|' + m.dataset.target : '')));
   } else {
     const j = runningJob() || Object.values(S.jobs).filter(Boolean).sort((a, b) => (b.started || 0) - (a.started || 0))[0];
     if (!j) { body.innerHTML = '<span class="muted">No job has run since the project was opened. Logs of solver runs appear here.</span>'; return; }
@@ -1465,7 +1466,7 @@ function aeroInfo() {
 
 function checklist() {
   const c = S.p.checks || [];
-  return `<h3>Readiness</h3><div class="checks">${c.map(x => `<div class="check ${x.level}"><span class="dot"></span><span>${esc(x.message)}</span></div>`).join('')}</div>`;
+  return `<h3>Readiness</h3><div class="checks">${c.map(x => `<div class="check ${x.level}" ${x.target ? `data-go="${esc(`${x.step}|${x.target}`)}" style="cursor:pointer" title="Click to go to the input that fixes this"` : ''}><span class="dot"></span><span>${esc(x.message)}</span></div>`).join('')}</div>`;
 }
 
 // ---- mesh
@@ -2961,6 +2962,7 @@ $('#optAir').onchange = e => { S.showAir = e.target.checked; viewer.setShowAir(S
 // ------------------------------------------------------------------ panel event binding
 function bindPanel(el) {
   el.querySelectorAll('[data-goto]').forEach(b => b.onclick = () => goStep(b.dataset.goto));
+  el.querySelectorAll('.check[data-go]').forEach(c => c.onclick = () => treeGo(c.dataset.go));
   const drop = $('#drop', el);
   if (drop) {
     const inp = $('#fileIn', el);

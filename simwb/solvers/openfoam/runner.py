@@ -5,7 +5,7 @@ Supported backends (checked in this order):
            'wsl -d Ubuntu -e bash -lc "source /usr/lib/openfoam/openfoam2606/etc/bashrc && cd {case_posix} && bash ./Allrun"'
   native : OpenFOAM environment already loaded (Linux/macOS), or a bashrc in a standard location
   wsl    : Windows Subsystem for Linux with OpenFOAM installed in the default distro
-  docker : Docker with the opencfd/openfoam-default image
+  docker : Docker with the opencfd/openfoam-default image (Linux / macOS; on Windows only with SIMWB_USE_DOCKER=1)
   windows: native Windows build from openfoam.com (OpenFOAM-v2xxx-windows-mingw.exe, per-user install is fine);
            steps are run directly from Python; parallel runs use the MS-MPI runtime in <workbench>/mpi
            (set up by installer.py, no system install) or a system MS-MPI
@@ -22,7 +22,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-DOCKER_IMAGE = os.environ.get("SIMWB_DOCKER_IMAGE", "opencfd/openfoam-default:2606")
+# (Docker Hub has opencfd/openfoam-default tags up to 2512; there is no 2606 image, unlike the Windows installer)
+DOCKER_IMAGE = os.environ.get("SIMWB_DOCKER_IMAGE", "opencfd/openfoam-default:2512")
 _CACHE = {}
 
 BASHRC_GLOBS = [
@@ -204,10 +205,21 @@ def detect(refresh=False) -> dict:
             else:
                 res["detail"] = ("Native Windows OpenFOAM found, but libPstream.dll could not be switched to the "
                                  "serial version (no write access to the OpenFOAM folder).")
-    if not res["available"] and shutil.which("docker"):
+    # Docker is a fallback for Linux / macOS only. On Windows the workbench installs its own native OpenFOAM, and a Docker
+    # Desktop that happens to be running must not stop that (it made the first start skip the built-in install and then
+    # fail on the missing image): there it is used only when asked for (SIMWB_USE_DOCKER=1).
+    if (not res["available"] and shutil.which("docker")
+            and (sys.platform != "win32" or os.environ.get("SIMWB_USE_DOCKER") == "1")):
         code, out = _run(["docker", "info", "--format", "{{.ServerVersion}}"])
         if code == 0:
-            res.update(available=True, backend="docker", detail=DOCKER_IMAGE)
+            # a running Docker is not enough: the image must be here or exist on the registry (an image name that
+            # does not exist made every run fail with "not found" while the workbench said OpenFOAM was available)
+            if _run(["docker", "image", "inspect", DOCKER_IMAGE])[0] == 0 or \
+                    _run(["docker", "manifest", "inspect", DOCKER_IMAGE])[0] == 0:
+                res.update(available=True, backend="docker", detail=DOCKER_IMAGE)
+            else:
+                res["detail"] = (f"Docker is running but the image {DOCKER_IMAGE} was not found (locally or on Docker "
+                                 "Hub); set SIMWB_DOCKER_IMAGE to an OpenFOAM image that exists.")
     if not res["available"]:
         res["help"] = install_help()
         res["installable"] = sys.platform == "win32"  # built-in installer (installer.py)
@@ -224,7 +236,8 @@ def install_help() -> str:
             "  1. WSL: in an *administrator* PowerShell run  `wsl --install -d Ubuntu`, reboot, then in Ubuntu run:\n"
             "       curl https://dl.openfoam.com/add-debian-repo.sh | sudo bash\n"
             "       sudo apt-get install -y openfoam2606-default\n"
-            "  2. Docker Desktop: install it and the workbench will use the image " + DOCKER_IMAGE + ".\n"
+            "  2. Docker Desktop (advanced): set SIMWB_USE_DOCKER=1 and the workbench will use the image "
+            + DOCKER_IMAGE + ".\n"
             "The heat-conduction study works without OpenFOAM."
         )
     return ("OpenFOAM was not found. Install OpenFOAM (openfoam.com, v2206 or newer) or Docker, "

@@ -510,6 +510,11 @@ class Project:
         # the new file only replaces source.step (and the geometry data) once gmsh has read it successfully
         incoming = self.geo_dir / "incoming.step"
         shutil.copy(src, incoming)
+        # a bundled example arrives with the settings it needs to run (only the ones the user has not set yet)
+        if src.parent.resolve() == EXAMPLES.resolve():
+            for k, v in studies.EXAMPLE_SETTINGS.get(src.name, {}).items():
+                if k in self.data["settings"] and not self.data["settings"][k]:
+                    self.data["settings"][k] = v
         self.data["geometry"]["pending"] = {"original_name": original_name or src.name, "scale": scale, "format": fmt}
         if self.data["geometry"].get("status") in (None, "none", "error"):
             self.data["geometry"]["status"] = "importing"
@@ -1959,9 +1964,10 @@ class Project:
 
     def check(self) -> list:
         out = []
-        ok = lambda m, step: out.append({"level": "ok", "message": m, "step": step})  # noqa: E731
-        warn = lambda m, step: out.append({"level": "warning", "message": m, "step": step})  # noqa: E731
-        err = lambda m, step: out.append({"level": "error", "message": m, "step": step})  # noqa: E731
+        # target: a CSS selector of the input in the step's panel that fixes the message (the GUI jumps to it on a click)
+        ok = lambda m, step, target=None: out.append({"level": "ok", "message": m, "step": step, "target": target})  # noqa: E731
+        warn = lambda m, step, target=None: out.append({"level": "warning", "message": m, "step": step, "target": target})  # noqa: E731
+        err = lambda m, step, target=None: out.append({"level": "error", "message": m, "step": step, "target": target})  # noqa: E731
         g = self.data["geometry"]
         if g.get("status") != "ready":
             err("Import a STEP file", "geometry")
@@ -2116,13 +2122,13 @@ class Project:
                          "does not turn), so the run takes many time steps for the same answer. Use Analysis = steady "
                          "(much faster), or Sliding mesh to rotate the part in time", "setup")
             if float(s.get("speed", 0)) <= 0 and not self.data["rotors"]:
-                err("Set a flow speed or add rotors", "setup")
+                err("Set a flow speed or add rotors", "setup", '[data-setting="speed"]')
             if not self.data["rotors"]:
                 ok("No rotors: forces, moments and coefficients of the body are computed", "setup")
             elif (not float(s.get("mass_kg") or 0)
                   and any(r.get("thrust_N") in (None, "") for r in self.data["rotors"])):
                 err("Enter the vehicle mass: automatic rotor thrust carries the weight (or set each rotor's thrust)",
-                    "setup")
+                    "setup", '[data-setting="mass_kg"]')
             else:
                 ok(f"{len(self.data['rotors'])} rotors, thrust "
                    f"{self._rotor_thrust_text()}", "setup")
