@@ -259,6 +259,19 @@ Server -> client events (JSON): `job` (progress), `project_changed`, `highlight`
 - Imports keep parts intact: exact `occ.rotate` for rotations (not an affine transform, which rebuilds faces as BSplines), parts cut one by one out of the air box when fusing loses faces, zero-volume slivers dropped.
 - Quality: normalised shape ratio (1 = perfect tet, below 0.1 poor); `Project._foam_quality` reports non-orthogonality.
 
+### 6.1 Hex-dominant mesh (`simwb/solvers/openfoam/hexmesh.py`)
+
+An optional mesher for `external_aero` (`mesh.method == "hex"`, set with `set_mesh(method=...)`, the REST `mesh/settings` body and the `set_mesh_settings` tool). `Project._mesh_work` branches to `_hex_mesh_work`; the tetrahedral mesher is unchanged.
+
+- **Scope**: a body in the automatic box of air; wall conditions only. `hexmesh.unsupported()` returns the reason it cannot be used (rotors, moving zones, symmetry planes, a non-box air volume, a condition on an air-box face); the GUI shows it, `set_mesh(method="hex")` and the writer refuse. The tetrahedral mesh stays the default.
+- **Plan** (`make_plan`): same sizing rules as the Gmsh mesher (`PRESETS`, `FEATURE_CELLS`, `L/(4n)` wall size, thin-face sizes, user refinements and regions). The surface cell is `h_wall`; the background cell is `h_wall * 2^levels` (4..7 levels, as few as `MAX_BACKGROUND_CELLS` allows), cubic cells, a wake box downstream (level `levels - 2`) when the speed is at least 1 m/s. Faces with a local size form one surface per refinement level.
+- **Case** (`write_case`): one STL per refinement group (`<patch>_L<level>`), `blockMeshDict` (single patch `farfield`), `surfaceFeatureExtractDict`, `snappyHexMeshDict` (castellate, snap, layers with `relativeSizes false` and the same y+-based first layer as the tetrahedral layers), `createPatchDict`, a `controlDict` with `writeFormat ascii; writePrecision 10;` (snappyHexMesh refuses to merge points otherwise). `locationInMesh` is a point in the air off every grid plane.
+- **Run**: `STEPS` = blockMesh, surfaceFeatureExtract, snappyHexMesh, createPatch (merges the groups into the patches the setup knows), checkMesh (`allow_fail`). In the v2606 Windows build `createPatch -overwrite` writes to `0/polyMesh`; `finalize()` moves it to `constant/polyMesh`. Non-Windows backends run the same steps from an `Allmesh` script (not tested).
+- **Stored**: `mesh_dir/polyMesh_hex` is the real mesh. `mesh.npz` holds display arrays in the same format as the tetrahedral mesh (cells split into display tetrahedra by `results_loader.display_mesh`, boundary triangles with a representative CAD face per patch, `tri_owner`, a per-tet quality of `1 - worst non-orthogonality / 90 deg`, `hex = 1`). `load_mesh()` adds `hex_dir`. `stats` has `method: "hex"`, `cell_types`, `foam_quality` (from checkMesh) and a `hex` block (levels, layers coverage, problems, warnings).
+- **Case writer**: `write_external_aero` copies `polyMesh_hex` into the case (`_use_polymesh`) instead of converting tetrahedra, does not add layers again, and refuses rotors, zones and symmetry planes.
+- **Quality rules** (`parse_logs`): concave cells are a warning (snappyHexMesh limits them); any other failed `checkMesh` item is a problem. The cell limit (`MAX_CELLS`) stopping refinement is reported.
+- **Known limits**: sections of the display mesh take seconds (12 display tetrahedra per hexahedron); layer coverage depends on the parts being several cells thick; the log formats are those of OpenFOAM v2606.
+
 ---
 
 ## 7. OpenFOAM integration
