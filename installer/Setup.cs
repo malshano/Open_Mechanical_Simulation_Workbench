@@ -54,11 +54,51 @@ static class Setup
         return ds;
     }
 
-    // a folder directly on a drive (C:\SimWB): there is no parent folder that someone else could rename or swap
-    static bool OnDriveRoot(string dir)
+    // The existing parent folders of dir (up to, not including, the drive root): each must be private, or someone else
+    // could rename it and put their own folder in its place (a folder made on C: gives every user that right).
+    // Parents that do not exist yet are not a problem: Prepare creates them private. null when all are fine.
+    static string ChainProblem(string dir)
     {
-        string d = dir.TrimEnd('\\'), parent = Path.GetDirectoryName(d);
-        return parent != null && parent.TrimEnd('\\') == Path.GetPathRoot(d).TrimEnd('\\') && !d.StartsWith("\\\\");
+        if (dir.StartsWith("\\\\")) return "Network folders cannot be used.";
+        string root = Path.GetPathRoot(dir).TrimEnd('\\');
+        for (string p = Path.GetDirectoryName(dir.TrimEnd('\\')); p != null && p.TrimEnd('\\') != root; p = Path.GetDirectoryName(p))
+        {
+            if (!Directory.Exists(p)) continue;
+            try
+            {
+                DirectoryInfo di = new DirectoryInfo(p);
+                if ((di.Attributes & FileAttributes.ReparsePoint) != 0) return p + " is a link.";
+                DirectorySecurity a = di.GetAccessControl();
+                if (!Trusted((SecurityIdentifier)a.GetOwner(typeof(SecurityIdentifier)))) return p + " belongs to another user.";
+                if (!OnlyTrusted(a)) return p + " can be changed by other users of this computer.";
+            }
+            catch (Exception e) { return "Cannot check " + p + ": " + e.Message; }
+        }
+        return null;
+    }
+
+    static string PerUserFolder()
+    {
+        string local = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+        if (string.IsNullOrEmpty(local)) local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        return Path.GetFullPath(Path.Combine(local, "Programs", "SimWB"));
+    }
+
+    // The folder that will really be used for what the user typed, adjusting it when it is not safe: the folder itself
+    // when it is fine; else a SimWB folder directly on the same drive; else the per-user folder. note says why.
+    public static string Resolve(string typed, out string note)
+    {
+        note = null;
+        string t = TargetFolder(typed), why = Problem(t);
+        if (why == null) return t;
+        note = why;
+        string drive = Path.GetPathRoot(t);
+        if (drive != null && !drive.StartsWith("\\\\"))
+        {
+            string alt = Path.Combine(drive, "SimWB");
+            if (!string.Equals(alt, t, StringComparison.OrdinalIgnoreCase) && Problem(alt) == null) return alt;
+        }
+        return PerUserFolder();
     }
 
     static bool Trusted(SecurityIdentifier s)
@@ -101,9 +141,8 @@ static class Setup
     public static string Problem(string dir)
     {
         if (UnderProfile(dir)) return null;
-        if (!OnDriveRoot(dir))
-            return "Outside your user folder the workbench goes directly on a drive (for example C:\\SimWB or D:\\SimWB): a folder " +
-                   "inside other folders could be swapped by other users. Choose such a folder.";
+        string chain = ChainProblem(dir);
+        if (chain != null) return chain;
         if (!Directory.Exists(dir)) return null;
         try
         {
@@ -127,6 +166,12 @@ static class Setup
         if (UnderProfile(dir)) { Directory.CreateDirectory(dir); return; }
         string why = Problem(dir);
         if (why != null) throw new InvalidOperationException(why);
+        // parents that do not exist yet are made private first, from the top (D:\Engineering, then D:\Engineering\Tools)
+        string root = Path.GetPathRoot(dir).TrimEnd('\\');
+        List<string> missing = new List<string>();
+        for (string p = Path.GetDirectoryName(dir.TrimEnd('\\')); p != null && p.TrimEnd('\\') != root && !Directory.Exists(p); p = Path.GetDirectoryName(p))
+            missing.Insert(0, p);
+        foreach (string m in missing) Directory.CreateDirectory(m, Locked());
         bool existed = Directory.Exists(dir);
         // decided once, before anything is changed: a folder that is not private now must still be empty after it is locked
         bool wasPrivate = existed && OnlyTrusted(new DirectoryInfo(dir).GetAccessControl());
@@ -153,9 +198,7 @@ static class Setup
     // written (locked-down computer) the per-user folder.
     public static string DefaultFolder()
     {
-        string local = Environment.GetEnvironmentVariable("LOCALAPPDATA");
-        if (string.IsNullOrEmpty(local)) local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        string perUser = Path.GetFullPath(Path.Combine(local, "Programs", "SimWB"));
+        string perUser = PerUserFolder();
         if (IsInstall(perUser)) return perUser;
         string drive = Environment.GetEnvironmentVariable("SystemDrive");
         if (string.IsNullOrEmpty(drive)) drive = "C:";
@@ -183,9 +226,9 @@ static class Setup
         Label l1 = new Label { Text = "Install the workbench into this folder:", Left = 16, Top = 16, Width = 520 };
         TextBox box = new TextBox { Text = defaultDir, Left = 16, Top = 40, Width = 440 };
         Button browse = new Button { Text = "Browse...", Left = 464, Top = 38, Width = 80 };
-        Label will = new Label { Left = 16, Top = 70, Width = 528, Height = 34, ForeColor = Color.DimGray };
-        CheckBox desk = new CheckBox { Text = "Put an icon on the desktop", Left = 16, Top = 114, Width = 400, Checked = true };
-        Label note = new Label { Left = 16, Top = 142, Width = 528, Height = 50, ForeColor = Color.DimGray,
+        Label will = new Label { Left = 16, Top = 70, Width = 528, Height = 40, ForeColor = Color.DimGray };
+        CheckBox desk = new CheckBox { Text = "Put an icon on the desktop", Left = 16, Top = 118, Width = 400, Checked = true };
+        Label note = new Label { Left = 16, Top = 146, Width = 528, Height = 50, ForeColor = Color.DimGray,
             Text = "A Start menu entry (and an Uninstall entry) is always made. About 10 GB of free space and 15-30 minutes " +
                    "are needed: the workbench downloads Python, OpenFOAM and CalculiX once. No administrator rights." };
         Button ok = new Button { Text = "Install", Left = 380, Top = 208, Width = 80, DialogResult = DialogResult.OK };
@@ -194,10 +237,10 @@ static class Setup
         {
             try
             {
-                string t = TargetFolder(box.Text), why = Problem(t);
-                will.Text = why ?? ("Will install into: " + t);
-                will.ForeColor = why == null ? Color.DimGray : Color.Firebrick;
-                ok.Enabled = why == null && box.Text.Trim().Length > 0;
+                string why, t = Resolve(box.Text, out why);
+                will.Text = "Will install into: " + t + (why == null ? "" : "\r\nAdjusted, because " + why);
+                will.ForeColor = why == null ? Color.DimGray : Color.DarkGoldenrod;
+                ok.Enabled = box.Text.Trim().Length > 0;
             }
             catch { will.Text = "This is not a valid folder."; ok.Enabled = false; }
         };
@@ -211,7 +254,8 @@ static class Setup
         f.AcceptButton = ok; f.CancelButton = cancel;
         refresh();
         if (f.ShowDialog() != DialogResult.OK) return null;
-        return new Choice { Dir = TargetFolder(box.Text), Desktop = desk.Checked };
+        string unused;
+        return new Choice { Dir = Resolve(box.Text, out unused), Desktop = desk.Checked };
     }
 
     [STAThread]
@@ -223,7 +267,8 @@ static class Setup
         if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("SIMWB_QUIET")))
         {
             string d = Environment.GetEnvironmentVariable("SIMWB_INSTALL_DIR");
-            c = new Choice { Dir = TargetFolder(string.IsNullOrEmpty(d) ? defaultDir : d), Desktop = string.IsNullOrEmpty(Environment.GetEnvironmentVariable("SIMWB_NO_DESKTOP_SHORTCUT")) };
+            string unused;
+            c = new Choice { Dir = Resolve(string.IsNullOrEmpty(d) ? defaultDir : d, out unused), Desktop = string.IsNullOrEmpty(Environment.GetEnvironmentVariable("SIMWB_NO_DESKTOP_SHORTCUT")) };
         }
         else
         {

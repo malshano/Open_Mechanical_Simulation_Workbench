@@ -45,11 +45,7 @@ $Source  = Split-Path -Parent $PSScriptRoot          # the folder with simwb\ (t
 # when the user (or Administrators) own it.
 function Test-InstallDir([string]$Dir) {      # $null when usable, otherwise the reason
     if (($Dir.TrimEnd('\') + '\').StartsWith($env:USERPROFILE.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { return $null }
-    # directly on a drive (C:\SimWB): no parent folder that someone else could rename or swap
-    $d = $Dir.TrimEnd('\')
-    if ($d.StartsWith('\\') -or (Split-Path $d -Parent).TrimEnd('\') -ne [IO.Path]::GetPathRoot($d).TrimEnd('\')) {
-        return "Outside your user folder the workbench goes directly on a drive (for example C:\SimWB or D:\SimWB): a folder inside other folders could be swapped by other users. Choose such a folder."
-    }
+    $chain = Test-ChainProblem $Dir; if ($chain) { return $chain }
     if (-not (Test-Path -LiteralPath $Dir)) { return $null }
     if ((Get-Item -LiteralPath $Dir -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { return "$Dir is a link, not a folder." }
     $acl = Get-Acl -LiteralPath $Dir
@@ -57,6 +53,34 @@ function Test-InstallDir([string]$Dir) {      # $null when usable, otherwise the
     # files in a folder that others could write to may have been planted: only an empty folder or a private one
     if (-not (Test-OnlyTrusted $acl) -and @(Get-ChildItem -LiteralPath $Dir -Force).Count -gt 0) { return "$Dir already holds files and is not private to you: choose an empty folder." }
     $null
+}
+# The existing parent folders (up to, not including, the drive root) must be private, or someone else could rename one
+# and put their own folder in its place (a folder made on C: gives every user that right). Parents that do not exist
+# yet are made private by New-LockedDirectory. $null when all are fine.
+function Test-ChainProblem([string]$Dir) {
+    $d = $Dir.TrimEnd('\')
+    if ($d.StartsWith('\\')) { return 'Network folders cannot be used.' }
+    $root = [IO.Path]::GetPathRoot($d).TrimEnd('\')
+    for ($p = Split-Path $d -Parent; $p -and $p.TrimEnd('\') -ne $root; $p = Split-Path $p -Parent) {
+        if (-not (Test-Path -LiteralPath $p)) { continue }
+        if ((Get-Item -LiteralPath $p -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { return "$p is a link." }
+        $a = Get-Acl -LiteralPath $p
+        if (-not (Test-TrustedSid $a.GetOwner([Security.Principal.SecurityIdentifier]))) { return "$p belongs to another user." }
+        if (-not (Test-OnlyTrusted $a)) { return "$p can be changed by other users of this computer." }
+    }
+    $null
+}
+# The folder to really use for $Dir, adjusted when it is not safe: a SimWB folder directly on the same drive, else the
+# per-user folder. Says why when it adjusts.
+function Resolve-InstallDir([string]$Dir) {
+    $why = Test-InstallDir $Dir
+    if (-not $why) { return $Dir }
+    $root = [IO.Path]::GetPathRoot($Dir)
+    $alt = if ($root -and -not $root.StartsWith('\\')) { Join-Path $root 'SimWB' } else { $null }
+    $res = if ($alt -and ($alt -ne $Dir.TrimEnd('\')) -and -not (Test-InstallDir $alt)) { $alt } else { Join-Path $env:LOCALAPPDATA 'Programs\SimWB' }
+    Write-Host "  Note: $why" -ForegroundColor Yellow
+    Write-Host "  Installing into $res instead." -ForegroundColor Yellow
+    $res
 }
 function Test-TrustedSid($sid) {
     $sid.Equals([Security.Principal.WindowsIdentity]::GetCurrent().User) -or
@@ -87,6 +111,10 @@ function New-LockedDirectory([string]$Dir) {
                        (New-Object Security.Principal.SecurityIdentifier([Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null)))) {
         $sec.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
     }
+    # parents that do not exist yet are made private first, from the top (D:\Engineering, then D:\Engineering\Tools)
+    $root = [IO.Path]::GetPathRoot($Dir).TrimEnd('\')
+    $missing = @(); for ($p = Split-Path $Dir.TrimEnd('\') -Parent; $p -and $p.TrimEnd('\') -ne $root -and -not (Test-Path -LiteralPath $p); $p = Split-Path $p -Parent) { $missing = @($p) + $missing }
+    foreach ($m in $missing) { [IO.Directory]::CreateDirectory($m, $sec) | Out-Null }
     $existed = Test-Path -LiteralPath $Dir
     # decided once, before anything is changed: a folder that is not private now must still be empty after it is locked
     $wasPrivate = $existed -and (Test-OnlyTrusted (Get-Acl -LiteralPath $Dir))
@@ -105,10 +133,9 @@ if (-not $InstallDir) {
     $perUser = Join-Path $env:LOCALAPPDATA 'Programs\SimWB'
     $short = Join-Path $(if ($env:SystemDrive) { $env:SystemDrive } else { 'C:' }) 'SimWB'
     if ((Test-Path (Join-Path $perUser 'install.log')) -or (Test-Path (Join-Path $perUser 'simwb\__init__.py'))) { $InstallDir = $perUser }
-    elseif (Test-InstallDir $short) { $InstallDir = $perUser }
     else { $InstallDir = $short }
 }
-$InstallDir = [IO.Path]::GetFullPath($InstallDir)
+$InstallDir = Resolve-InstallDir ([IO.Path]::GetFullPath($InstallDir))   # (adjusted, with a note, when it is not safe)
 $Log     = Join-Path $InstallDir 'install.log'
 $T0      = Get-Date
 $TotalSteps = 7
