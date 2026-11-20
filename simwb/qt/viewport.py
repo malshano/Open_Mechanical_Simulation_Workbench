@@ -15,7 +15,7 @@ from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 from vtkmodules.util.numpy_support import numpy_to_vtk, numpy_to_vtkIdTypeArray
 from vtkmodules.vtkCommonCore import vtkLookupTable, vtkPoints
 from vtkmodules.vtkCommonDataModel import vtkCellArray, vtkPolyData
-from vtkmodules.vtkFiltersCore import vtkFeatureEdges, vtkPolyDataNormals
+from vtkmodules.vtkFiltersCore import vtkCellDataToPointData, vtkContourFilter, vtkFeatureEdges, vtkPolyDataNormals
 from vtkmodules.vtkFiltersSources import vtkArrowSource, vtkCubeSource
 from vtkmodules.vtkCommonTransforms import vtkTransform
 from vtkmodules.vtkFiltersGeneral import vtkTransformFilter
@@ -741,6 +741,44 @@ class Viewport(QWidget):
             self.ren.AddActor(a)
             self.air_actors.append(a)
 
+    def _add_contours(self, pd, per_face: bool, lo: float, hi: float, spec: dict, log: bool) -> int:
+        """Lines of equal value on the drawn surface: spec['n'] evenly spaced levels between lo and hi (geometric on a log scale) and the extra
+        spec['levels']. Returns how many levels were drawn."""
+        n = max(int(spec.get("n", 10)), 1)
+        even = np.geomspace(lo, hi, n + 2)[1:-1] if log and lo > 0 else np.linspace(lo, hi, n + 2)[1:-1]
+        levels = sorted({float(v) for v in list(even) + [float(x) for x in (spec.get("levels") or []) if lo < float(x) < hi]})   # (an extra outside the range draws nothing)
+        src = pd
+        if per_face:                                                  # (the values sit on the faces: averaged to the corners for the lines)
+            c2p = vtkCellDataToPointData()
+            c2p.SetInputData(pd)
+            c2p.Update()
+            src = c2p.GetOutput()
+        cf = vtkContourFilter()
+        cf.SetInputData(src)
+        cf.SetNumberOfContours(len(levels))
+        for i, v in enumerate(levels):
+            cf.SetValue(i, v)
+        cf.ComputeScalarsOff()
+        cf.Update()
+        t = theme.tokens()
+        # a light line under a dark one: the lines read on the dark end of a colour map as well as on the bright end
+        for width, colour, opacity, offset in ((4.0, "#ffffff", 0.55, -1), (1.7, "#101521", 0.95, -2)):
+            m = vtkPolyDataMapper()
+            m.SetInputConnection(cf.GetOutputPort())
+            m.ScalarVisibilityOff()
+            m.SetResolveCoincidentTopologyToPolygonOffset()
+            m.SetRelativeCoincidentTopologyLineOffsetParameters(offset, offset)
+            a = vtkActor()
+            a.SetMapper(m)
+            a.GetProperty().SetColor(*_rgb(colour))
+            a.GetProperty().SetLineWidth(width)
+            a.GetProperty().SetLighting(False)
+            a.GetProperty().SetOpacity(opacity)
+            a.PickableOff()
+            self.ren.AddActor(a)
+            self.overlay_actors.append(a)
+        return len(levels)
+
     def _polydata(self, pts: np.ndarray, tris: np.ndarray) -> vtkPolyData:
         pd = vtkPolyData()
         p = vtkPoints()
@@ -770,10 +808,11 @@ class Viewport(QWidget):
     # ------------------------------------------------------------------ a field on a surface
     def show_surface(self, p: dict, *, name: str = "", unit: str = "", cmap: str = "turbo", reverse: bool = False,
                      bands: int = 0, vrange=None, edges: bool = False, deform: float | None = None, fixed_quality: bool = False,
-                     animate: bool = False, solid=None):
+                     animate: bool = False, solid=None, contours=None):
         """A surface payload {positions, indices, values, per, [categories, present, scale, disp, disp_kind]} coloured by
         its values. vrange: (lo, hi) or None for the payload's own; fixed_quality: the red-is-bad scale of cell quality. solid: (r, g, b) draws it
-        in that colour instead (the object, when a flow tool shows its own field); no colour bar then."""
+        in that colour instead (the object, when a flow tool shows its own field); no colour bar then. contours: {'on', 'n', 'levels'}: lines of
+        equal value, n evenly spaced between the lowest and highest value and any extra levels."""
         self.clear_overlay()
         if name != self._shown_name:
             self._shown_name = name
@@ -858,6 +897,9 @@ class Viewport(QWidget):
         self.ren.AddActor(act)
         self.overlay_actors.append(act)
         self._anim_poly = pd
+        self.overlay_info["contours"] = 0
+        if contours and contours.get("on") and solid is None and not cats:
+            self.overlay_info["contours"] = self._add_contours(pd, p.get("per") == "face", lo, hi, contours, p.get("scale") == "log")
         if solid is not None:
             self.legend.clear()
         elif cats:

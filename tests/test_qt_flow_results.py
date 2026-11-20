@@ -166,3 +166,20 @@ def test_the_flow_tools_follow_the_fields_of_the_result(ctl):
     assert "Q = " in f.iso_note.text()
     f.iso_on.setChecked(True)
     assert f.any_on() and f.request()["iso"]["on"]
+
+
+def test_contour_lines_are_part_of_the_display(ctl, solved):
+    """Lines of equal value: on or off in the Display tab, a number of evenly spaced ones and extra values to add."""
+    ctl.do("study.import", {"path": solved["static"]})
+    ctl.do("step.go", {"step": "results"})
+    ctl.do("results.tab", {"name": "display"})
+    ov = lambda: ctl.state()["view"]["overlay"]  # noqa: E731
+    assert ov()["contours"] == 0 and ctl.widget_do("results.contours")["value"] == {"checked": False}
+    assert ctl.widget_do("results.contours.n")["enabled"] is False                         # (waits for the switch)
+    ctl.do("results.show", {"contours": True, "contour_lines": 6})
+    assert ov()["contours"] == 6 and ctl.widget_do("results.contours.n")["enabled"] is True
+    lo, hi = ov()["range"]
+    ctl.do("results.show", {"contour_levels": [(lo + hi) / 2 * 1.013, hi * 10]})           # one inside the range, one outside it
+    assert ov()["contours"] == 7
+    ctl.do("results.show", {"contours": False})
+    assert ov()["contours"] == 0

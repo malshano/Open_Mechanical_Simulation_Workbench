@@ -649,7 +649,8 @@ class MainWindow(QMainWindow):
                         rng = (info["p01"], info["p99"])
                     self.view.show_geometry(False)
                     self.view.show_surface(p, name=r["field"], unit=info.get("unit", ""), cmap=r["cmap"], reverse=r["reverse"],
-                                           bands=r["bands"], edges=r["edges"], deform=r["deform"], animate=r["animate"], vrange=rng)
+                                           bands=r["bands"], edges=r["edges"], deform=r["deform"], animate=r["animate"], vrange=rng,
+                                           contours=r.get("contours"))
                     sec = r.get("section")
                     self.view.set_focus(self.engine.flow_focus() if sec and flow else None)
                     if sec and st["study"] in AIR_KINDS:      # a flow cut open: seen straight on, from the side that is kept

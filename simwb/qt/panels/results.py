@@ -131,6 +131,31 @@ class ResultsPanel(_Panel):
         row.addWidget(QLabel("to"))
         row.addWidget(self.rmax)
         v.addLayout(row)
+        v.addWidget(_h("Contours"))
+        self.cont_on = wid(QCheckBox("Show contour lines"), "results.contours")
+        self.cont_on.setToolTip("Draw lines of equal value on the result, with the colours")
+        self.cont_on.toggled.connect(self._contours_toggled)
+        v.addWidget(self.cont_on)
+        row = QHBoxLayout()
+        self.cont_n = wid(QSpinBox(), "results.contours.n")
+        self.cont_n.setRange(1, 100)
+        self.cont_n.setValue(10)
+        self.cont_n.setSuffix(" lines")
+        self.cont_n.setEnabled(False)
+        self.cont_n.setToolTip("How many evenly spaced contour lines between the lowest and highest value")
+        self.cont_n.valueChanged.connect(lambda _=0: self._display_changed())
+        row.addWidget(QLabel("Number"))
+        row.addWidget(self.cont_n, 1)
+        v.addLayout(row)
+        row = QHBoxLayout()
+        self.cont_levels = wid(QLineEdit(), "results.contours.levels")
+        self.cont_levels.setPlaceholderText("add values, e.g. 120, 180")
+        self.cont_levels.setEnabled(False)
+        self.cont_levels.setToolTip("Contour lines at values you choose, besides the evenly spaced ones (separate them with commas)")
+        self.cont_levels.editingFinished.connect(self._display_changed)
+        row.addWidget(QLabel("Add at"))
+        row.addWidget(self.cont_levels, 1)
+        v.addLayout(row)
         self.deform_box = QWidget()          # (only for results that deform: a flow or a temperature field does not)
         dv = QVBoxLayout(self.deform_box)
         dv.setContentsMargins(0, 0, 0, 0)
@@ -208,6 +233,20 @@ class ResultsPanel(_Panel):
     def _display_changed(self):
         self.changed.emit()
 
+    def _contours_toggled(self, on):
+        self.cont_n.setEnabled(bool(on))
+        self.cont_levels.setEnabled(bool(on))
+        self._display_changed()
+
+    def contour_levels(self) -> list:
+        out = []
+        for tok in self.cont_levels.text().replace(";", ",").split(","):
+            try:
+                out.append(float(tok))
+            except ValueError:
+                pass
+        return out
+
     def _section_changed(self):
         self.section_pos.setEnabled(any(k and b.isChecked() for k, b in self.section_btns.items()))
         self._display_changed()
@@ -229,6 +268,7 @@ class ResultsPanel(_Panel):
         return {"field": self.field.currentText(), "cmap": self.cmap.currentText(), "reverse": self.rev.isChecked(),
                 "bands": self.bands.value(), "deform": (scale if on else 0), "animate": on and self.deform_mode.currentText() == "Animated",
                 "edges": self.edges.isChecked(), "range": rng, "minmax": self.minmax.isChecked(),
+                "contours": {"on": self.cont_on.isChecked(), "n": self.cont_n.value(), "levels": self.contour_levels()},
                 "flow": self.flow.request() if self.tab_btns["flow"].isVisibleTo(self) else None,
                 "section": next(((k, self.section_pos.value() / 1000) for k, b in self.section_btns.items() if k and b.isChecked()), None)}
 
