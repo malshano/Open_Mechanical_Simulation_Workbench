@@ -846,6 +846,7 @@ class Viewport(QWidget):
         self.ren.ResetCamera()
         self._autofit = True
         self.render()
+        QTimer.singleShot(60, self._refit)      # (once the layout has settled: a view that has just been shown still has its old render size)
 
     def set_view(self, name: str):
         self.fit({"iso": (1, -1.4, 0.9), "+x": (1, 0, 0), "-x": (-1, 0, 0), "+y": (0, 1, 0), "-y": (0, -1, 0),

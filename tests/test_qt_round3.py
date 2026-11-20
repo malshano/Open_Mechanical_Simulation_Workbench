@@ -134,7 +134,7 @@ def test_a_fitted_view_is_fitted_again_when_resized_until_the_user_moves_the_cam
     v = ctl.win.view
     assert v._autofit is True                                                          # (fitted by the program)
     calls = []
-    v._refit = lambda: calls.append(1)
+    v._refit = lambda: calls.append(1) if v._autofit else None                         # (only while the program owns the camera)
     ctl.win.resize(1250, 780)
     ctl._settle()
     assert calls                                                                       # resized: fitted again
