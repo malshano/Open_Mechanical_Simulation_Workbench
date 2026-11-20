@@ -232,3 +232,12 @@ def test_the_setup_mark_names_what_is_to_be_checked(ctl, solved):
     ctl.do("study.import", {"path": solved["static"]})
     tip = ctl._index()["step.setup"].toolTip()
     assert "to check" in tip and "default material" in tip
+
+
+def test_labels_on_a_result_show_four_significant_digits(ctl, solved):
+    ctl.do("study.import", {"path": solved["static"]})
+    ctl.do("step.go", {"step": "results"})
+    texts = [la.GetInput() for la in ctl.win.view.label_actors]
+    for t in texts:
+        num = t.split()[1]
+        assert len(num.replace(".", "").replace("-", "").replace("e", "").lstrip("0")) <= 6, t          # (not 0.00190857)

@@ -380,10 +380,10 @@ class ResultsPanel(_Panel):
             if ex:
                 u = self.view.overlay_info.get("unit", "")
                 for k, word in (("max", "Max"), ("min", "Min")):
-                    items.append({"point": ex[k]["point"], "text": f"{word} {fmt_num(ex[k]['value'])} {u}".strip(),
+                    items.append({"point": ex[k]["point"], "text": f"{word} {ex[k]['value']:.4g} {u}".strip(),
                                   "color": t["bad"] if k == "max" else t["accent"]})
         for i, p in enumerate(self.pins):
-            items.append({"point": p["point"], "text": f"{chr(65 + i % 26)}: {fmt_num(p['value'])} {p['unit']}".strip(), "color": t["warn"]})
+            items.append({"point": p["point"], "text": f"{chr(65 + i % 26)}: {p['value']:.4g} {p['unit']}".strip(), "color": t["warn"]})
         for k, e in enumerate(self.line_ends[:2]):
             items.append({"point": e, "text": "AB"[k], "color": t["ink"]})
         self.view.set_labels(items)
