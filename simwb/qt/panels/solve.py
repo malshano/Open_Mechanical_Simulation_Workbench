@@ -139,6 +139,12 @@ class SolvePanel(_Panel):
         self.btn.setEnabled(can)
         self.btn.setToolTip("Run the simulation" if can else
                             ("A run is in progress" if self.running else "Not yet: generate the mesh first (step 3, Mesh)"))
+        again = getattr(self, "done", False) and not self.running
+        self.btn.setText("↻  Run the simulation again" if again else "▶  Run the simulation")
+        self.btn.setObjectName("ghostBorder" if again else "primary")              # (View results is then the one main button)
+        self.btn.style().unpolish(self.btn)
+        self.btn.style().polish(self.btn)
+        self.view_results.setObjectName("primary")
         self.stop.setVisible(self.running and getattr(self, "flow", False))
         self.cancel.setVisible(self.running)
         self.case.setVisible(getattr(self, "flow", False))

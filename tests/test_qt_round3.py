@@ -184,3 +184,51 @@ def test_the_assistant_panel_can_be_narrow_and_its_suggestions_wrap(ctl, solved)
     ys = {c.mapTo(a, c.rect().topLeft()).y() for c in chips}
     assert len(ys) >= 2                                                                # at a narrow width they take more than one line
     assert all(c.mapTo(a, c.rect().topLeft()).x() + c.width() <= a.width() + 2 for c in chips)    # and none runs off the panel
+
+
+def test_labels_on_a_result_are_visible_not_only_labels_on_the_model(ctl, solved):
+    """The highest/lowest value labels and pinned points hung on a result were created invisible: the result view hides the CAD model and the
+    labels followed the model's visibility. (They existed, so the tests saw them; the real window did not show them.)"""
+    ctl.do("study.import", {"path": solved["static"]})
+    ctl.do("step.go", {"step": "results"})
+    v = ctl.win.view
+    assert v._geo_shown is False and len(v.label_actors) >= 2
+    assert all(la.GetVisibility() for la in v.label_actors)
+    p = v.extrema()["max"]["point"]
+    ctl.do("results.pin", {"x": p[0], "y": p[1], "z": p[2]})
+    assert all(la.GetVisibility() for la in v.label_actors) and any(la.GetInput().startswith("A: ") for la in v.label_actors)
+    ctl.do("step.go", {"step": "setup"})                                                # on the model: shown with the model
+    assert v._geo_shown is True and all(la.GetVisibility() for la in v.label_actors)
+
+
+def test_the_outline_keeps_the_current_step_in_view_and_pending_results_are_not_shouted(ctl, solved):
+    ctl.do("study.import", {"path": solved["static"]})
+    ctl.do("step.go", {"step": "results"})
+    ctl._settle()
+    t = ctl.win.tree
+    cur = t.currentItem()
+    assert cur is not None and t.viewport().rect().contains(t.visualItemRect(cur).center())
+    ctl.do("study.example", {"study": "heat_conduction"})
+    items = {t.topLevelItem(0).child(i).text(0): t.topLevelItem(0).child(i) for i in range(t.topLevelItem(0).childCount())}
+    pending = items["Results — run the simulation first"]
+    assert not pending.font(0).bold() and next(v for k, v in items.items() if k.startswith("Geometry (")).font(0).bold() is True
+
+
+def test_probe_is_a_toggle_and_a_finished_run_demotes_the_run_button(ctl, solved):
+    ctl.do("study.import", {"path": solved["static"]})
+    ctl.do("step.go", {"step": "results"})
+    assert ctl._index()["results.probe"].objectName() == "toggle"
+    ctl.do("step.go", {"step": "solve"})
+    b = ctl._index()["solve.run"]
+    assert b.text().startswith("↻") and b.objectName() == "ghostBorder"                  # done: run again is a secondary action
+    assert ctl._index()["solve.results"].objectName() == "primary"
+    ctl.do("study.example", {"study": "static_structural"})
+    b = ctl._index()["solve.run"]
+    ctl.do("step.go", {"step": "solve"})
+    assert b.text().startswith("▶") and b.objectName() == "primary"
+
+
+def test_the_setup_mark_names_what_is_to_be_checked(ctl, solved):
+    ctl.do("study.import", {"path": solved["static"]})
+    tip = ctl._index()["step.setup"].toolTip()
+    assert "to check" in tip and "default material" in tip

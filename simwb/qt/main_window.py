@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QBrush, QColor, QKeySequence, QPainter, QPixmap
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDockWidget, QFileDialog, QHBoxLayout,
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDockWidget, QFileDialog, QHBoxLayout,
                                QInputDialog, QLabel, QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton, QScrollArea,
                                QStackedWidget, QStatusBar, QToolBar, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
@@ -272,7 +272,7 @@ class MainWindow(QMainWindow):
         """Sizes the docks sensibly for the window: the 3D view gets the width, the step panel the height."""
         w, h = self.width(), self.height()
         self.resizeDocks([self.dock_tree, self.dock_chat], [min(430, int(w * 0.27)), min(380, int(w * 0.25))], Qt.Horizontal)
-        self.resizeDocks([self.dock_tree, self.dock_panel], [200, max(h - 200 - 190, 360)], Qt.Vertical)
+        self.resizeDocks([self.dock_tree, self.dock_panel], [250, max(h - 250 - 190, 340)], Qt.Vertical)
         self.resizeDocks([self.logdock], [190], Qt.Vertical)
 
     def showEvent(self, e):  # noqa: N802
@@ -477,7 +477,8 @@ class MainWindow(QMainWindow):
             for k in ("geometry", "setup", "mesh", "solve"):
                 n = warns.get(k, 0)
                 if n and marks[k][0] == "✓":
-                    marks[k] = ("⚠", f"{label_of(k)}: ready, {n} thing(s) to check (see the Messages)")
+                    first = next((c.get("message") for c in (st.get("checks") or []) if c.get("level") == "warning" and c.get("step") == k), "")
+                    marks[k] = ("⚠", f"{label_of(k)}: ready, {n} thing(s) to check. {first}")
         for i, (k, label) in enumerate(STEPS, 1):
             mark, tip = marks[k]
             a = self.step_actions[k]
@@ -559,6 +560,8 @@ class MainWindow(QMainWindow):
         for b in st["body_list"]:
             node(m, f"{b['name']} — {b.get('material_label') or b.get('material') or 'default'}", "setup", detail=True)
         s = node(root, "Supports & loads" + (f" — ⚠ {missing} missing" if missing else ""), "setup", tone="warn" if missing else None, head=True)
+        if not st.get("bcs"):
+            node(s, "none yet: the study's defaults apply" if st["study"] in AIR_KINDS else "none yet", "setup", detail=True)
         for b in st.get("bcs") or []:
             n = len(b.get("faces") or [])
             node(s, f"{b['name']} — {b['type'].replace('_', ' ')}" + (f" · {n} face{'s' if n != 1 else ''}" if n else " · no faces yet"), "setup",
@@ -571,7 +574,7 @@ class MainWindow(QMainWindow):
         node(root, f"{'✓' if sv == 'done' else '⚠' if sv in ('stale', 'failed') else '○'} Solution — {sv}", "solve",
              tone="ok" if sv == "done" else "warn" if sv in ("stale", "failed") else "mute", head=True)
         done = st["solve"].get("status") == "done"
-        r = node(root, "Results" if done else "Results — run the simulation first", "results", tone=None if done else "mute", head=True)
+        r = node(root, "Results" if done else "Results — run the simulation first", "results", tone=None if done else "mute", head=done)
         if done:
             try:
                 for f in self.engine.result_fields():
@@ -597,6 +600,9 @@ class MainWindow(QMainWindow):
                 self.tree.setCurrentItem(None)
         finally:
             self.tree.blockSignals(False)
+        self.tree.verticalScrollBar().setValue(0)                  # (the root first; then just enough to keep the current row in view)
+        if self.tree.currentItem() is not None:
+            self.tree.scrollToItem(self.tree.currentItem(), QAbstractItemView.EnsureVisible)
 
     # ------------------------------------------------------------------ the 3D view
     def _fit_once(self, key, look=None):

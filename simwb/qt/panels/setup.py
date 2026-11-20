@@ -101,13 +101,13 @@ class SetupPanel(_Panel):
                 p = b.get("params") or {}
                 comps = [p.get(f"f{a}_N") for a in "xyz"]
                 if all(v is not None for v in comps) and any(abs(v) > 0 for v in comps):          # a force: an arrow along it, its tip on the faces
-                    arrows.append({"point": c, "dir": comps, "color": bt.get("color"), "length": 0.18 * size})
+                    arrows.append({"point": c, "dir": comps, "color": bt.get("color"), "length": 0.3 * size})
                 elif b["type"] == "pressure" and b.get("faces"):                                    # a pressure pushes on the faces: inward
                     for fid in b["faces"][:6]:
                         f = fmap.get(fid)
                         fc = self.view.face_center([fid])
                         if f and fc is not None:
-                            arrows.append({"point": fc, "dir": [-x for x in f["normal"]], "color": bt.get("color"), "length": 0.1 * size})
+                            arrows.append({"point": fc, "dir": [-x for x in f["normal"]], "color": bt.get("color"), "length": 0.18 * size})
         g = (st.get("settings") or {}).get("gravity")
         if g and g != "off" and bb:                                                                 # gravity: an arrow from above the part
             ax = "xyz".index(g[1])
@@ -115,7 +115,7 @@ class SetupPanel(_Panel):
             d = [0.0, 0.0, 0.0]
             d[ax] = sgn
             ctr = [(bb[k] + bb[k + 3]) / 2 for k in range(3)]
-            arrows.append({"point": [ctr[0], ctr[1], ctr[2]], "dir": d, "color": theme.tokens()["muted"], "length": 0.3 * size})
+            arrows.append({"point": [ctr[0], ctr[1], ctr[2]], "dir": d, "color": theme.tokens()["ink"], "length": 0.34 * size})
             labels.append({"point": [ctr[0], ctr[1], ctr[2] + (0.12 * size if ax != 2 else 0.0)], "text": "Gravity 9.81 m/s²", "color": theme.tokens()["muted"]})
         self.view.set_face_tints(tints)
         self.view.set_labels(labels)

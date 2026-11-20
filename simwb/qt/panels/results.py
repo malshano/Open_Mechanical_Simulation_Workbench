@@ -207,7 +207,7 @@ class ResultsPanel(_Panel):
         v.addWidget(_muted("Click points on the result to read their value and keep it in the list. Click the model with Probe on."))
         self.probe_btn = wid(QPushButton("⌖  Probe: off. Click to start probing"), "results.probe")
         self.probe_btn.setCheckable(True)
-        self.probe_btn.setObjectName("seg")
+        self.probe_btn.setObjectName("toggle")
         self.probe_btn.setToolTip("While this is on, a click on the model pins the value there")
         self.probe_btn.toggled.connect(self._probe_toggled)
         v.addWidget(self.probe_btn)

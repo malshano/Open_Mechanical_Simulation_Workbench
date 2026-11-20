@@ -335,6 +335,11 @@ class Viewport(QWidget):
         w = np.array([1 - w1 - w2, w1, w2])
         return float(o["val"][tri] @ w)
 
+    def _labels_visible(self) -> bool:
+        """Text hung on the model shows with the CAD model (what a condition carries) or with a drawn result (its highest and lowest values,
+        pinned points): the result view hides the CAD model but its labels are the point of it."""
+        return bool(self._geo_shown or self.overlay_info.get("kind") not in (None, "none"))
+
     def set_arrows(self, items: list):
         """Arrows hung on the model: [{'point': [x,y,z] (the tip), 'dir': [dx,dy,dz], 'color': '#rrggbb', 'length': m}]. Loads point INTO the part."""
         self._clear(self.arrow_actors)
@@ -358,8 +363,11 @@ class Viewport(QWidget):
                 tr.RotateWXYZ(180, 0, 0, 1)
             tr.Scale(L, L, L)
             src = vtkArrowSource()
-            src.SetTipResolution(16)
-            src.SetShaftResolution(16)
+            src.SetTipResolution(20)
+            src.SetShaftResolution(20)
+            src.SetShaftRadius(0.045)                  # (stout: it has to read at a glance against the model)
+            src.SetTipRadius(0.11)
+            src.SetTipLength(0.32)
             f = vtkTransformFilter()
             f.SetInputConnection(src.GetOutputPort())
             f.SetTransform(tr)
@@ -406,7 +414,7 @@ class Viewport(QWidget):
             tp.SetFrameWidth(3)
             tp.SetJustificationToCentered()
             tp.SetVerticalJustificationToBottom()
-            a.SetVisibility(self._geo_shown)
+            a.SetVisibility(self._labels_visible())
             self.ren2.AddActor(a)
             self.label_actors.append(a)
         self.render()
@@ -531,8 +539,10 @@ class Viewport(QWidget):
     def show_geometry(self, on: bool):
         self._geo_shown = bool(on)
         self._apply_visibility()
-        for a in self.mark_actors + self.label_actors + self.arrow_actors:
+        for a in self.mark_actors + self.arrow_actors:
             a.SetVisibility(bool(on))
+        for a in self.label_actors:
+            a.SetVisibility(self._labels_visible())
         for a in self.air_actors:
             a.SetVisibility(bool(on) and self.air_on)
         self.render()

@@ -125,6 +125,10 @@ QPushButton#chip:hover {{ border-color: {t['accent']}; background: {t['accent_so
 QPushButton#seg {{ border-radius: 0; margin: 0; padding: 5px 10px; }}
 QPushButton#seg:checked {{ background: {t['accent']}; border-color: {t['accent']}; color: {t['on_accent']}; font-weight: 600; }}
 QPushButton#seg:checked:hover {{ background: {t['accent_hi']}; }}
+QPushButton#toggle {{ background: {t['panel2']}; border: 2px solid {t['line_strong']}; border-radius: 6px; padding: 7px 12px; }}
+QPushButton#toggle:hover {{ border-color: {t['accent']}; }}
+QPushButton#toggle:checked {{ background: {t['accent']}; border-color: {t['accent']}; color: {t['on_accent']}; font-weight: 600; }}
+QPushButton#toggle:checked:hover {{ background: {t['accent_hi']}; }}
 QPushButton#ghostBorder {{ background: transparent; border: 1px solid {t['line_strong']}; }}
 QPushButton#ghostBorder:hover {{ border-color: {t['accent']}; background: {t['accent_soft']}; }}
 QPushButton#viewbtn {{ padding: 3px 10px; font-size: 12px; }}
