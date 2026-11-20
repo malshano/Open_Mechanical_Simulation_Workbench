@@ -42,8 +42,10 @@ def main(paths):
     for r in rows:
         if r.get("error"):
             print(f"ERROR  {r.get('spec', r.get('method'))}: {r['error'][:120]}")
-        elif not r.get("valid"):
-            print(f"unconverged ({r.get('iterations')} it, not used)  {r.get('spec')}")
+        elif not (r.get("converged") and (r.get("layers", 0) == 0 or r.get("layers_kept_percent") is None
+                                          or r["layers_kept_percent"] >= 90.0)):
+            why = ("unconverged" if not r.get("converged") else f"only {r['layers_kept_percent']:.0f} % of the layers kept")
+            print(f"not used ({why}, err {r.get('cf_error_percent')} %)  {r.get('spec')}")
         else:
             groups[(r["method"], r["layers"], r["growth"], r["mode"], r["shape"])].append(r)
     for key, g in sorted(groups.items()):

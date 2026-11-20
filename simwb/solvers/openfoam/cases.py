@@ -302,6 +302,12 @@ def layer_first_thickness(V, L, nu, zones=(), y_plus=30.0) -> float:
     return min(out) if out else 0.01 * L
 
 
+# snappyHexMesh layer-step limits (see write_external_aero): the strict ones are the long-standing default; the tolerant
+# ones keep layers on sharp, finely meshed walls (measured on the flat plate: benchmarks/results)
+LAYER_STRICT = {"mfr": 0.5, "mtm": 0.3, "iters": 50, "relaxed_iter": "", "relaxed": "maxNonOrtho 75;"}
+LAYER_TOLERANT = {"mfr": 0.8, "mtm": 0.6, "iters": 100, "relaxed_iter": "\n    nRelaxedIter        3;",
+                  "relaxed": "maxNonOrtho 75; minTwist 0.001; minDeterminant 1e-5; minFaceWeight 0.02; minVolRatio 0.01;"}
+
 WALL_FUNCTION_MODELS = ("kOmegaSST", "kOmega", "kEpsilon", "realizableKE", "SpalartAllmaras", "kOmegaSSTDDES")
 
 
@@ -950,6 +956,9 @@ relaxationFactors
                            lay.get("first"))["first"]
         size = (f"relativeSizes       false;\n    firstLayerThickness {float(first):.8g};\n"
                 f"    minThickness        {float(first) * 0.1:.8g};")
+        # tolerant layers (opt-in): with the strict limits snappyHexMesh removes layers wherever the cells are small
+        # and the wall is sharp, which is exactly where a leading edge needs them
+        tol = LAYER_TOLERANT if lay.get("tolerant") else LAYER_STRICT
         lays = "".join(f'        "{w}" {{ nSurfaceLayers {n_lay}; }}\n' for w in wall_names)
         _w(case / "system" / "snappyHexMeshDict", header("dictionary", "snappyHexMeshDict", "system") + f"""
 castellatedMesh false;
@@ -977,18 +986,18 @@ addLayersControls
     nSmoothSurfaceNormals 1;
     nSmoothNormals      3;
     nSmoothThickness    10;
-    maxFaceThicknessRatio 0.5;
-    maxThicknessToMedialRatio 0.3;
+    maxFaceThicknessRatio {tol['mfr']};
+    maxThicknessToMedialRatio {tol['mtm']};
     minMedialAxisAngle  90;
     nBufferCellsNoExtrude 0;
-    nLayerIter          50;
+    nLayerIter          {tol['iters']};{tol['relaxed_iter']}
 }}
 meshQualityControls
 {{
     maxNonOrtho 70; maxBoundarySkewness 20; maxInternalSkewness 4; maxConcave 80; minVol 1e-15;
     minTetQuality -1e30; minArea -1; minTwist 0.02; minDeterminant 0.001; minFaceWeight 0.02;
     minVolRatio 0.01; minTriangleTwist -1; nSmoothScale 4; errorReduction 0.75;
-    relaxed {{ maxNonOrtho 75; }}
+    relaxed {{ {tol['relaxed']} }}
 }}
 mergeTolerance 1e-6;
 """)

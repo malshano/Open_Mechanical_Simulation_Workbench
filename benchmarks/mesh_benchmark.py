@@ -15,7 +15,9 @@ Every case runs in its own fresh process (so the RAM it adds is not mixed with t
 
     python benchmarks/mesh_benchmark.py <out.jsonl> <spec> [<spec> ...]
     spec = method:preset[:key=value,...]     keys: n (layers, default 5), g (growth, default 1.2),
-                                                   mode (lam|turb), shape (sharp|blunt), it (iterations, default 1500)
+                                                   mode (lam|turb), shape (sharp|blunt), it (iterations, default 1500),
+                                                   le (cell size in mm on the faces at the leading edge, sharp plate),
+                                                   edge (sharp-edge refinement factor, e.g. 6), tol (1 = tolerant layers)
     e.g.  tet:coarse:n=14,g=1.2   hex:medium:n=10,g=1.3,shape=blunt
 
 Needs OpenFOAM (and SIMWB_MPI_DIR when run from a checkout without an mpi folder). One JSON line per case is appended
@@ -110,7 +112,17 @@ def run_one(method: str, preset: str, opts: dict) -> dict:
     j = pr.import_step(plate_step(Path(home) / "plate.step", sharp=(shape == "sharp")), original_name="plate.step")
     assert j.wait(300) and j.status == "done", j.error
     pr.set_settings(speed=U, pitch_deg=0, iterations=iterations, turbulence="laminar" if mode == "lam" else "kOmegaSST")
-    pr.set_mesh(preset=preset, layers={"n": layers, "growth": growth})
+    pr.set_mesh(preset=preset, layers={"n": layers, "growth": growth, "tolerant": opts.get("tol") == "1"})
+    out["tolerant_layers"] = opts.get("tol") == "1"
+    if opts.get("edge"):
+        pr.set_mesh(edge_refinement=float(opts["edge"]))
+        out["edge_factor"] = float(opts["edge"])
+    if opts.get("le") and shape == "sharp":
+        # fine cells on the wedge faces at the leading edge (x < 60 mm): the first 5 % of a laminar plate carries about
+        # 22 % of its friction, so the streamwise resolution there decides the mean Cf
+        ids = [f["id"] for f in pr.faces() if f.get("kind") != "farfield" and f["centroid"][0] < 0.06]
+        pr.set_mesh(refinements=[{"faces": ids, "size_mm": float(opts["le"])}])
+        out["le_faces"], out["le_mm"] = len(ids), float(opts["le"])
     if method != "tet":
         pr.set_mesh(method=method)
     t0 = time.time()
@@ -141,7 +153,12 @@ def run_one(method: str, preset: str, opts: dict) -> dict:
     out.update(cf=abs(visc[0]) / (q * 2 * L * B), viscous_force_N=visc[0], drag_N=sm.get("drag_N"), yplus=sm.get("yPlus"),
                solve_ram_mb=ram.get("solver_added_ram_mb") if ram.get("solver_added_ram_mb") is not None else ram.get("added_ram_mb"),
                converged=bool((sm.get("convergence") or {}).get("converged")), iterations=(sm.get("convergence") or {}).get("iterations"))
-    out["valid"] = out["converged"]
+    # valid = converged AND the wall layers it was meant to have are mostly there: a mesh that lost half of its layers
+    # (a leading edge without a boundary-layer mesh) says nothing about the method, and its error can be anything
+    kept = out.get("layers_kept_percent")
+    out["valid"] = out["converged"] and (layers == 0 or kept is None or kept >= 90.0)
+    if out["converged"] and not out["valid"]:
+        out["invalid_reason"] = f"only {kept:.0f} % of the wall faces kept their layers"
     mr, sr = out.get("mesh_ram_mb"), out.get("solve_ram_mb")
     if mr is not None and sr is not None:
         out["total_ram_mb"] = max(mr, sr)       # the mesher and the solver do not run together: the larger one is the need
@@ -168,9 +185,15 @@ if __name__ == "__main__":
         sys.exit(0)
     dest = Path(sys.argv[1])
     for spec in sys.argv[2:]:
-        proc = subprocess.run([sys.executable, str(Path(__file__).resolve()), "--one", spec], capture_output=True, text=True)
-        line = next((ln[7:] for ln in reversed(proc.stdout.splitlines()) if ln.startswith("RESULT ")), None)
-        r = json.loads(line) if line else {"spec": spec, "error": "worker failed: " + (proc.stderr or proc.stdout)[-300:]}
+        for attempt in (1, 2, 3):
+            proc = subprocess.run([sys.executable, str(Path(__file__).resolve()), "--one", spec], capture_output=True, text=True)
+            line = next((ln[7:] for ln in reversed(proc.stdout.splitlines()) if ln.startswith("RESULT ")), None)
+            r = json.loads(line) if line else {"spec": spec, "error": "worker failed: " + (proc.stderr or proc.stdout)[-300:]}
+            # the OpenFOAM install of this machine is shared: another process starting without the MPI folder swaps
+            # its parallel library for a serial stub and a run that starts at that moment dies. Such a run is repeated.
+            if not str(r.get("error", "")).startswith("solve: OpenFOAM run failed"):
+                break
+            r["retried"] = attempt
         r["spec"] = spec
         print(json.dumps(r), flush=True)
         with open(dest, "a", encoding="utf-8") as f:
