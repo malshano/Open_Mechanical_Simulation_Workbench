@@ -177,7 +177,7 @@ def set_domain(pr, a):
 
 def set_mesh(pr, a):
     pr.set_mesh(preset=a.get("preset"), size_max_mm=a.get("size_max_mm"), size_min_mm=a.get("size_min_mm"),
-                refinements=a.get("refinements"))
+                refinements=a.get("refinements"), method=a.get("method"))
     return pr.data["mesh"]
 
 
@@ -541,8 +541,11 @@ TOOLS = [
                                        "farfield": {"type": "object"}, "shape": STR, "size": {"type": "object"},
                                        "fit": {"type": "boolean"}, "flow_axis": STR, "span_axis": STR}}, set_domain),
     ("set_mesh_settings", "Mesh settings: preset quick|coarse|medium|fine|very_fine, optional size_max_mm (bulk), "
-                          "size_min_mm (near walls), refinements [{faces:[..], size_mm}].",
-     {"type": "object", "properties": {"preset": STR, "size_max_mm": NUM, "size_min_mm": NUM,
+                          "size_min_mm (near walls), refinements [{faces:[..], size_mm}]. method 'tet' (Gmsh "
+                          "tetrahedra, the default) or 'hex' (hex-dominant snappyHexMesh: external aerodynamics round "
+                          "bodies in the automatic box, no rotors, moving zones or symmetry planes; usually fewer, "
+                          "more orthogonal cells; needs OpenFOAM, takes about a minute per 100,000 cells).",
+     {"type": "object", "properties": {"preset": STR, "size_max_mm": NUM, "size_min_mm": NUM, "method": STR,
                                        "refinements": {"type": "array", "items": {"type": "object"}}}},
      set_mesh),
     ("generate_mesh", "Generate the mesh (waits until done). Returns cell count and quality.",

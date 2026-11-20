@@ -16,7 +16,7 @@ import numpy as np
 
 from ... import materials
 from ...studies import AXES
-from .foamio import header, polymesh_quality, sanitize, tet_mesh_to_polymesh, write_polymesh
+from .foamio import header, polymesh_quality, read_polymesh, sanitize, tet_mesh_to_polymesh, write_polymesh
 
 G = 9.81
 CMU = 0.09
@@ -131,6 +131,24 @@ def _write_mesh(case: Path, mesh: dict, surf2patch: dict, patches: list, zone_of
     write_polymesh(case / "constant" / "polyMesh", pm, extra_zones, fzs)
     q = polymesh_quality(pm)
     return pm, q
+
+
+def _use_polymesh(case: Path, src: Path, patches: list):
+    """A mesh made by OpenFOAM (snappyHexMesh) instead of one converted from our tetrahedra: copy it into the case.
+    Its patches must be the ones the field files are written for (a patch missing from the mesh is harmless, a mesh
+    patch with no condition is not). Returns (the mesh as read, a quality dict)."""
+    import shutil
+
+    dst = case / "constant" / "polyMesh"
+    shutil.rmtree(dst, ignore_errors=True)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(src, dst)
+    pm = read_polymesh(dst)
+    have = {p["name"] for p in patches}
+    missing = [b["name"] for b in pm["patches"] if b["name"] not in have]
+    if missing:
+        raise ValueError(f"The mesh has patches the setup does not know: {missing}. Mesh again.")
+    return pm, {"non_orthogonality_max": None, "non_orthogonality_mean": None, "skewness_max": None}
 
 
 def write_schedule(iterations: int):
@@ -360,8 +378,13 @@ def write_external_aero(case: Path, project: dict, mesh: dict, faces: list, info
     surf2patch, patches = build_patches("external_aero", faces, project.get("bcs", []))
     zone_walls = split_zone_walls(project.get("moving_zones") or [], faces, surf2patch, patches)
 
+    hexmesh = mesh.get("hex_dir")  # a snappyHexMesh mesh: used as it is (bodies only, no cell zones)
+    if hexmesh and (rotors or project.get("moving_zones") or planes):
+        raise ValueError("The hex-dominant mesh does not support rotors, moving zones or symmetry planes: "
+                         "choose the tetrahedral mesh in the Mesh step.")
+
     # rotor cell zones
-    cc = mesh["nodes"][mesh["tets"]].mean(1)
+    cc = mesh["nodes"][mesh["tets"]].mean(1) if not hexmesh else np.zeros((0, 3))
     extra_zones, rotor_info = [], []
     for i, (r, T) in enumerate(zip(rotors, thrusts)):
         c = np.asarray(r["center"], float)
@@ -433,7 +456,10 @@ def write_external_aero(case: Path, project: dict, mesh: dict, faces: list, info
         raise ValueError("Use either a sliding-mesh zone or moving parts in one run, not both.")
 
     case.mkdir(parents=True, exist_ok=True)
-    pm, q = _write_mesh(case, mesh, surf2patch, patches, extra_zones=extra_zones, face_zone_specs=fz_specs)
+    if hexmesh:
+        pm, q = _use_polymesh(case, Path(hexmesh), patches)
+    else:
+        pm, q = _write_mesh(case, mesh, surf2patch, patches, extra_zones=extra_zones, face_zone_specs=fz_specs)
 
     # turbulence free-stream values
     L = info["ref_length"]
@@ -877,7 +903,8 @@ relaxationFactors
     # wall (inflation) layers: snappyHexMesh in layer-only mode pushes the tetrahedral mesh away from the walls
     # and fills the space with prism layers (a thin first cell for the boundary layer without tiny tetrahedra)
     lay = (project.get("mesh") or {}).get("layers") or {}
-    n_lay = int(lay.get("n") or 0) if wall_names else 0
+    # (a hex-dominant mesh already has its layers: they are made together with it, not added again at the run)
+    n_lay = int(lay.get("n") or 0) if wall_names and not hexmesh else 0
     if n_lay:
         g = float(lay.get("growth", 1.2))
         first = lay.get("first") or layer_first_thickness(V, L, nu, project.get("moving_zones") or [])  # automatic: y+ ~ 30

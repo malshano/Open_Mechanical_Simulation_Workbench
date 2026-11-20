@@ -1550,7 +1550,8 @@ function meshLayersHtml() {
   const L = S.p.mesh.layers || { n: 0, growth: 1.2, first: null };
   return `<details class="expert" ${L.n ? 'open' : ''}><summary>Wall layers (prism / inflation)${L.n ? ` · ${L.n}` : ''}</summary>
     <p class="small muted" style="margin:4px 0">Thin cells stacked on the walls to resolve the boundary layer (friction, separation, y+).
-      OpenFOAM adds them before the run (snappyHexMesh, layer-only); where the space is too tight it leaves them out, and the run log reports the coverage.</p>
+      ${S.p.mesh.method === 'hex' ? 'They are made together with the hex-dominant mesh (snappyHexMesh); the Mesh statistics report how much of the wall got them.'
+        : 'OpenFOAM adds them before the run (snappyHexMesh, layer-only); where the space is too tight it leaves them out, and the run log reports the coverage.'}</p>
     <div class="grid2"><label class="field"><span>Number of layers</span><input type="number" min="0" max="20" step="1" data-layers="n" value="${L.n}" title="0 = off"></label>
       <label class="field"><span>Growth ratio</span><input type="number" min="1" max="2" step="0.05" data-layers="growth" value="${L.growth}"></label>
       <label class="field"><span>First layer <span class="unit">[mm]</span></span><input type="number" step="any" data-layers="first_mm" placeholder="auto"
@@ -1561,7 +1562,14 @@ function panelMesh() {
   if (p.geometry.status !== 'ready') return `<p class="muted">Import geometry first.</p>`;
   const presets = [['quick', 'Quick look'], ['coarse', 'Coarse'], ['medium', 'Medium'], ['fine', 'Fine'], ['very_fine', 'Very fine']];
   const running = S.jobs.mesh?.status === 'running';
+  const hexOn = m.method === 'hex' && p.study === 'external_aero';
   let h = `<h2>Mesh</h2>
+    ${p.study === 'external_aero' ? `<h3>Mesh type</h3><div class="seg">
+      <button data-meshmethod="tet" class="${hexOn ? '' : 'on'}" title="Tetrahedral cells made by Gmsh. Works for everything: rotors, moving zones, symmetry planes, any air volume.">Tetrahedral</button>
+      <button data-meshmethod="hex" class="${hexOn ? 'on' : ''}" ${p.hex_unsupported ? 'disabled' : ''}
+        title="${esc(p.hex_unsupported || 'Mostly hexahedral cells made by OpenFOAM snappyHexMesh: usually fewer, more orthogonal cells and a finer wake. Body in the automatic box of air.')}">Hex-dominant</button></div>
+      ${p.hex_unsupported ? `<p class="small muted" style="margin:4px 0">Hex-dominant: ${esc(p.hex_unsupported)}</p>`
+        : hexOn ? `<p class="small muted" style="margin:4px 0">snappyHexMesh (OpenFOAM): background box, surface refinement by the preset, a wake region and wall layers. About a minute per 100,000 cells.</p>` : ''}` : ''}
     <h3>Resolution</h3><div class="seg">${presets.map(([k, l]) => `<button data-preset="${k}" class="${m.preset === k ? 'on' : ''}">${l}</button>`).join('')}</div>
     <details class="expert" ${m.size_max || m.size_min || m.defeature ? 'open' : ''}><summary>Advanced sizes and defeaturing</summary><div class="grid2">
       <label class="field"><span>Max cell size <span class="unit">[mm]</span></span><input type="number" step="any" data-mesh="size_max_mm" placeholder="auto" value="${m.size_max ? fmt(m.size_max * 1000) : ''}"></label>
@@ -1580,6 +1588,10 @@ function panelMesh() {
       ${s.foam_quality ? `<span>Max non-orthogonality</span><b>${fmt1(s.foam_quality.non_orthogonality_max)}°</b>
         <span>Max skewness</span><b>${fmt(s.foam_quality.skewness_max, 2)}</b>` : ''}
       ${s.defeatured_faces ? `<span>Defeatured faces</span><b>${s.defeatured_faces}</b>` : ''}
+      ${s.method === 'hex' && s.cell_types ? `<span>Hexahedra</span><b>${(100 * s.cell_types.hexahedra / Math.max(s.cells, 1)).toFixed(0)} %</b>
+        <span>Prisms / polyhedra</span><b>${s.cell_types.prisms.toLocaleString()} / ${s.cell_types.polyhedra.toLocaleString()}</b>
+        <span>Max aspect ratio</span><b>${fmt1(s.hex.aspect_ratio_max)}</b>
+        ${s.hex.layers_extruded_percent != null ? `<span>Wall faces with layers</span><b>${fmt1(s.hex.layers_extruded_percent)} %</b>` : ''}` : ''}
       <span>Time</span><b>${s.seconds} s</b></div>
       <h3>Cell quality</h3><canvas class="chart" id="histo" style="height:110px"></canvas>
       <div class="row" style="gap:6px;align-items:center;margin:4px 0" title="Show only the cells below this quality, on the CAD model, to see where the mesher struggles (thin gaps, small faces, sharp corners)">
@@ -1593,7 +1605,25 @@ function panelMesh() {
   return h;
 }
 
+function hexVerdict(s) {
+  // the hex-dominant (snappyHexMesh) mesh: judged by checkMesh's numbers, the layers and the cell limit
+  const f = s.foam_quality, x = s.hex, warn = [], info = [];
+  info.push(`Surface cells ${fmt(x.surface_cell_mm)} mm; background ${fmt(x.base_mm)} mm (${x.levels} refinement levels).`);
+  if (f.non_orthogonality_max > 70) warn.push(`Max non-orthogonality ${fmt1(f.non_orthogonality_max)}°: above 70° OpenFOAM may be unstable.`);
+  if (f.skewness_max > 4) warn.push(`Max skewness ${fmt(f.skewness_max, 2)} is above 4.`);
+  if ((x.problems || []).length) warn.push(...x.problems.map(t => `checkMesh: ${t}`));
+  if (x.layers_extruded_percent != null && S.p.mesh.layers?.n && x.layers_extruded_percent < 50)
+    warn.push(`Only ${fmt1(x.layers_extruded_percent)} % of the wall faces got layers: the parts are thin for these cells. Use a finer preset or refine the thin faces.`);
+  else if (x.layers_extruded_percent != null && S.p.mesh.layers?.n) info.push(`${fmt1(x.layers_extruded_percent)} % of the wall faces got layers.`);
+  warn.push(...(x.warnings || []));
+  const infoHtml = `<div class="small muted" style="margin-top:6px">${info.map(esc).join('<br>')}</div>`;
+  const real = warn.filter(w => !/concave/i.test(w));
+  const cls = real.length ? 'note warn' : 'note';
+  return `<div class="${cls}">${real.length ? '' : '✓ Mesh looks good.'}${warn.map(esc).join('<br>')}${infoHtml}</div>`;
+}
+
 function meshVerdict(s) {
+  if (s.method === 'hex' && s.hex) return hexVerdict(s);
   const q = s.quality, f = s.foam_quality, st = S.p.study;
   const warn = [], info = [];
   // 1. cell shape
@@ -3068,6 +3098,9 @@ function bindPanel(el) {
     drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); e.dataTransfer.files[0] && upload(e.dataTransfer.files[0]); };
   }
   el.querySelectorAll('[data-action]').forEach(b => b.onclick = ev => action(b.dataset.action, b, ev));
+  el.querySelectorAll('[data-meshmethod]').forEach(b => b.onclick = () => act(async () => {
+    S.p = await api(P('/mesh/settings'), { json: { method: b.dataset.meshmethod } }); renderPanel();
+  }));
   el.querySelectorAll('[data-preset]').forEach(b => b.onclick = () => act(async () => {
     S.p = await api(P('/mesh/settings'), { json: { preset: b.dataset.preset } }); renderPanel();
   }));

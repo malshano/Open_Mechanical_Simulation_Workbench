@@ -432,6 +432,7 @@ class Project:
             d["geometry"] = dict(d["geometry"], pivot=self._parts_center().tolist())  # (what a turn pivots on)
         if self.study == "external_aero":
             d["flow_dir"] = self._flow_dir().tolist()  # free-stream direction (drawn on the air volume)
+            d["hex_unsupported"] = self.hex_unsupported()  # why the hex-dominant mesh cannot be used (None = it can)
         d["edits"] = self.cad_edits()
         d["checks"] = self.check()
         jobs = {}
@@ -2279,11 +2280,29 @@ class Project:
         return freestream_velocity(s)
 
     # ------------------------------------------------------------------ mesh
+    def hex_unsupported(self):
+        """Why this study cannot use the hex-dominant (snappyHexMesh) mesh; None when it can."""
+        if self.study != "external_aero":
+            return "The hex-dominant mesh is for external aerodynamics."
+        if self.data["geometry"].get("status") != "ready":
+            return "Import geometry first."
+        from .solvers.openfoam import hexmesh
+
+        return hexmesh.unsupported(self.data, self.faces(), self.data["geometry"].get("info") or {})
+
     def set_mesh(self, preset=None, size_max_mm=None, size_min_mm=None, refinements=None, regions=None,
-                 layers=None, defeature_mm=False):
+                 layers=None, defeature_mm=False, method=None):
         if self.busy():
             raise RuntimeError("Please wait: a job is still running for this project (or cancel it).")
         m = self.data["mesh"]
+        if method is not None:
+            if method not in ("tet", "hex"):
+                raise ValueError("Mesh method must be 'tet' (tetrahedral, Gmsh) or 'hex' (hex-dominant, snappyHexMesh)")
+            if method == "hex":
+                why = self.hex_unsupported()
+                if why:
+                    raise ValueError(why)
+            m["method"] = method
         if preset:
             from .gmsh_worker import PRESETS
 
@@ -2367,7 +2386,9 @@ class Project:
                 m["defeature"] = d / 1000
             else:
                 m.pop("defeature", None)
-        only_layers = layers is not None and preset is None and size_max_mm is None and size_min_mm is None             and refinements is None and regions is None
+        # (the tetrahedral mesh gets its layers at the run; the hex-dominant mesh makes them with the mesh)
+        only_layers = (layers is not None and preset is None and size_max_mm is None and size_min_mm is None
+                       and refinements is None and regions is None and method is None and m.get("method") != "hex")
         self.mark_stale(("solve",) if only_layers else ("mesh", "solve"))  # (layers are added at the run)
         self.save()
 
@@ -2388,7 +2409,121 @@ class Project:
         JOBS.update(job, 0.4, "Preparing the CFD model (half wing on a symmetry plane)")
         study.mesh_twin(job, 0.45, 1.0)
 
+    def _hex_mesh_work(self, job: Job, p0=0.0, p1=1.0):
+        """Hex-dominant mesh with snappyHexMesh (see solvers/openfoam/hexmesh.py): plan, write the meshing case, run
+        OpenFOAM's blockMesh / surfaceFeatureExtract / snappyHexMesh / createPatch / checkMesh, then store the result
+        like the tetrahedral mesh (display arrays in mesh.npz, the real OpenFOAM mesh in polyMesh_hex)."""
+        from .solvers.openfoam import cases, hexmesh, runner
+
+        t0 = time.time()
+        why = self.hex_unsupported()
+        if why:
+            raise ValueError(why + " Choose the tetrahedral mesh.")
+        det = runner.detect(refresh=True)
+        if not det["available"]:
+            raise RuntimeError("The hex-dominant mesh needs OpenFOAM, which is not installed: " + runner.install_help())
+        data, faces = self.data, self.faces()
+        info = data["geometry"]["info"]
+        fl = materials.get_fluid(data["settings"].get("fluid", "air"))
+        s2p, patches = cases.build_patches("external_aero", faces, data.get("bcs", []))
+        plan = hexmesh.make_plan(data, faces, info, s2p, patches, cases.freestream_velocity(data["settings"]),
+                                 fl["mu"] / fl["rho"])
+        case = self.mesh_dir / "hexcase"
+        shutil.rmtree(case, ignore_errors=True)
+        case.mkdir(parents=True, exist_ok=True)
+        JOBS.update(job, p0 + 0.05 * (p1 - p0), "Writing the meshing case", log=f"Hex-dominant mesh: {plan['cells_bg']} background "
+                    f"cells of {plan['base'] * 1000:.3g} mm, {plan['levels']} levels, surface cells {plan['h_wall'] * 1000:.3g} mm")
+        hexmesh.write_case(case, plan, faces)
+        prev = data["mesh"].get("status")
+        data["mesh"]["status"] = "meshing"
+        try:
+            ok = False
+            if det["backend"] == "windows":
+                def on_proc(p):
+                    job.proc = p
+                    job.check_cancel()
+
+                def on_line(line):
+                    JOBS.update(job, None, line if line.startswith("$") else None, log=line)
+
+                JOBS.update(job, p0 + 0.1 * (p1 - p0), "Meshing with snappyHexMesh (about a minute per 100,000 cells)")
+                ok = runner.run_steps_windows(case, hexmesh.STEPS, det, on_proc, on_line)
+            else:
+                lines = ["#!/bin/bash", 'cd "${0%/*}" || exit 1']
+                for st in hexmesh.STEPS:
+                    lines.append(f"{st['app']} {' '.join(st['args'])} > {st['log']} 2>&1" + ("" if st.get("allow_fail") else " || exit 1"))
+                (case / "Allmesh").write_text("\n".join(lines) + "\n", newline="\n")
+                cmd = runner.build_command(case, "Allmesh")
+                proc = subprocess.Popen(cmd, cwd=case, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                        bufsize=1, shell=isinstance(cmd, str))
+                job.proc = proc
+                for line in proc.stdout:
+                    if line.strip():
+                        JOBS.update(job, None, None, log=line.rstrip(), quiet=True)
+                ok = proc.wait() == 0
+            job.proc = None
+            job.check_cancel()
+            hexmesh.finalize(case)
+            if not ok:
+                bad = next((st for st in hexmesh.STEPS if not st.get("allow_fail") and (case / st["log"]).exists()
+                            and "FOAM FATAL" in (case / st["log"]).read_text(errors="ignore")), None)
+                tail = ""
+                if bad:
+                    txt = (case / bad["log"]).read_text(errors="ignore")
+                    i = txt.find("FOAM FATAL")
+                    tail = txt[i:i + 700].strip()
+                raise RuntimeError(f"The hex-dominant mesh could not be made ({bad['app'] if bad else 'OpenFOAM'} failed)."
+                                   + (f"\n{tail}" if tail else "") + "\nTry the tetrahedral mesh or a coarser preset.")
+            JOBS.update(job, p0 + 0.85 * (p1 - p0), "Reading the mesh")
+            fluid_id = next(b["id"] for b in self.bodies() if b["role"] == "fluid")
+            arr, pm = hexmesh.display_arrays(case, plan, s2p, patches, faces, fluid_id)
+            lg = hexmesh.parse_logs(case)
+            if not lg["cells"]:
+                raise RuntimeError("The meshing case produced no cells: see " + str(case / "log.snappyHexMesh"))
+            hexdir = self.mesh_dir / "polyMesh_hex"
+            shutil.rmtree(hexdir, ignore_errors=True)
+            shutil.copytree(case / "constant" / "polyMesh", hexdir)
+            np.savez_compressed(self.mesh_dir / "mesh.npz", **arr)
+        except BaseException:
+            data["mesh"]["status"] = "failed" if prev in (None, "none", "failed") else "stale"
+            self.save()
+            raise
+        q = arr["quality"]
+        hist, edges = np.histogram(q, bins=20, range=(0, 1))
+        stats = {
+            "method": "hex", "cells": lg["cells"], "nodes": int(len(pm["points"])), "boundary_triangles": int(len(arr["tris"])),
+            "cells_per_body": {str(fluid_id): lg["cells"]},
+            "cell_types": lg["types"],
+            "quality": {"metric": "1 - worst non-orthogonality of the cell / 90 degrees (display; 1 = orthogonal)",
+                        "min": float(q.min()), "mean": float(q.mean()), "p01": float(np.percentile(q, 1)),
+                        "n_poor": int((q < 0.1).sum()), "histogram": hist.tolist(), "edges": edges.tolist()},
+            "foam_quality": {"non_orthogonality_max": lg["non_orthogonality_max"] or 0.0,
+                             "non_orthogonality_mean": lg["non_orthogonality_mean"] or 0.0, "n_non_ortho_gt70": 0,
+                             "skewness_max": lg["skewness_max"] or 0.0, "n_skew_gt4": 0},
+            "hex": {"levels": plan["levels"], "base_mm": plan["base"] * 1000, "background_cells": plan["cells_bg"],
+                    "surface_cell_mm": plan["h_wall"] * 1000, "aspect_ratio_max": lg["aspect_ratio_max"],
+                    "mesh_ok": lg["mesh_ok"], "failed_checks": lg["failed_checks"], "problems": lg["problems"],
+                    "concave_cells": lg["concave_cells"], "layers": lg["layers"],
+                    "layers_extruded_percent": lg["layers_extruded_percent"], "warnings": lg["warnings"],
+                    "wall_patches": [{"name": p["name"], "levels": sorted({g["level"] for g in p["groups"]})}
+                                     for p in plan["wall_patches"]]},
+            "sizes": {"near_wall": plan["h_wall"], "body": plan["h_body"], "far": plan["base"], "feature": plan["h_wall"],
+                      "min_gap": None, "channels": [], "gap_cell": None, "cells_across_gap": None},
+            "seconds": round(time.time() - t0, 1),
+        }
+        with self._lock:
+            self.data["mesh"]["status"] = "ready"
+            self.data["mesh"]["stats"] = stats
+            self.data["solve"]["status"] = "none"
+            self._results = None
+            self.save()
+        JOBS.update(job, p1, f"Mesh ready: {stats['cells']:,} cells", log=f"Mesh ready: {stats['cells']:,} cells "
+                    f"({lg['types']['hexahedra']:,} hexahedra)")
+        return stats
+
     def _mesh_work(self, job: Job, p0=0.0, p1=1.0):
+        if self.data["mesh"].get("method") == "hex" and self.study == "external_aero":
+            return self._hex_mesh_work(job, p0, p1)
         payload = {
             "study": self.mesh_study, "out_dir": str(self.mesh_dir), "brep": str(self.geo_dir / "domain.brep"),
             "bodies_json": str(self.geo_dir / "bodies.json"), "faces_json": str(self.geo_dir / "faces.json"),
@@ -2722,6 +2857,9 @@ class Project:
     def _foam_quality(self):
         from .solvers.openfoam.foamio import polymesh_quality, tet_mesh_to_polymesh
 
+        st = self.data["mesh"].get("stats") or {}
+        if st.get("method") == "hex" and st.get("foam_quality"):
+            return st["foam_quality"]  # (checkMesh's numbers of the real snappyHexMesh mesh)
         m = self.load_mesh()
         pm = tet_mesh_to_polymesh(m["nodes"], m["tets"], np.zeros((0, 3), int), [], [], [])
         return polymesh_quality(pm)
@@ -2730,7 +2868,10 @@ class Project:
         p = self.mesh_dir / "mesh.npz"
         if not p.exists():
             raise ValueError("No mesh yet")
-        return dict(np.load(p))
+        m = dict(np.load(p))
+        if "hex" in m:  # a snappyHexMesh mesh: the arrays are for display, the case takes the OpenFOAM mesh itself
+            m["hex_dir"] = str(self.mesh_dir / "polyMesh_hex")
+        return m
 
     def mesh_view(self, clip_axis=None, clip_pos=None, hide_fluid=False, poor=None):
         """Surface (or crinkle-clipped) mesh triangles coloured by quality, for inspection. poor: only the cells
@@ -2757,7 +2898,8 @@ class Project:
         reg_index = {b["id"]: i for i, b in enumerate(bodies)}
         tr = np.vectorize(reg_index.get)(m["tet_vol"]) if len(bodies) > 1 else np.zeros(len(m["tets"]), int)
         rs = ResultSet(m["nodes"], m["tets"], tr, regions, {"Quality": ("cell", m["quality"].astype(float), "-")},
-                       *boundary_from_tets(m["tets"]), np.zeros(0), [])
+                       *((m["tris"].astype(np.int64), m["tri_owner"]) if "tri_owner" in m else boundary_from_tets(m["tets"])),
+                       np.zeros(0), [])
         rs.surf_group = np.zeros(len(rs.surf_tris), np.int32)
         hide = [str(b["id"]) for b in bodies if b["role"] == "fluid"] if hide_fluid else []
         if clip_axis is None:
@@ -3868,6 +4010,8 @@ def _energy_check(conv: dict, summary: dict) -> dict:
 
 def _owner_of_tris(m):
     """Index of a tet owning each CAD boundary triangle (for cell-located values)."""
+    if "tri_owner" in m:  # (a snappyHexMesh mesh stores it: the tets there are display tets, far too many to search)
+        return m["tri_owner"]
     loc = np.array([[1, 2, 3], [0, 3, 2], [0, 1, 3], [0, 2, 1]])
     F = np.sort(m["tets"][:, loc].reshape(-1, 3).astype(np.int64), axis=1)
     cells = np.repeat(np.arange(len(m["tets"])), 4)

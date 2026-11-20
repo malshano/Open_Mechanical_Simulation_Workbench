@@ -218,6 +218,11 @@ Heat sources are set on parts (body settings), not on faces, in the heat and coo
    Each region shows an estimate of its cell count; check it before you generate (millions of cells need hours).
 5. Sizing is kept when you replace the geometry (part sizing follows parts of the same name; what cannot be placed is dropped with a note).
 6. Warning "Max non-orthogonality ... > 75 degrees can make OpenFOAM unstable": refine the mesh near the sharp or thin features, or accept the risk for a quick look.
+7. **Mesh type** (external aerodynamics): **Tetrahedral** (the default, made by Gmsh) or **Hex-dominant** (made by OpenFOAM's snappyHexMesh). The hex-dominant mesh is mostly hexahedral cells that change size in octree steps, with a finer wake behind the body and wall layers made together with it. It usually has fewer, more orthogonal cells for the same wall resolution. It takes about a minute per 100,000 cells and needs OpenFOAM.
+   - It is for **a body in the automatic box of air**, with its wall faces as the only boundary conditions. **Rotors, moving zones, symmetry planes and a custom air volume need the tetrahedral mesh**; the button explains which one stops it.
+   - The preset, *Near-wall size*, *Face sizing* (thin faces get finer cells), *Refinement regions* and the *Wall layers* settings work as for the tetrahedral mesh.
+   - **Thin parts need fine cells**: a wing 64 mm thick meshed with 50 mm cells cannot get layers (the statistics show how much of the wall did). Give thin faces a finer *Face sizing*, or choose a finer preset.
+   - The statistics show the share of hexahedra, the maximum non-orthogonality, skewness and aspect ratio from `checkMesh`, and the share of wall faces that got layers. "Concave cells" are reported as a note: snappyHexMesh limits them and the solvers tolerate them.
 
 ---
 
