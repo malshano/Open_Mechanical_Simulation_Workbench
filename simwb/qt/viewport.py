@@ -1030,7 +1030,36 @@ class Viewport(QWidget):
         self._focus = None if box is None else (box[0], box[3], box[1], box[4], box[2], box[5])
 
     def _reset_camera(self):
-        self.ren.ResetCamera(*self._focus) if self._focus else self.ren.ResetCamera()
+        if not self._focus:
+            self.ren.ResetCamera()
+            return
+        self.ren.ResetCamera(*self._focus)
+        self._fit_focus()
+
+    def _fit_focus(self):
+        """ResetCamera fits a sphere round the focus box, which is too far away when the box is thin along the viewing direction (a cut plane
+        seen face-on): move the camera along its line of sight until the box's own outline, as the camera sees it, fills the picture."""
+        cam = self.ren.GetActiveCamera()
+        x0, x1, y0, y1, z0, z1 = self._focus
+        c = np.array([(x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2])
+        d = np.array(cam.GetPosition()) - np.array(cam.GetFocalPoint())
+        if not np.linalg.norm(d):
+            return
+        d = d / np.linalg.norm(d)
+        up = np.array(cam.GetViewUp())
+        right = np.cross(up, d)
+        if not np.linalg.norm(right):
+            return
+        right = right / np.linalg.norm(right)
+        up = np.cross(d, right)
+        corners = np.array([[x, y, z] for x in (x0, x1) for y in (y0, y1) for z in (z0, z1)]) - c
+        w, h = np.abs(corners @ right).max(), np.abs(corners @ up).max()
+        t = np.tan(np.radians(cam.GetViewAngle()) / 2)
+        asp = max(self.ren.GetAspect()[0], 1e-6)
+        dist = max(h / t, w / (t * asp)) * 1.1
+        cam.SetFocalPoint(*c)
+        cam.SetPosition(*(c + d * dist))
+        self.ren.ResetCameraClippingRange()
 
     def set_view(self, name: str):
         self.fit({"iso": (1, -1.4, 0.9), "+x": (1, 0, 0), "-x": (-1, 0, 0), "+y": (0, 1, 0), "-y": (0, -1, 0),

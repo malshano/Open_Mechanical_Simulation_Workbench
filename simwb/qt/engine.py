@@ -198,7 +198,7 @@ class Engine(QObject):
         the large cells at its edge fall outside the picture)."""
         if self.project().study not in FLOW_STUDIES:
             return None
-        return self._flow_box(self.project().results(), 0.7, 1.6)
+        return self._flow_box(self.project().results(), 0.3, 0.8)
 
     def _flow_surface(self, rs, field: str, ax, pos, box):
         """A flow or cooling result: the outside of the air box would hide everything, so draw the object (what the solver says to show:

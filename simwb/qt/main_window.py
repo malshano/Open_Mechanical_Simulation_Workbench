@@ -656,7 +656,7 @@ class MainWindow(QMainWindow):
                     if sec and st["study"] in AIR_KINDS:      # a flow cut open: seen straight on, from the side that is kept
                         self._fit_once((self.engine.pid, "results", sec[0]), f"+{sec[0]}")
                     else:
-                        self._fit_once((self.engine.pid, "results"))
+                        self._fit_once((self.engine.pid, "results"), "iso" if flow else None)
                     self.panels["results"].draw_marks()
                     return
             self.view.clear_overlay()
