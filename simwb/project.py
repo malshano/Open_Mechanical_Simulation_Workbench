@@ -2430,7 +2430,15 @@ class Project:
             stats = self._mesh_work_inner(job, p0, p1)
         with self._lock:
             if isinstance(stats, dict) and (self.data["mesh"].get("stats") or {}).get("cells") == stats.get("cells"):
-                stats["ram"] = pm.result()
+                backend = None
+                if self.data["mesh"].get("method") == "hex" and self.study == "external_aero":
+                    from .solvers.openfoam import runner
+
+                    backend = runner.detect().get("backend")        # snappyHexMesh runs where OpenFOAM does
+                if backend is not None and not memwatch.measurable_backend(backend):
+                    stats["ram"] = {"measured": False, "note": f"not measured: the mesher runs in {backend}"}
+                else:
+                    stats["ram"] = dict(pm.result(), measured=True)
                 self.data["mesh"]["stats"] = stats
                 self.save()
         return stats
@@ -3274,11 +3282,25 @@ class Project:
             summ = self._solve_openfoam_inner(job, *args, **kwargs)
         if isinstance(summ, dict) and "case_dir" not in summ:
             with self._lock:
-                summ["ram"] = pm.result()
+                summ["ram"] = self._ram_record(pm.result(), job.extra.get("solver_ram"))
                 if (self.data["solve"].get("summary") or {}) is not summ and self.data["solve"].get("summary"):
                     self.data["solve"]["summary"]["ram"] = summ["ram"]
                 self.save()
         return summ
+
+    @staticmethod
+    def _ram_record(whole: dict, solver: dict | None) -> dict:
+        """The RAM figures of a solve: the solver run alone (solver_added_ram_mb / solver_peak_ram_mb) and the whole
+        job including reading the results back (added_ram_mb / peak_ram_mb). A solver that runs in WSL or Docker is
+        invisible to the meter (it would see only wsl.exe), so nothing is reported for it."""
+        from . import memwatch
+
+        if solver is not None and not memwatch.measurable_backend(solver.get("backend")):
+            return {"measured": False, "note": f"not measured: the solver runs in {solver.get('backend')}, outside this process tree"}
+        rec = dict(whole, measured=True)
+        if solver:
+            rec.update(solver_added_ram_mb=solver.get("added_ram_mb"), solver_peak_ram_mb=solver.get("peak_ram_mb"))
+        return rec
 
     def _solve_openfoam_inner(self, job: Job, export_only=False, continue_iterations=None, map_from=None,
                               keep_edit_flag=False, init_case=None, resume_transient=False, extend=None):
@@ -3491,6 +3513,9 @@ class Project:
         job.extra["solver_started"] = True  # the case (and its controlDict) is final: Stop can act on it now
         th = threading.Thread(target=tail, daemon=True)
         th.start()
+        from . import memwatch
+
+        solver_mem = memwatch.PeakMemory().__enter__()   # (the solver run alone: not the results loading after it)
         try:
             if det["backend"] == "windows":
                 cores = f"{n_procs} cores" if n_procs > 1 else "1 core"
@@ -3521,6 +3546,8 @@ class Project:
                         JOBS.update(job, None, None, log=line, quiet=True)
                 proc.wait()
         finally:
+            solver_mem.__exit__(None, None, None)
+            job.extra["solver_ram"] = dict(solver_mem.result(), backend=det["backend"])
             state["running"] = False
             job.proc = None
             th.join(timeout=5)
