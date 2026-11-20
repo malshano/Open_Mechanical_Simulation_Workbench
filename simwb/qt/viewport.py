@@ -97,7 +97,7 @@ class Viewport(QWidget):
             self.rw.SetNumberOfLayers(2)
             self.rw.AddRenderer(self.ren)
             self.rw.AddRenderer(self.ren2)
-            style = vtkInteractorStyleTrackballCamera()
+            style = self._style = vtkInteractorStyleTrackballCamera()
             self.iren.SetInteractorStyle(style)
             style.AddObserver("StartInteractionEvent", lambda *_: self._user_moved())      # (the user took the camera: stop re-fitting it)
         self._focus = None      # (x0, x1, y0, y1, z0, z1): the camera is fitted to this region (a flow cut open: close to the object) instead of everything drawn
@@ -121,6 +121,11 @@ class Viewport(QWidget):
         self.label_actors: list = []        # text hung on the model (what a boundary condition carries)
         self.arrow_actors: list = []        # loads and gravity as arrows
         self._label_items: list = []
+        self._label_state: list = []        # per label: its point, size and place on the screen (to find the one under the mouse)
+        self._label_user: dict = {}         # key -> (dx, dy) in pixels: where the user dragged a label to (kept while the same result is shown)
+        self._drag = None                   # (label index, press position, offset at the press, the camera style put aside)
+        self._style = None
+        self._shown_name = None
         self.edges_on = True
         self.geo_keys: list = []             # the volume of each drawn group (parallel to geo_actors and edge_actors)
         self.hidden_bodies: set = set()
@@ -423,19 +428,54 @@ class Viewport(QWidget):
         self.render()
 
     def _separate_labels(self, items: list):
-        """Labels whose points are close on the screen are moved up (or down, for the ones that hang below) until no two cover each other."""
+        """Labels whose points are close on the screen are moved up (or down, for the ones that hang below) until no two cover each other;
+        a label the user dragged keeps the place it was dragged to."""
         placed = []                                                   # (x, centre y, width) on the screen
+        self._label_state = []
         for it, a in zip(items, self.label_actors):
             self.ren.SetWorldPoint(*[float(v) for v in it["point"]], 1.0)
             self.ren.WorldToDisplay()
             x, y, _ = self.ren.GetDisplayPoint()
             w, h = 11 * len(str(it["text"])) + 14, 32
             sign = -1 if it.get("below") else 1
-            dy = 16 * sign
-            while any(abs(x - px) < (w + pw) / 2 and abs((y + dy + sign * h / 2) - py) < h for px, py, pw in placed) and abs(dy) < 400:
-                dy += 34 * sign
-            a.SetDisplayOffset(0, int(dy))
-            placed.append((x, y + dy + sign * h / 2, w))
+            key = it.get("key") or str(it["text"])
+            if key in self._label_user:
+                ox, dy = self._label_user[key]
+            else:
+                ox, dy = 0, 16 * sign
+                while any(abs(x - px) < (w + pw) / 2 and abs((y + dy + sign * h / 2) - py) < h for px, py, pw in placed) and abs(dy) < 400:
+                    dy += 34 * sign
+            a.SetDisplayOffset(int(ox), int(dy))
+            placed.append((x + ox, y + dy + sign * h / 2, w))
+            self._label_state.append({"actor": a, "point": [float(v) for v in it["point"]], "w": w, "h": h, "sign": sign, "key": key, "off": (int(ox), int(dy))})
+
+    def _label_at(self, x, y):
+        """Index of the label under the display position (x, y) (origin bottom-left), or None."""
+        for i in range(len(self._label_state) - 1, -1, -1):
+            st = self._label_state[i]
+            if not st["actor"].GetVisibility():
+                continue
+            self.ren.SetWorldPoint(*st["point"], 1.0)
+            self.ren.WorldToDisplay()
+            px, py, _ = self.ren.GetDisplayPoint()
+            cx, cy = px + st["off"][0], py + st["off"][1] + st["sign"] * st["h"] / 2
+            if abs(x - cx) <= st["w"] / 2 and abs(y - cy) <= st["h"] / 2:
+                return i
+        return None
+
+    def move_label(self, index: int, dx: int, dy: int):
+        """Put label `index` at pixel offset (dx, dy) from its point (what dragging it does); the place is kept for redraws of this result."""
+        st = self._label_state[index]
+        st["off"] = (int(dx), int(dy))
+        st["actor"].SetDisplayOffset(int(dx), int(dy))
+        self._label_user[st["key"]] = (int(dx), int(dy))
+        self.render()
+
+    def reset_labels(self):
+        """Labels back to the places the program chose."""
+        self._label_user.clear()
+        self._separate_labels(self._label_items)
+        self.render()
 
     def pick_ray(self, p0, p1):
         """What the segment p0 -> p1 (world coordinates) hits: {'kind': 'face', 'face', 'point', 'air'} for a CAD face (while the CAD
@@ -518,9 +558,17 @@ class Viewport(QWidget):
     # (the mouse: a press and release that hardly moved is a click, anything else is the camera being turned)
     def _on_press(self, obj, event):
         self._press = tuple(self.iren.GetEventPosition())
+        i = self._label_at(*self._press) if self._label_state else None
+        if i is not None:                                   # a label is taken: it moves with the mouse and the camera stays where it is
+            self._drag = (i, self._press, self._label_state[i]["off"], self._style)
+            self.iren.SetInteractorStyle(None)
 
     def _on_release(self, obj, event):
         p, self._press = self._press, None
+        if self._drag is not None:
+            self.iren.SetInteractorStyle(self._drag[3])
+            self._drag = None
+            return
         if p is None:
             return
         q = self.iren.GetEventPosition()
@@ -530,13 +578,19 @@ class Viewport(QWidget):
         self.click_at(q[0], self.iren.height() - 1 - q[1], add)
 
     def _on_move(self, obj, event):
+        q = self.iren.GetEventPosition()
+        if self._drag is not None:
+            i, p0, off0, _ = self._drag
+            self.move_label(i, off0[0] + q[0] - p0[0], off0[1] + q[1] - p0[1])
+            return
         if self._press is not None:
             return
         now = time.monotonic()
         if now - self._hover_t < 0.05:
             return
         self._hover_t = now
-        q = self.iren.GetEventPosition()
+        over = bool(self._label_state) and self._label_at(*q) is not None        # (the cursor says that a label can be dragged)
+        self.iren.setCursor(Qt.SizeAllCursor) if over else self.iren.unsetCursor()
         self.hover_at(q[0], self.iren.height() - 1 - q[1])
 
     def picture(self, path: str):
@@ -719,6 +773,9 @@ class Viewport(QWidget):
         """A surface payload {positions, indices, values, per, [categories, present, scale, disp, disp_kind]} coloured by
         its values. vrange: (lo, hi) or None for the payload's own; fixed_quality: the red-is-bad scale of cell quality."""
         self.clear_overlay()
+        if name != self._shown_name:
+            self._shown_name = name
+            self._label_user.clear()
         if not p or not p.get("n_tris"):
             self.render()
             return {}

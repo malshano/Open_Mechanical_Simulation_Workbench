@@ -76,3 +76,22 @@ def test_the_cooling_summary_has_units_and_a_heat_balance(ctl):
     t = " | ".join(_tiles(ctl, "cht_enclosure", s))
     assert "Hottest part (Chip): 37.9 °C" in t and "Thermal resistance: 1.29 K/W" in t and "Air leaves at: 26.8 °C" in t
     assert "Pressure drop: 2.77 Pa" in t and "Heat taken by the air: 9.95 W (ok)" in t and "Solution: Not converged (warn)" in t
+
+
+def test_a_label_can_be_moved_and_keeps_its_place(ctl):
+    """The Max and Min labels are dragged with the mouse (move_label is what the drag calls): the place is kept when the labels are drawn
+    again, until another result is shown or the labels are reset."""
+    v = ctl.win.view
+    items = [{"point": [0, 0, 0], "text": "Max 5 Pa", "key": "max"}, {"point": [0, 0, 0], "text": "Min 1 Pa", "key": "min", "below": True}]
+    v.set_labels(items)
+    assert len(v._label_state) == 2
+    before = v._label_state[0]["actor"].GetDisplayOffset()
+    v.move_label(0, 120, 80)
+    assert tuple(v._label_state[0]["actor"].GetDisplayOffset()) == (120, 80) and tuple(before) != (120, 80)
+    items[0]["text"] = "Max 5.1 Pa"                                                        # (drawn again with another value: same label)
+    v.set_labels(items)
+    assert tuple(v._label_state[0]["actor"].GetDisplayOffset()) == (120, 80)
+    assert tuple(v._label_state[1]["actor"].GetDisplayOffset())[0] == 0                   # (the other one stays where it was put)
+    v.reset_labels()
+    assert tuple(v._label_state[0]["actor"].GetDisplayOffset()) != (120, 80)
+    v.set_labels([])

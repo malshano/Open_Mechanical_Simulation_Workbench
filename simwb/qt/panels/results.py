@@ -181,7 +181,7 @@ class ResultsPanel(_Panel):
         v.addWidget(self.edges)
         self.minmax = wid(QCheckBox("Label the highest and lowest values"), "results.minmax")
         self.minmax.setChecked(True)
-        self.minmax.setToolTip("Hang the highest and lowest values on the model")
+        self.minmax.setToolTip("Hang the highest and lowest values on the model. Drag a label with the mouse to move it.")
         self.minmax.toggled.connect(lambda _=False: self._display_changed())
         v.addWidget(self.minmax)
         v.addStretch(1)
@@ -402,7 +402,7 @@ class ResultsPanel(_Panel):
                 u = self.view.overlay_info.get("unit", "")
                 for k, word in (("max", "Max"), ("min", "Min")):
                     items.append({"point": ex[k]["point"], "text": f"{word} {ex[k]['value']:.4g} {u}".strip(),
-                                  "color": t["bad"] if k == "max" else t["accent"], "below": k == "min"})
+                                  "color": t["bad"] if k == "max" else t["accent"], "below": k == "min", "key": k})
         for i, p in enumerate(self.pins):
             items.append({"point": p["point"], "text": f"{chr(65 + i % 26)}: {p['value']:.4g} {p['unit']}".strip(), "color": t["warn"]})
         for k, e in enumerate(self.line_ends[:2]):
