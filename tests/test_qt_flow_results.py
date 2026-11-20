@@ -1,0 +1,78 @@
+"""Flow and cooling results: the object and a plane through the air are drawn (not the outside of the air box), and the Summary reads in
+the terms of the study (drag, temperatures, units, verdicts)."""
+import base64
+
+import numpy as np
+from qt_support import ctl  # noqa: F401
+
+from simwb.results import ResultSet, boundary_from_tets, merge_payloads
+
+
+def _box_results():
+    """A 4 x 4 x 4 grid of tets (a unit cube of 'air'); the faces in the lowest x slab are the 'body' group, the others 'farfield'."""
+    from scipy.spatial import Delaunay
+    g = np.linspace(0, 1, 5)
+    nodes = np.array(np.meshgrid(g, g, g, indexing="ij")).reshape(3, -1).T
+    tets = Delaunay(nodes).simplices
+    tris, cells = boundary_from_tets(tets)
+    body = nodes[tris][:, :, 0].max(1) < 0.3
+    fields = {"Temperature": ("node", nodes[:, 0] * 10.0 + 20.0, "°C")}
+    return ResultSet(nodes, tets, np.zeros(len(tets)), ["air"], fields, tris, cells, np.where(body, 1, 0), ["farfield", "body"])
+
+
+def _vals(p):
+    return np.frombuffer(base64.b64decode(p["values"]), np.float32)
+
+
+def test_a_half_of_the_object_is_kept_below_the_plane():
+    rs = _box_results()
+    whole = rs.surface("Temperature", groups=["farfield"])
+    half = rs.surface("Temperature", groups=["farfield"], below=(1, 0.5))
+    assert 0 < half["n_tris"] < whole["n_tris"]
+    pos = np.frombuffer(base64.b64decode(half["positions"]), np.float32).reshape(-1, 3)
+    assert pos[:, 1].max() <= 0.5 + 0.3                                                # (whole triangles: they may reach a little past the plane)
+
+
+def test_a_cut_plane_and_the_object_become_one_picture():
+    rs = _box_results()
+    plane = rs.slice("Temperature", 1, 0.5)
+    obj = rs.surface("Temperature", groups=["body"], below=(1, 0.5))
+    both = merge_payloads(plane, obj)
+    assert both["n_tris"] == plane["n_tris"] + obj["n_tris"]
+    assert len(_vals(both)) == len(_vals(plane)) + len(_vals(obj))
+    idx = np.frombuffer(base64.b64decode(both["indices"]), np.uint32)
+    assert idx.max() < len(_vals(both)) and both["min"] <= both["max"] and both["unit"] == "°C"
+
+
+def test_a_picture_without_values_does_not_blank_the_other():
+    """A wall-only field (y+) cut through the air has no value on the plane: only the walls are drawn."""
+    rs = _box_results()
+    obj = rs.surface("Temperature", groups=["body"])
+    empty = dict(obj, values=base64.b64encode(np.full(len(_vals(obj)), np.nan, np.float32).tobytes()).decode())
+    both = merge_payloads(empty, obj)
+    assert both["n_tris"] == obj["n_tris"] and np.isfinite(_vals(both)).all()
+
+
+def _tiles(ctl, st_study, summary):
+    from simwb.qt.panels.common import KPI
+    p = ctl.win.panels["results"]
+    p._summary({"study": st_study}, summary, True)
+    return [k.property("api_text") for k in p.pages["summary"].parentWidget().findChildren(KPI)]
+
+
+def test_the_aerodynamics_summary_reads_in_drag_lift_and_checks(ctl):
+    s = {"time": 516.0, "speed_m_s": 10.0, "drag_N": 0.0132, "CdA_m2": 0.00022, "coefficients": {"CD": 0.69, "lift_N": -0.00026, "A_ref_source": "projected frontal area"},
+         "yPlus": {"mean": 8.0, "max": 52.0}, "convergence": {"converged": True, "outputs_stable": True, "iterations": 516}}
+    t = " | ".join(_tiles(ctl, "external_aero", s))
+    assert "Drag force: 0.0132 N" in t and "Drag area CdA: 2.2 cm²" in t and "Lift force:" in t
+    assert "Wall y+ (mean): 8 (warn)" in t and "30 to 300" in t                       # (a verdict, not a bare number)
+    assert "Solution: Converged (ok)" in t and "Time" not in t and "Speed M S" not in t
+
+
+def test_the_cooling_summary_has_units_and_a_heat_balance(ctl):
+    s = {"time": 1577.0, "hottest_part": {"label": "Chip", "T_max": 37.87}, "thermal_resistance_K_per_W": 1.287, "outlet_T_mixed": 26.76, "inlet_T": 25.0,
+         "pressure_drop_Pa": 2.77, "flow_m3_per_h": 17.3, "heat_input_W": 10.0, "heat_carried_by_air_W": 9.95, "energy_imbalance_percent": 0.53,
+         "convergence": {"converged": False, "iterations": 2000}}
+    t = " | ".join(_tiles(ctl, "cht_enclosure", s))
+    assert "Hottest part (Chip): 37.9 °C" in t and "Thermal resistance: 1.29 K/W" in t and "Air leaves at: 26.8 °C" in t
+    assert "Pressure drop: 2.77 Pa" in t and "Heat taken by the air: 9.95 W (ok)" in t and "Solution: Not converged (warn)" in t

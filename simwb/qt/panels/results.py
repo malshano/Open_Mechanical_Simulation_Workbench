@@ -41,6 +41,7 @@ class ResultsPanel(_Panel):
         self.line_pick = False
         self.probe_on = False
         self._sig = None
+        self._sec_pid = None
         self.line_data = None
         tabs, self.tab_grp, self.tab_btns = _seg(self.TABS, "summary", prefix="results.tab")
         self.v.addWidget(tabs)
@@ -159,7 +160,8 @@ class ResultsPanel(_Panel):
         row.addWidget(true)
         v.addLayout(row)
         v.addWidget(_h("Section"))
-        v.addWidget(_muted("Cut the part to see the inside: the field on the cut faces, for the side below the plane."))
+        self.section_hint = _muted("Cut the part to see the inside: the field on the cut faces, for the side below the plane.")
+        v.addWidget(self.section_hint)
         w, self.section_grp, self.section_btns = _seg([("", "Off"), ("x", "X"), ("y", "Y"), ("z", "Z")], "", prefix="results.section")
         for k, b in self.section_btns.items():
             b.clicked.connect(lambda _=False, k=k: self._section_changed())
@@ -400,7 +402,7 @@ class ResultsPanel(_Panel):
                 u = self.view.overlay_info.get("unit", "")
                 for k, word in (("max", "Max"), ("min", "Min")):
                     items.append({"point": ex[k]["point"], "text": f"{word} {ex[k]['value']:.4g} {u}".strip(),
-                                  "color": t["bad"] if k == "max" else t["accent"]})
+                                  "color": t["bad"] if k == "max" else t["accent"], "below": k == "min"})
         for i, p in enumerate(self.pins):
             items.append({"point": p["point"], "text": f"{chr(65 + i % 26)}: {p['value']:.4g} {p['unit']}".strip(), "color": t["warn"]})
         for k, e in enumerate(self.line_ends[:2]):
@@ -425,6 +427,15 @@ class ResultsPanel(_Panel):
                 self.field.setCurrentText(cur)
             self.field.blockSignals(False)
         self.fields = infos
+        flow = st["study"] in ("external_aero", "cht_enclosure")
+        self.section_hint.setText("Cut through the air to see the flow: the field on the plane, with the half of the object below it. "
+                                  "Off draws the object alone." if flow else
+                                  "Cut the part to see the inside: the field on the cut faces, for the side below the plane.")
+        if flow and infos and self._sec_pid != self.engine.pid:
+            self._sec_pid = self.engine.pid           # (a flow result opens cut through the middle: the whole air box would hide the object)
+            self.section_btns["y"].setChecked(True)
+            self.section_pos.setValue(500)
+            self._section_changed()
         sig = json.dumps([st["study"], st["solve"].get("status"), st["solve"].get("summary"), names, theme.effective(),
                           st.get("mesh_check")], default=str, sort_keys=True)
         if sig == self._sig:
@@ -446,6 +457,14 @@ class ResultsPanel(_Panel):
         b.setToolTip(f"Show {field} on the model")
         b.clicked.connect(lambda f=field: self.show_field(f))
         v.addWidget(b)
+
+    @staticmethod
+    def _converged_tile(s):
+        c = s.get("convergence") or {}
+        ok = bool(c.get("converged"))
+        return ("Solution", "Converged" if ok else "Not converged", "", "ok" if ok else "warn",
+                f"{c.get('iterations', 0):,} iterations; the forces and temperatures stopped changing" if ok and c.get("outputs_stable")
+                else f"{c.get('iterations', 0):,} iterations: check the residuals", None)
 
     def _summary(self, st, s, has_results):
         lay = self.pages["summary"]
@@ -487,6 +506,27 @@ class ResultsPanel(_Panel):
                 tiles.append(("Mass", fmt_num(round(s["mass_kg"] * 1000, 1)), "g", "", "", None))
             for m in (s.get("modes") or [])[:8]:
                 extra.append((m.get("mode"), m.get("frequency_Hz")))
+        elif "drag_N" in s:                      # external aerodynamics
+            co = s.get("coefficients") or {}
+            yp = s.get("yPlus") or {}
+            tiles = [("Drag force", f"{s['drag_N']:.3g}", "N", "", f"at {s.get('speed_m_s', 0):g} m/s", "Pressure"),
+                     ("Drag area CdA", f"{s['CdA_m2'] * 1e4:.3g}", "cm²", "", f"Cd {co.get('CD', 0):.3f}" + (f", on the {co['A_ref_source']}" if co.get("A_ref_source") else ""), None),
+                     ("Lift force", f"{co.get('lift_N', 0):.3g}", "N", "", "negative = pushes the body down", None)]
+            if yp.get("mean") is not None:
+                good = 30 <= yp["mean"] <= 300
+                tiles.append(("Wall y+ (mean)", f"{yp['mean']:.0f}", "", "ok" if good else "warn",
+                              "inside the 30 to 300 the wall functions expect" if good else f"outside the 30 to 300 the wall functions expect (max {yp.get('max', 0):.0f})", "y+"))
+            tiles.append(self._converged_tile(s))
+        elif "outlet_T_mixed" in s:               # electronics cooling
+            hot = s.get("hottest_part") or {}
+            imb = abs(s.get("energy_imbalance_percent") or 0)
+            tiles = [(f"Hottest part ({hot.get('label', '')})".replace(" ()", ""), f"{hot.get('T_max', 0):.1f}", "°C", "", "", "Temperature"),
+                     ("Thermal resistance", f"{s['thermal_resistance_K_per_W']:.2f}" if s.get("thermal_resistance_K_per_W") is not None else "-", "K/W", "", "hottest part above the inlet air, per watt", None),
+                     ("Air leaves at", f"{s['outlet_T_mixed']:.1f}", "°C", "", f"it came in at {s.get('inlet_T', 0):g} °C", None),
+                     ("Pressure drop", f"{s['pressure_drop_Pa']:.2f}", "Pa", "", f"what a fan must supply ({s.get('flow_m3_per_h', 0):.1f} m³/h)", "Pressure"),
+                     ("Heat taken by the air", f"{s.get('heat_carried_by_air_W', 0):.2f}", "W", "ok" if imb < 2 else "warn",
+                      f"of {s.get('heat_input_W', 0):g} W put in ({imb:.1f} % off)", None),
+                     self._converged_tile(s)]
         else:
             for k, val in list(s.items())[:6]:
                 if isinstance(val, (int, float)) and not isinstance(val, bool):

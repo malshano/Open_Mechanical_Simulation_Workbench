@@ -6,11 +6,15 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+import numpy as np
 from PySide6.QtCore import QObject, QSettings, Signal
 
 from .. import project as P
+from .. import resample
+from ..results import merge_payloads
 
 MAX_RECENT = 10
+FLOW_STUDIES = ("external_aero", "cht_enclosure")
 
 
 class Engine(QObject):
@@ -150,12 +154,64 @@ class Engine(QObject):
         """The result field on the part's surface; with section=(axis 'x'|'y'|'z', fraction 0..1 of the part's extent) the part is cut there
         and the cells on the low side are shown with the cut faces open (the inside of the part)."""
         rs = self.project().results().at(time_index)
-        if not section:
-            return rs.surface(field)
-        axis, frac = section
-        ax = "xyz".index(axis)
-        lo, hi = float(rs.nodes[:, ax].min()), float(rs.nodes[:, ax].max())
-        return rs.clip(field, ax, lo + min(max(float(frac), 0.0), 1.0) * (hi - lo))
+        flow = self.project().study in FLOW_STUDIES
+        box = self._flow_box(rs) if flow else None            # (a flow result is looked at close to the object, not across the whole far field)
+        pos = ax = None
+        if section:
+            axis, frac = section
+            ax = "xyz".index(axis)
+            lo, hi = (float(box[ax]), float(box[3 + ax])) if box else (float(rs.nodes[:, ax].min()), float(rs.nodes[:, ax].max()))
+            pos = lo + min(max(float(frac), 0.0), 1.0) * (hi - lo)
+        if flow:
+            return self._flow_surface(rs, field, ax, pos, box)
+        return rs.surface(field) if ax is None else rs.clip(field, ax, pos)
+
+    def _flow_summary(self) -> dict:
+        return ((self.state() or {}).get("solve") or {}).get("summary") or {}
+
+    def _flow_box(self, rs, around=9.0, downstream=12.0):
+        """[x0, y0, z0, x1, y1, z1] around the object of an external flow (9 body sizes each way, 21 downstream; the camera looks closer): where the flow is worth
+        looking at. None when the study has no object cut out of the air (a cooling duct is looked at whole)."""
+        s = self._flow_summary()
+        groups = [g for g in (s.get("default_groups") or []) if g in rs.groups]
+        if not groups:
+            return None
+        m = np.isin(rs.surf_group, [rs.groups.index(g) for g in groups])
+        pts = rs.nodes[np.unique(rs.surf_tris[m].ravel())]
+        if not len(pts):
+            return None
+        lo, hi = pts.min(0), pts.max(0)
+        size = float((hi - lo).max()) or 1.0
+        lo, hi = lo - around * size, hi + around * size
+        u = np.asarray(s.get("U_inf") or [0, 0, 0], float)
+        if np.linalg.norm(u):
+            d = int(np.argmax(np.abs(u)))
+            if u[d] > 0:
+                hi[d] += downstream * size
+            else:
+                lo[d] -= downstream * size
+        dom_lo, dom_hi = rs.nodes.min(0), rs.nodes.max(0)
+        return np.concatenate([np.maximum(lo, dom_lo), np.minimum(hi, dom_hi)]).tolist()
+
+    def flow_focus(self):
+        """The region the camera looks at when an external flow is cut open: close around the object (the plane drawn reaches further, so that
+        the large cells at its edge fall outside the picture)."""
+        if self.project().study not in FLOW_STUDIES:
+            return None
+        return self._flow_box(self.project().results(), 0.7, 1.6)
+
+    def _flow_surface(self, rs, field: str, ax, pos, box):
+        """A flow or cooling result: the outside of the air box would hide everything, so draw the object (what the solver says to show:
+        the body of an aircraft, the solid parts of a cooled assembly); with a section, the field on the plane through the air as well,
+        and only the half of the object on the low side, cut open at the plane."""
+        s = self._flow_summary()
+        groups = s.get("default_groups") or None
+        hide = tuple(s.get("default_hidden_regions") or ())
+        obj = rs.surface(field, groups=groups, hide_regions=hide, below=None if ax is None else (ax, pos))
+        if ax is None:
+            return obj
+        plane = resample.plane_payload(rs, field, ax, pos, box, 0) if box else rs.slice(field, ax, pos)
+        return merge_payloads(plane, obj)
 
     def summary_text(self) -> str:
         return self.project().summary_text()

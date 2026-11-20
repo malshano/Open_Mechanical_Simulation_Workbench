@@ -100,6 +100,7 @@ class Viewport(QWidget):
             style = vtkInteractorStyleTrackballCamera()
             self.iren.SetInteractorStyle(style)
             style.AddObserver("StartInteractionEvent", lambda *_: self._user_moved())      # (the user took the camera: stop re-fitting it)
+        self._focus = None      # (x0, x1, y0, y1, z0, z1): the camera is fitted to this region (a flow cut open: close to the object) instead of everything drawn
         self._autofit = False   # the camera was fitted by the program (not moved by the user): it is fitted again when the view is resized
         cam = self.ren.GetActiveCamera()
         cam.SetPosition(1, -1.4, 0.9)     # (an oblique start: a camera straight above the up axis warns)
@@ -401,7 +402,8 @@ class Viewport(QWidget):
             a = vtkBillboardTextActor3D()
             a.SetInput(str(it["text"]))
             a.SetPosition(*[float(v) for v in it["point"]])
-            a.SetDisplayOffset(0, 16)
+            below = bool(it.get("below"))           # (the lowest value hangs under its point, the highest above: they never cover each other)
+            a.SetDisplayOffset(0, -16 if below else 16)
             a.PickableOff()
             tp = a.GetTextProperty()
             tp.SetFontSize(16)
@@ -413,11 +415,27 @@ class Viewport(QWidget):
             tp.SetFrameColor(*rgb(it.get("color") or t["line_strong"]))
             tp.SetFrameWidth(3)
             tp.SetJustificationToCentered()
-            tp.SetVerticalJustificationToBottom()
+            tp.SetVerticalJustificationToTop() if below else tp.SetVerticalJustificationToBottom()
             a.SetVisibility(self._labels_visible())
             self.ren2.AddActor(a)
             self.label_actors.append(a)
+        self._separate_labels(items)
         self.render()
+
+    def _separate_labels(self, items: list):
+        """Labels whose points are close on the screen are moved up (or down, for the ones that hang below) until no two cover each other."""
+        placed = []                                                   # (x, centre y, width) on the screen
+        for it, a in zip(items, self.label_actors):
+            self.ren.SetWorldPoint(*[float(v) for v in it["point"]], 1.0)
+            self.ren.WorldToDisplay()
+            x, y, _ = self.ren.GetDisplayPoint()
+            w, h = 11 * len(str(it["text"])) + 14, 32
+            sign = -1 if it.get("below") else 1
+            dy = 16 * sign
+            while any(abs(x - px) < (w + pw) / 2 and abs((y + dy + sign * h / 2) - py) < h for px, py, pw in placed) and abs(dy) < 400:
+                dy += 34 * sign
+            a.SetDisplayOffset(0, int(dy))
+            placed.append((x, y + dy + sign * h / 2, w))
 
     def pick_ray(self, p0, p1):
         """What the segment p0 -> p1 (world coordinates) hits: {'kind': 'face', 'face', 'point', 'air'} for a CAD face (while the CAD
@@ -853,10 +871,17 @@ class Viewport(QWidget):
             fp = np.array(cam.GetFocalPoint())
             cam.SetPosition(*(fp + d))
             cam.SetViewUp(0, 1, 0) if abs(d[2]) > 0.99 else cam.SetViewUp(0, 0, 1)
-        self.ren.ResetCamera()
+        self._reset_camera()
         self._autofit = True
         self.render()
         QTimer.singleShot(60, self._refit)      # (once the layout has settled: a view that has just been shown still has its old render size)
+
+    def set_focus(self, box):
+        """The region the camera fits to: box = [x0, y0, z0, x1, y1, z1] in world coordinates, or None for everything drawn."""
+        self._focus = None if box is None else (box[0], box[3], box[1], box[4], box[2], box[5])
+
+    def _reset_camera(self):
+        self.ren.ResetCamera(*self._focus) if self._focus else self.ren.ResetCamera()
 
     def set_view(self, name: str):
         self.fit({"iso": (1, -1.4, 0.9), "+x": (1, 0, 0), "-x": (-1, 0, 0), "+y": (0, 1, 0), "-y": (0, -1, 0),
@@ -878,7 +903,7 @@ class Viewport(QWidget):
 
     def _refit(self):
         if self._autofit:
-            self.ren.ResetCamera()
+            self._reset_camera()
             self.render()
 
     def set_camera(self, position=None, focal_point=None, view_up=None, view_angle=None, parallel=None):

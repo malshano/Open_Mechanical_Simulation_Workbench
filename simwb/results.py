@@ -178,10 +178,13 @@ class ResultSet:
                 return "static", np.asarray(d[1], float) * 1e-3
         return None
 
-    def surface(self, field, groups=None, hide_regions=()):
+    def surface(self, field, groups=None, hide_regions=(), below=None):
+        """below: (axis, position) keeps only the faces on the low side of that plane (the half of an object left when a flow is cut open)."""
         m = np.ones(len(self.surf_tris), bool)
         if groups:
             m = np.isin(self.surf_group, [self.groups.index(g) for g in groups if g in self.groups])
+        if below is not None and len(self.surf_tris):
+            m = m & (self.nodes[self.surf_tris].mean(1)[:, int(below[0])] <= float(below[1]))
         fv = self.surf_values.get(field)
         return self._tri_payload(self.surf_tris[m], self.surf_cell[m], field,
                                  None if fv is None else fv[m], hide_regions, smooth=True)
@@ -314,6 +317,34 @@ class ResultSet:
 
     def summary_ranges(self):
         return {k: v for k, v in ((f["name"], [f["min"], f["max"]]) for f in self.field_info())}
+
+
+def merge_payloads(*payloads):
+    """Several vertex-coloured surface payloads (a cut plane and the object in the flow) as one. A payload with no value anywhere
+    (a field that exists only on walls, cut through the air) is left out when another one has some."""
+    def dec(p, key, dt, cols):
+        a = np.frombuffer(base64.b64decode(p[key]), dt)
+        return a.reshape(-1, cols) if cols > 1 else a
+
+    parts = []
+    for p in payloads:
+        if p and p.get("n_tris"):
+            parts.append((dec(p, "positions", np.float32, 3), dec(p, "indices", np.uint32, 1), dec(p, "values", np.float32, 1), p))
+    live = [x for x in parts if np.isfinite(x[2]).any()]
+    parts = live or parts
+    if not parts:
+        return payloads[0]
+    pos, idx, val, off = [], [], [], 0
+    for P, I, V, _ in parts:
+        pos.append(P)
+        idx.append(I + np.uint32(off))
+        val.append(V)
+        off += len(P)
+    vals = np.concatenate(val)
+    fin = vals[np.isfinite(vals)]
+    return {"positions": _b64(np.concatenate(pos)), "indices": _b64(np.concatenate(idx).astype(np.uint32)), "values": _b64(vals),
+            "per": "vertex", "n_tris": int(sum(p[3]["n_tris"] for p in parts)), "min": float(fin.min()) if len(fin) else 0.0,
+            "max": float(fin.max()) if len(fin) else 0.0, "unit": parts[0][3].get("unit", "")}
 
 
 def _b64(a: np.ndarray) -> str:

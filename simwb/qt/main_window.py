@@ -640,10 +640,19 @@ class MainWindow(QMainWindow):
                 if r["field"]:
                     p = self.engine.result_surface(r["field"], section=r.get("section"))
                     info = next((f for f in self.panels["results"].fields if f["name"] == r["field"]), {})
+                    flow = st["study"] in AIR_KINDS
+                    rng = r["range"]
+                    if rng is None and flow and info.get("p99", 0) > info.get("p01", 0):   # (the extremes of a flow sit at one wall point: the colours use the range of nearly all of it)
+                        rng = (info["p01"], info["p99"])
                     self.view.show_geometry(False)
                     self.view.show_surface(p, name=r["field"], unit=info.get("unit", ""), cmap=r["cmap"], reverse=r["reverse"],
-                                           bands=r["bands"], edges=r["edges"], deform=r["deform"], animate=r["animate"], vrange=r["range"])
-                    self._fit_once((self.engine.pid, "results"))
+                                           bands=r["bands"], edges=r["edges"], deform=r["deform"], animate=r["animate"], vrange=rng)
+                    sec = r.get("section")
+                    self.view.set_focus(self.engine.flow_focus() if sec and flow else None)
+                    if sec and st["study"] in AIR_KINDS:      # a flow cut open: seen straight on, from the side that is kept
+                        self._fit_once((self.engine.pid, "results", sec[0]), f"+{sec[0]}")
+                    else:
+                        self._fit_once((self.engine.pid, "results"))
                     self.panels["results"].draw_marks()
                     return
             self.view.clear_overlay()
