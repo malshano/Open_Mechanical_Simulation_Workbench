@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer
-from PySide6.QtGui import QAction, QActionGroup, QKeySequence, QPainter, QPixmap
+from PySide6.QtGui import QAction, QActionGroup, QBrush, QColor, QKeySequence, QPainter, QPixmap
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDockWidget, QFileDialog, QHBoxLayout,
                                QInputDialog, QLabel, QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton, QScrollArea,
                                QStackedWidget, QStatusBar, QToolBar, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
@@ -481,6 +481,7 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentIndex([k for k, _ in STEPS].index(step))
         self.stack.currentWidget().verticalScrollBar().setValue(0)
         self.assistant.set_context(step)
+        self._select_step_node()
         self.update_view()
 
     def _tree_clicked(self, item, _col=0):
@@ -505,36 +506,72 @@ class MainWindow(QMainWindow):
         if not st:
             return
 
-        def node(parent, text, step=None):
+        tk = theme.tokens()
+        tone_col = {"ok": tk["ok_text"], "warn": tk["warn_text"], "bad": tk["bad_text"], "mute": tk["muted"]}
+
+        def node(parent, text, step=None, tone=None, head=False, detail=False):
             it = QTreeWidgetItem(parent, [text])
             if step:
                 it.setData(0, Qt.UserRole, step)
+            if tone:                                     # (state: green done, amber to check, grey not yet; the mark in the text says it too)
+                it.setForeground(0, QBrush(QColor(tone_col[tone])))
+            elif detail:                                 # (the second line of an entry: quieter than the entry itself)
+                it.setForeground(0, QBrush(QColor(tk["muted"])))
+            if head:
+                f = it.font(0)
+                f.setBold(True)
+                it.setFont(0, f)
             return it
-        root = node(self.tree, f"{st['name']}")
+        setup_checks = [c for c in (st.get("checks") or []) if c.get("step") == "setup"]
+        missing = sum(1 for c in setup_checks if c.get("level") == "error")
+        tocheck = sum(1 for c in setup_checks if c.get("level") == "warning")
+        root = node(self.tree, f"{st['name']}", head=True)
         root.setExpanded(True)
-        g = node(root, f"Geometry ({len(st['body_list'])} bod{'y' if len(st['body_list']) == 1 else 'ies'})", "geometry")
+        g = node(root, f"Geometry ({len(st['body_list'])} bod{'y' if len(st['body_list']) == 1 else 'ies'})", "geometry", head=True)
         for b in st["body_list"]:
-            node(g, b["name"], "geometry")
-        m = node(root, "Materials", "setup")
+            node(g, b["name"], "geometry", detail=True)
+        m = node(root, "Materials", "setup", head=True)
         for b in st["body_list"]:
-            node(m, f"{b['name']} — {b.get('material_label') or b.get('material') or 'default'}", "setup")
-        s = node(root, "Supports & loads", "setup")
+            node(m, f"{b['name']} — {b.get('material_label') or b.get('material') or 'default'}", "setup", detail=True)
+        s = node(root, "Supports & loads" + (f" — ⚠ {missing} missing" if missing else ""), "setup", tone="warn" if missing else None, head=True)
         for b in st.get("bcs") or []:
             n = len(b.get("faces") or [])
-            node(s, f"{b['name']} — {b['type'].replace('_', ' ')}" + (f" · {n} face{'s' if n != 1 else ''}" if n else " · no faces yet"), "setup")
+            node(s, f"{b['name']} — {b['type'].replace('_', ' ')}" + (f" · {n} face{'s' if n != 1 else ''}" if n else " · no faces yet"), "setup",
+                 tone=None if n else "warn", detail=bool(n))
         ms = st["mesh"]
         node(root, (f"✓ Mesh — {ms['stats']['cells']:,} cells" if ms.get("stats") and ms.get("status") == "ready"
-                    else f"⚠ Mesh — {ms['stats']['cells']:,} cells (out of date)" if ms.get("stats") and ms.get("status") == "stale" else "○ Mesh — none"), "mesh")
+                    else f"⚠ Mesh — {ms['stats']['cells']:,} cells (out of date)" if ms.get("stats") and ms.get("status") == "stale" else "○ Mesh — none"),
+             "mesh", tone="ok" if ms.get("status") == "ready" else "warn" if ms.get("status") == "stale" else "mute", head=True)
         sv = st["solve"].get("status", "none")
-        node(root, f"{'✓' if sv == 'done' else '⚠' if sv in ('stale', 'failed') else '○'} Solution — {sv}", "solve")
-        r = node(root, "Results", "results")
-        if st["solve"].get("status") == "done":
+        node(root, f"{'✓' if sv == 'done' else '⚠' if sv in ('stale', 'failed') else '○'} Solution — {sv}", "solve",
+             tone="ok" if sv == "done" else "warn" if sv in ("stale", "failed") else "mute", head=True)
+        done = st["solve"].get("status") == "done"
+        r = node(root, "Results" if done else "Results — run the simulation first", "results", tone=None if done else "mute", head=True)
+        if done:
             try:
                 for f in self.engine.result_fields():
-                    node(r, f"{f['name']} ({f['unit']})", "results")
+                    node(r, f"{f['name']} ({f['unit']})", "results", detail=True)
             except Exception:  # noqa: BLE001
                 pass
         self.tree.expandAll()
+        self._select_step_node()
+
+    def _select_step_node(self):
+        """The row of the step being worked on is the selected one (programmatic: it does not change the step)."""
+        root = self.tree.topLevelItem(0)
+        if root is None:
+            return
+        self.tree.blockSignals(True)
+        try:
+            for i in range(root.childCount()):
+                it = root.child(i)
+                if it.data(0, Qt.UserRole) == self.step and not (self.step == "setup" and it.text(0).startswith("Supports")):
+                    self.tree.setCurrentItem(it)
+                    break
+            else:
+                self.tree.setCurrentItem(None)
+        finally:
+            self.tree.blockSignals(False)
 
     # ------------------------------------------------------------------ the 3D view
     def _fit_once(self, key, look=None):

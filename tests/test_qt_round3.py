@@ -93,3 +93,35 @@ def test_the_model_is_visible_when_the_camera_is_fitted_to_it(ctl, solved):
     ctl.do("study.import", {"path": solved["heat"]})
     ctl.do("step.go", {"step": "setup"})
     assert seen and seen[-1] is True, seen                                             # (the fit to the model happens with it shown)
+
+
+def _items(c):
+    root = c.win.tree.topLevelItem(0)
+    return {root.child(i).text(0): root.child(i) for i in range(root.childCount())}
+
+
+def test_the_outline_shows_state_in_colour_and_words_and_selects_the_current_step(ctl, solved):
+    from simwb.qt import theme
+    ctl.do("study.import", {"path": solved["static"]})
+    ctl.do("step.go", {"step": "mesh"})
+    it = _items(ctl)
+    mesh = next(v for k, v in it.items() if "Mesh —" in k)
+    assert mesh.text(0).startswith("✓") and mesh.foreground(0).color().name() == theme.tokens()["ok_text"] and mesh.font(0).bold()
+    assert ctl.win.tree.currentItem() is mesh                                          # the row of the step being worked on
+    ctl.do("step.go", {"step": "solve"})
+    assert ctl.win.tree.currentItem().text(0).startswith("✓ Solution")
+    child = next(v for k, v in it.items() if k == "Materials").child(0)
+    assert child.foreground(0).color().name() == theme.tokens()["muted"] and not child.font(0).bold()        # a detail: quieter
+    ctl.do("theme.set", {"mode": "light"})                                             # the colours follow the theme
+    mesh = next(v for k, v in _items(ctl).items() if "Mesh —" in k)
+    assert mesh.foreground(0).color().name() == theme.tokens()["ok_text"] == "#17692e"
+
+
+def test_the_outline_says_what_is_missing_and_what_is_not_there_yet(ctl):
+    ctl.do("study.example", {"study": "heat_conduction"})
+    wait_ = __import__("test_qt_chrome").wait
+    wait_(ctl)
+    it = _items(ctl)
+    assert any(k.startswith("Supports & loads — ⚠") and "missing" in k for k in it)     # a heat study needs a condition
+    assert "Results — run the simulation first" in it
+    assert it["Results — run the simulation first"].childCount() == 0
