@@ -125,3 +125,25 @@ def test_the_outline_says_what_is_missing_and_what_is_not_there_yet(ctl):
     assert any(k.startswith("Supports & loads — ⚠") and "missing" in k for k in it)     # a heat study needs a condition
     assert "Results — run the simulation first" in it
     assert it["Results — run the simulation first"].childCount() == 0
+
+
+def test_a_fitted_view_is_fitted_again_when_resized_until_the_user_moves_the_camera(ctl, solved):
+    """A study opened from the start screen was fitted before the 3D view had its final size and came up too big; the view now fits again."""
+    ctl.do("study.import", {"path": solved["static"]})
+    ctl.do("step.go", {"step": "setup"})
+    v = ctl.win.view
+    assert v._autofit is True                                                          # (fitted by the program)
+    calls = []
+    v._refit = lambda: calls.append(1)
+    ctl.win.resize(1250, 780)
+    ctl._settle()
+    assert calls                                                                       # resized: fitted again
+    v._user_moved()                                                                    # the user turned or zoomed the camera
+    n = len(calls)
+    ctl.win.resize(1400, 850)
+    ctl._settle()
+    assert len(calls) == n and v._autofit is False                                     # their view is left alone
+    ctl.widget_do("viewbar.fit", "click")                                              # Fit puts it under the program's care again
+    assert v._autofit is True
+    ctl.do("view.camera", {"position": [1, 2, 3]}) if "view.camera" in ctl.actions else v.set_camera(position=[1, 2, 3])
+    assert v._autofit is False

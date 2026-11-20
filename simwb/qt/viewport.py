@@ -18,7 +18,7 @@ from vtkmodules.vtkCommonDataModel import vtkCellArray, vtkPolyData
 from vtkmodules.vtkFiltersCore import vtkFeatureEdges, vtkPolyDataNormals
 from vtkmodules.vtkFiltersSources import vtkArrowSource, vtkCubeSource
 from vtkmodules.vtkCommonTransforms import vtkTransform
-from vtkmodules.vtkFiltersGeneral import vtkTransformPolyDataFilter
+from vtkmodules.vtkFiltersGeneral import vtkTransformFilter
 from vtkmodules.vtkIOImage import vtkPNGWriter
 from vtkmodules.vtkInteractionStyle import vtkInteractorStyleTrackballCamera
 from vtkmodules.vtkInteractionWidgets import vtkOrientationMarkerWidget
@@ -97,7 +97,10 @@ class Viewport(QWidget):
             self.rw.SetNumberOfLayers(2)
             self.rw.AddRenderer(self.ren)
             self.rw.AddRenderer(self.ren2)
-            self.iren.SetInteractorStyle(vtkInteractorStyleTrackballCamera())
+            style = vtkInteractorStyleTrackballCamera()
+            self.iren.SetInteractorStyle(style)
+            style.AddObserver("StartInteractionEvent", lambda *_: self._user_moved())      # (the user took the camera: stop re-fitting it)
+        self._autofit = False   # the camera was fitted by the program (not moved by the user): it is fitted again when the view is resized
         cam = self.ren.GetActiveCamera()
         cam.SetPosition(1, -1.4, 0.9)     # (an oblique start: a camera straight above the up axis warns)
         cam.SetViewUp(0, 0, 1)
@@ -357,7 +360,7 @@ class Viewport(QWidget):
             src = vtkArrowSource()
             src.SetTipResolution(16)
             src.SetShaftResolution(16)
-            f = vtkTransformPolyDataFilter()
+            f = vtkTransformFilter()
             f.SetInputConnection(src.GetOutputPort())
             f.SetTransform(tr)
             f.Update()
@@ -841,6 +844,7 @@ class Viewport(QWidget):
             cam.SetPosition(*(fp + d))
             cam.SetViewUp(0, 1, 0) if abs(d[2]) > 0.99 else cam.SetViewUp(0, 0, 1)
         self.ren.ResetCamera()
+        self._autofit = True
         self.render()
 
     def set_view(self, name: str):
@@ -852,7 +856,22 @@ class Viewport(QWidget):
         return {"position": list(c.GetPosition()), "focal_point": list(c.GetFocalPoint()), "view_up": list(c.GetViewUp()),
                 "view_angle": c.GetViewAngle(), "parallel": bool(c.GetParallelProjection()), "distance": c.GetDistance()}
 
+    def _user_moved(self):
+        self._autofit = False
+
+    def resizeEvent(self, e):  # noqa: N802
+        """A view fitted before it had its final size (a study opened from the start screen) is fitted again to the size it got."""
+        super().resizeEvent(e)
+        if self._autofit:
+            QTimer.singleShot(0, self._refit)
+
+    def _refit(self):
+        if self._autofit:
+            self.ren.ResetCamera()
+            self.render()
+
     def set_camera(self, position=None, focal_point=None, view_up=None, view_angle=None, parallel=None):
+        self._autofit = False
         c = self.ren.GetActiveCamera()
         if position is not None:
             c.SetPosition(*[float(v) for v in position])
