@@ -2422,6 +2422,20 @@ class Project:
         return stats
 
     def _mesh_work(self, job: Job, p0=0.0, p1=1.0):
+        """Mesh the project and record the RAM the work needed (stats['ram']: peak of this process and the programs it
+        started, minus what they held before)."""
+        from . import memwatch
+
+        with memwatch.PeakMemory() as pm:
+            stats = self._mesh_work_inner(job, p0, p1)
+        with self._lock:
+            if isinstance(stats, dict) and (self.data["mesh"].get("stats") or {}).get("cells") == stats.get("cells"):
+                stats["ram"] = pm.result()
+                self.data["mesh"]["stats"] = stats
+                self.save()
+        return stats
+
+    def _mesh_work_inner(self, job: Job, p0=0.0, p1=1.0):
         if self.data["mesh"].get("method") == "hex" and self.study == "external_aero":
             return self._hex_mesh_work(job, p0, p1)
         payload = {
@@ -3252,8 +3266,22 @@ class Project:
         return JOBS.start("solve", self.id, self._solve_openfoam, False, None, resume_transient=True,
                           extend=(end, wi))
 
-    def _solve_openfoam(self, job: Job, export_only=False, continue_iterations=None, map_from=None,
-                        keep_edit_flag=False, init_case=None, resume_transient=False, extend=None):
+    def _solve_openfoam(self, job: Job, *args, **kwargs):
+        """Run the OpenFOAM case and record the RAM it needed (summary['ram'])."""
+        from . import memwatch
+
+        with memwatch.PeakMemory() as pm:
+            summ = self._solve_openfoam_inner(job, *args, **kwargs)
+        if isinstance(summ, dict) and "case_dir" not in summ:
+            with self._lock:
+                summ["ram"] = pm.result()
+                if (self.data["solve"].get("summary") or {}) is not summ and self.data["solve"].get("summary"):
+                    self.data["solve"]["summary"]["ram"] = summ["ram"]
+                self.save()
+        return summ
+
+    def _solve_openfoam_inner(self, job: Job, export_only=False, continue_iterations=None, map_from=None,
+                              keep_edit_flag=False, init_case=None, resume_transient=False, extend=None):
         from .solvers.openfoam import cases, runner
         from .solvers.openfoam import results_loader
 
