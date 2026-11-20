@@ -13,7 +13,9 @@ worktree) and owns **its own files**. Nobody edits the main folder while the oth
 | **solve-mesh** | `qt/solve-mesh` | `MechanicalSimulationWorkbench-qt-solve-mesh` | 8804 | `simwb/qt/panels/mesh.py`, `simwb/qt/panels/solve.py`, new `simwb/qt/jobs.py`, `meshtools.py` |
 | **results** | `qt/results` | `MechanicalSimulationWorkbench-qt-results` | 8805 | `simwb/qt/panels/results.py`, new `simwb/qt/probes.py`, `charts.py`, `exports.py` |
 
-(`MechanicalSimulationWorkbench-hex` is the separate hex-mesh work; leave it alone.)
+(`MechanicalSimulationWorkbench-hex` is the separate hex-mesh work, `MechanicalSimulationWorkbench-multiphysics` the flutter / CFD-coupling
+work (branch `multiphysics-flutter`), and `MechanicalSimulationWorkbench-secfix` a short security fix (`fix/results-no-pickle`: result files are
+never unpickled); leave them alone.)
 
 Shared files - touch them **minimally** and say so in the commit message, because several areas need them:
 `simwb/qt/main_window.py` (one line to install a feature), `simwb/qt/control.py` (actions), `simwb/qt/panels/common.py`,
