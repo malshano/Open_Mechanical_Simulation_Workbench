@@ -585,6 +585,7 @@ class MainWindow(QMainWindow):
                 self.chk_air.blockSignals(True)
                 self.chk_air.setChecked(on)
                 self.chk_air.blockSignals(False)
+                self.view.show_geometry(True)       # (shown first: the camera is fitted to what is visible)
                 self.view.set_view("iso")
             self.view.show_geometry(True)
             self.panels[self.step].draw_marks()

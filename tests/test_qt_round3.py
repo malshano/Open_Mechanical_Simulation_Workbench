@@ -79,3 +79,17 @@ def test_collapsible_sections_are_styled_as_headings(ctl, solved):
     assert b.objectName() == "secHead" and b.text().startswith(("▶", "▼"))
     ctl.widget_do("mesh.parts.toggle", "click")
     assert b.text().startswith("▼")
+
+
+def test_the_model_is_visible_when_the_camera_is_fitted_to_it(ctl, solved):
+    """The camera used to be fitted before the model was shown (after a result or mesh view), so the model came up cropped."""
+    ctl.do("study.import", {"path": solved["static"]})
+    ctl.do("step.go", {"step": "results"})                                             # (the CAD model is hidden here)
+    assert ctl.win.view._geo_shown is False
+    ctl.win.new_study()                                                                # back to the start screen
+    seen = []
+    real = ctl.win.view.fit
+    ctl.win.view.fit = lambda direction=None: (seen.append(ctl.win.view._geo_shown), real(direction))[1]
+    ctl.do("study.import", {"path": solved["heat"]})
+    ctl.do("step.go", {"step": "setup"})
+    assert seen and seen[-1] is True, seen                                             # (the fit to the model happens with it shown)
