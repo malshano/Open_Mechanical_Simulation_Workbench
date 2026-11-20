@@ -15,7 +15,7 @@ from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 from vtkmodules.util.numpy_support import numpy_to_vtk, numpy_to_vtkIdTypeArray
 from vtkmodules.vtkCommonCore import vtkLookupTable, vtkPoints
 from vtkmodules.vtkCommonDataModel import vtkCellArray, vtkPolyData
-from vtkmodules.vtkFiltersCore import vtkCellDataToPointData, vtkContourFilter, vtkFeatureEdges, vtkPolyDataNormals
+from vtkmodules.vtkFiltersCore import vtkCellDataToPointData, vtkContourFilter, vtkFeatureEdges, vtkPolyDataNormals, vtkStripper
 from vtkmodules.vtkFiltersSources import vtkArrowSource, vtkCubeSource
 from vtkmodules.vtkCommonTransforms import vtkTransform
 from vtkmodules.vtkFiltersGeneral import vtkTransformFilter
@@ -758,7 +758,7 @@ class Viewport(QWidget):
         cf.SetNumberOfContours(len(levels))
         for i, v in enumerate(levels):
             cf.SetValue(i, v)
-        cf.ComputeScalarsOff()
+        cf.ComputeScalarsOn()                                          # (each line point then carries its level: the labels read it)
         cf.Update()
         t = theme.tokens()
         # a light line under a dark one: the lines read on the dark end of a colour map as well as on the bright end
@@ -777,7 +777,51 @@ class Viewport(QWidget):
             a.PickableOff()
             self.ren.AddActor(a)
             self.overlay_actors.append(a)
+        self.overlay_info["contour_labels"] = self._label_contours(cf.GetOutput()) if spec.get("labels", True) else 0
         return len(levels)
+
+    def _label_contours(self, lines):
+        """The value of each contour line, written at the middle of its longest piece: a small plate on the line."""
+        from vtkmodules.util.numpy_support import vtk_to_numpy
+        st = vtkStripper()
+        st.SetInputData(lines)
+        st.JoinContiguousSegmentsOn()
+        st.Update()
+        out = st.GetOutput()
+        sc = out.GetPointData().GetScalars()
+        if out.GetNumberOfLines() == 0 or sc is None:
+            return 0
+        pts = vtk_to_numpy(out.GetPoints().GetData())
+        vals = vtk_to_numpy(sc)
+        conn = vtk_to_numpy(out.GetLines().GetConnectivityArray())
+        offs = vtk_to_numpy(out.GetLines().GetOffsetsArray())
+        best = {}                                                      # level -> (length, middle point)
+        for i in range(len(offs) - 1):
+            ids = conn[offs[i]:offs[i + 1]]
+            if len(ids) < 2:
+                continue
+            q = pts[ids]
+            length = float(np.linalg.norm(np.diff(q, axis=0), axis=1).sum())
+            key = round(float(vals[ids[0]]), 9)
+            if key not in best or length > best[key][0]:
+                best[key] = (length, q[len(q) // 2])
+        t = theme.tokens()
+        for key, (_, pt) in best.items():
+            a = vtkBillboardTextActor3D()
+            a.SetInput(f"{key:.4g}")
+            a.SetPosition(*[float(v) for v in pt])
+            a.PickableOff()
+            tp = a.GetTextProperty()
+            tp.SetFontSize(14)
+            tp.SetBold(True)
+            tp.SetColor(*_rgb(t["ink"]))
+            tp.SetBackgroundColor(*_rgb(t["panel"]))
+            tp.SetBackgroundOpacity(0.85)
+            tp.SetJustificationToCentered()
+            tp.SetVerticalJustificationToCentered()
+            self.ren.AddActor(a)
+            self.overlay_actors.append(a)
+        return len(best)
 
     def _polydata(self, pts: np.ndarray, tris: np.ndarray) -> vtkPolyData:
         pd = vtkPolyData()

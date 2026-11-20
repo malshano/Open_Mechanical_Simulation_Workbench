@@ -148,6 +148,12 @@ class ResultsPanel(_Panel):
         row.addWidget(self.cont_n, 1)
         v.addLayout(row)
         row = QHBoxLayout()
+        self.cont_labels = wid(QCheckBox("Write the value on each line"), "results.contours.labels")
+        self.cont_labels.setChecked(True)
+        self.cont_labels.setEnabled(False)
+        self.cont_labels.setToolTip("A small label with the value of each contour line")
+        self.cont_labels.toggled.connect(lambda _=False: self._display_changed())
+        v.addWidget(self.cont_labels)
         self.cont_levels = wid(QLineEdit(), "results.contours.levels")
         self.cont_levels.setPlaceholderText("add values, e.g. 120, 180")
         self.cont_levels.setEnabled(False)
@@ -236,6 +242,7 @@ class ResultsPanel(_Panel):
     def _contours_toggled(self, on):
         self.cont_n.setEnabled(bool(on))
         self.cont_levels.setEnabled(bool(on))
+        self.cont_labels.setEnabled(bool(on))
         self._display_changed()
 
     def contour_levels(self) -> list:
@@ -268,7 +275,7 @@ class ResultsPanel(_Panel):
         return {"field": self.field.currentText(), "cmap": self.cmap.currentText(), "reverse": self.rev.isChecked(),
                 "bands": self.bands.value(), "deform": (scale if on else 0), "animate": on and self.deform_mode.currentText() == "Animated",
                 "edges": self.edges.isChecked(), "range": rng, "minmax": self.minmax.isChecked(),
-                "contours": {"on": self.cont_on.isChecked(), "n": self.cont_n.value(), "levels": self.contour_levels()},
+                "contours": {"on": self.cont_on.isChecked(), "n": self.cont_n.value(), "levels": self.contour_levels(), "labels": self.cont_labels.isChecked()},
                 "flow": self.flow.request() if self.tab_btns["flow"].isVisibleTo(self) else None,
                 "section": next(((k, self.section_pos.value() / 1000) for k, b in self.section_btns.items() if k and b.isChecked()), None)}
 

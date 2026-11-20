@@ -104,7 +104,7 @@ plus the toolbar and application bar. Status: ✅ done in the Qt app · 🟡 par
 | Modal spectrum plot, flutter plots, sweep plot, residual history | ⬜ | results |
 | Field choice, time bar for transient results, animate, turntable / MP4 | 🟡 (field, colours, animated deformation; no time bar for transient results, no MP4) | results |
 | Colours: map, reverse, bands | ✅ | - |
-| Contour lines on the result: on / off, number, extra values (new, not in the web version) | ✅ | - |
+| Contour lines on the result: on / off, number, extra values, value written on each line (new, not in the web version) | ✅ | - |
 | Range: auto / manual, histogram with drag-to-set | 🟡 (auto / manual boxes; no histogram with drag-to-set) | results |
 | Model: surface opacity, edges, hide parts, hide air | 🟡 (edges) | results |
 | Deformation: animated / end state / off, scale, auto, true size ×1, outline of the undeformed part | 🟡 (animated / end state / off, scale, auto, true size; no outline of the undeformed part; the controls are hidden when nothing deforms, as in flow and temperature results) | results |

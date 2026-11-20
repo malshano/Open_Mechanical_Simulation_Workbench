@@ -621,7 +621,8 @@ class Control(QObject):
            "section": (S, "x|y|z: cut the part across that axis; '' (or off) for no section", False),
            "section_pos": (N, "0..1: where the plane cuts (from one end of the part to the other)", False),
            "contours": (B, "contour lines on the result", False), "contour_lines": (N, "how many evenly spaced contour lines", False),
-           "contour_levels": ("array", "extra contour values, besides the evenly spaced ones", False)},
+           "contour_levels": ("array", "extra contour values, besides the evenly spaced ones", False),
+           "contour_labels": (B, "write the value on each contour line", False)},
           lambda **kw: self._results(**kw))
 
         def rp():
@@ -793,7 +794,7 @@ class Control(QObject):
         return {"color": self.win.panels["mesh"].color, "cut": self.win.panels["mesh"].axis or "off", "position": self.win.panels["mesh"].frac}
 
     def _results(self, field=None, colormap=None, reverse=None, bands=None, deform=None, edges=None, animate=None, scale=None, range=None,
-                 minmax=None, section=None, section_pos=None, contours=None, contour_lines=None, contour_levels=None):
+                 minmax=None, section=None, section_pos=None, contours=None, contour_lines=None, contour_levels=None, contour_labels=None):
         panel = self.win.panels["results"]
         if section_pos is not None:
             self._set(self._w("results.section.pos"), "results.section.pos", int(round(float(section_pos) * 1000)))
@@ -810,6 +811,8 @@ class Control(QObject):
             self._set(self._w("results.contours"), "results.contours", bool(contours))
         if contour_lines is not None:
             self._set(self._w("results.contours.n"), "results.contours.n", int(contour_lines))
+        if contour_labels is not None:
+            self._set(self._w("results.contours.labels"), "results.contours.labels", bool(contour_labels))
         if contour_levels is not None:
             self._set(self._w("results.contours.levels"), "results.contours.levels", ", ".join(f"{float(v):g}" for v in contour_levels))
         if animate is not None:

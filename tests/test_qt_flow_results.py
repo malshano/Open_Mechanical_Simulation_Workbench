@@ -181,5 +181,8 @@ def test_contour_lines_are_part_of_the_display(ctl, solved):
     lo, hi = ov()["range"]
     ctl.do("results.show", {"contour_levels": [(lo + hi) / 2 * 1.013, hi * 10]})           # one inside the range, one outside it
     assert ov()["contours"] == 7
+    assert 1 <= ov()["contour_labels"] <= 7                                                 # (a value on each line that is drawn)
+    ctl.do("results.show", {"contour_labels": False})
+    assert ov()["contour_labels"] == 0 and ov()["contours"] == 7
     ctl.do("results.show", {"contours": False})
     assert ov()["contours"] == 0
