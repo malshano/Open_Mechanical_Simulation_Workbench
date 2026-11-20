@@ -14,8 +14,22 @@ from .common import _h, _muted, _Panel, _seg
 from .mesh_adv import MeshAdvanced
 
 
-def verdict(q: dict) -> tuple:
-    """(tone, words) for the cell quality of a mesh."""
+def verdict(q: dict, stats: dict | None = None) -> tuple:
+    """(tone, words) for the cell quality of a mesh. A hex-dominant mesh is judged by checkMesh's numbers, its layers and warnings."""
+    s = stats or {}
+    if s.get("method") == "hex" and s.get("hex"):
+        f, x = s.get("foam_quality") or {}, s["hex"]
+        warn = []
+        if f.get("non_orthogonality_max", 0) > 70:
+            warn.append(f"max non-orthogonality {f['non_orthogonality_max']:.0f}° (above 70° OpenFOAM may be unstable)")
+        if f.get("skewness_max", 0) > 4:
+            warn.append(f"max skewness {f['skewness_max']:.1f} is above 4")
+        warn += [f"checkMesh: {t}" for t in x.get("problems") or []]
+        layers = (s.get("layers") or {})
+        if x.get("layers_extruded_percent") is not None and x["layers_extruded_percent"] < 50 and layers.get("n"):
+            warn.append(f"only {x['layers_extruded_percent']:.0f} % of the wall faces got layers: refine the thin parts")
+        warn += [w for w in x.get("warnings") or [] if "concave" not in w.lower()]
+        return ("warn", "; ".join(warn)) if warn else ("ok", "Mesh looks good")
     n_poor, mn = q.get("n_poor", 0), q.get("min", 1)
     if n_poor == 0 and mn >= 0.2:
         return "ok", "Good: no poor cells"
@@ -183,10 +197,16 @@ class MeshPanel(_Panel):
             if s.get("method") == "hex" and s.get("cell_types"):
                 ct = s["cell_types"]
                 extra = f"<br>{100 * ct['hexahedra'] / max(s['cells'], 1):.0f} % hexahedra"
-            self.stats.setText(f"<b>{s['cells']:,}</b> cells · {s['nodes']:,} nodes · near-wall {fmt_num(round(s['sizes']['near_wall'] * 1000, 3))} mm, "
-                               f"bulk {fmt_num(round(s['sizes']['body'] * 1000, 3))} mm{extra}<br>quality: min {q['min']:.2f}, mean {q['mean']:.2f}, "
+            if s.get("method") == "hex" and s.get("hex"):
+                sizes = f"surface {fmt_num(round(s['hex']['surface_cell_mm'], 3))} mm, background {fmt_num(round(s['hex']['base_mm'], 3))} mm"
+                if s["hex"].get("layers_extruded_percent") is not None:
+                    extra += f"<br>{s['hex']['layers_extruded_percent']:.0f} % of the wall faces got layers"
+            else:
+                sizes = (f"near-wall {fmt_num(round(s['sizes']['near_wall'] * 1000, 3))} mm, "
+                         f"bulk {fmt_num(round(s['sizes']['body'] * 1000, 3))} mm")
+            self.stats.setText(f"<b>{s['cells']:,}</b> cells · {s['nodes']:,} nodes · {sizes}{extra}<br>quality: min {q['min']:.2f}, mean {q['mean']:.2f}, "
                                f"{q['n_poor']} poor cells" + ("<br><i>The setup changed: regenerate.</i>" if m["status"] == "stale" else ""))
-            tone, words = verdict(q)
+            tone, words = verdict(q, s)
             col = {"ok": t["ok_text"], "warn": t["warn_text"], "bad": t["bad_text"]}[tone]
             self.verdict.setStyleSheet(f"color: {col}; font-weight: 600;")
             self.verdict.setText(("✓ " if tone == "ok" else "⚠ ") + words)

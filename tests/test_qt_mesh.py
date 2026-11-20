@@ -137,3 +137,16 @@ def test_the_mesh_panel_is_legible_with_everything_open(ctl, solved, name):
     assert seen > 15 and not weak, weak[:6]
     cov = c.coverage()
     assert cov["complete"], (cov["unnamed_widgets"][:3], cov["unlabelled"][:3], cov["no_pointer_cursor"][:3])
+
+
+def test_a_hex_mesh_is_judged_by_its_own_numbers():
+    from simwb.qt.panels.mesh import verdict
+    q = {"min": 0.5, "n_poor": 0}
+    hexs = {"method": "hex", "foam_quality": {"non_orthogonality_max": 40, "skewness_max": 1.0}, "layers": {"n": 3},
+            "hex": {"problems": [], "warnings": ["concave cells: 2"], "layers_extruded_percent": 80.0}}
+    assert verdict(q, hexs) == ("ok", "Mesh looks good")                                   # (concave cells alone are only information)
+    bad = {**hexs, "foam_quality": {"non_orthogonality_max": 78, "skewness_max": 5.2},
+           "hex": {**hexs["hex"], "problems": ["Failed 1 mesh checks"], "layers_extruded_percent": 20.0}}
+    tone, words = verdict(q, bad)
+    assert tone == "warn" and "78" in words and "skewness" in words and "checkMesh" in words and "20 %" in words
+    assert verdict({"min": 0.05, "n_poor": 0}) [0] == "warn" and verdict({"min": 0.0, "n_poor": 12})[0] == "bad"
