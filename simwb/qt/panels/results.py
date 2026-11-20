@@ -97,7 +97,8 @@ class ResultsPanel(_Panel):
         row.addWidget(QLabel("Colour bands"))
         self.bands = wid(QSpinBox(), "results.bands")
         self.bands.setRange(0, 40)
-        self.bands.setSpecialValueText("smooth")
+        self.bands.setSpecialValueText("smooth (no bands)")
+        self.bands.setSuffix(" bands")
         self.bands.setMinimumWidth(110)
         self.bands.setToolTip("Number of flat colour bands (smooth = continuous)")
         self.bands.valueChanged.connect(lambda _=0: self._display_changed())
@@ -204,7 +205,7 @@ class ResultsPanel(_Panel):
         v = self.pages["probe"]
         v.addWidget(_h("Probe"))
         v.addWidget(_muted("Click points on the result to read their value and keep it in the list. Click the model with Probe on."))
-        self.probe_btn = wid(QPushButton("⌖  Probe: click points on the model"), "results.probe")
+        self.probe_btn = wid(QPushButton("⌖  Probe is off: click to start"), "results.probe")
         self.probe_btn.setCheckable(True)
         self.probe_btn.setObjectName("seg")
         self.probe_btn.setToolTip("While this is on, a click on the model pins the value there")
@@ -233,11 +234,11 @@ class ResultsPanel(_Panel):
         self.line_info = wid(_muted(""), "results.line.info")
         v.addWidget(self.line_info)
         row = QHBoxLayout()
-        cp = wid(QPushButton("Copy data"), "results.line.copy")
+        cp = self.copy_btn = wid(QPushButton("Copy data"), "results.line.copy")
         cp.setObjectName("ghostBorder")
         cp.setToolTip("Copy the plotted values as text (distance and value)")
         cp.clicked.connect(self.copy_line)
-        cl = wid(QPushButton("Clear"), "results.line.clear")
+        cl = self.clear_btn = wid(QPushButton("Clear"), "results.line.clear")
         cl.setObjectName("ghostBorder")
         cl.setToolTip("Remove the line and the pinned values")
         cl.clicked.connect(self.clear_probes)
@@ -246,8 +247,18 @@ class ResultsPanel(_Panel):
         row.addStretch(1)
         v.addLayout(row)
         v.addStretch(1)
+        self._probe_enable()
+
+    def _probe_enable(self):
+        """Copy and Clear wait until there is something to copy or clear."""
+        has = bool(self.pins or self.line_data)
+        self.copy_btn.setEnabled(bool(self.line_data))
+        self.clear_btn.setEnabled(has)
+        self.copy_btn.setToolTip("Copy the plotted values as text (distance and value)" if self.line_data else "There is no line plot to copy yet")
+        self.clear_btn.setToolTip("Remove the line and the pinned values" if has else "Nothing is pinned yet")
 
     def _probe_toggled(self, on):
+        self.probe_btn.setText("⌖  Probe is ON: click points on the model" if on else "⌖  Probe is off: click to start")
         self.probe_on = on
         self.view.set_pick_mode("point" if (on or self.line_pick) else None)
 
@@ -291,6 +302,7 @@ class ResultsPanel(_Panel):
         return self.pins[-1]
 
     def _pins(self):
+        self._probe_enable()
         clear_layout(self.pin_box)
         for i, p in enumerate(self.pins):
             row = QHBoxLayout()
@@ -330,6 +342,7 @@ class ResultsPanel(_Panel):
             self.line_data = None
             return None
         self.line_data = d
+        self._probe_enable()
         self.chart.set_data(d["s"], d["values"], "distance along the line [m]", d.get("unit", ""))
         if "min" in d:
             self.line_info.setText(f"{f}: min {fmt_num(d['min'])}, max {fmt_num(d['max'])}, mean {fmt_num(d['mean'])} {d.get('unit', '')} "
@@ -351,6 +364,7 @@ class ResultsPanel(_Panel):
         self.pins, self.line_ends, self.line_data, self.line_pick = [], [], None, False
         self.chart.clear()
         self.line_info.setText("")
+        self._probe_enable()
         self._pins()
         self.draw_marks()
 

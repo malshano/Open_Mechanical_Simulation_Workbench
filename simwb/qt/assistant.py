@@ -111,7 +111,7 @@ class AssistantPanel(QWidget):
         self.btn_logout = wid(QPushButton("Log out"), "assistant.logout")
         self.btn_new = wid(QPushButton("New chat"), "assistant.new_chat")
         for b in (self.btn_login, self.btn_logout, self.btn_new):
-            b.setObjectName("ghost")
+            b.setObjectName("ghostBorder")
         top.addWidget(self.who, 1)
         top.addWidget(self.btn_login)
         top.addWidget(self.btn_logout)

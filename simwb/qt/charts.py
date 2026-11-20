@@ -60,7 +60,7 @@ class LineChart(QWidget):
         self.y = np.zeros(0)
         self.xlabel, self.ylabel = "", ""
         self.hover = None
-        self.setMinimumHeight(170)
+        self.setFixedHeight(190)
         self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.MinimumExpanding)
         self.setAccessibleName("Line plot")
@@ -109,8 +109,14 @@ class LineChart(QWidget):
         p.setFont(small)
         ok = np.isfinite(self.y) if len(self.y) else np.zeros(0, bool)
         if not len(self.x) or not ok.any():
+            p.setPen(QPen(QColor(t["line_strong"]), 1, Qt.DashLine))
+            p.drawRoundedRect(QRectF(self.rect()).adjusted(2, 2, -2, -2), 6, 6)
+            f = QFont(self.font())
+            f.setPointSizeF(self.font().pointSizeF() + 0.5)
+            p.setFont(f)
             p.setPen(QColor(t["muted"]))
-            p.drawText(self.rect(), Qt.AlignCenter | Qt.TextWordWrap, "No line yet: pick two points on the model, or use Min → max.")
+            p.drawText(self.rect().adjusted(12, 8, -12, -8), Qt.AlignCenter | Qt.TextWordWrap,
+                       "No line yet.\nPick two points on the model, or use Min → max.")
             return
         xlo, xhi = float(self.x.min()), float(self.x.max())
         ylo, yhi = float(self.y[ok].min()), float(self.y[ok].max())

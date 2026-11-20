@@ -125,9 +125,8 @@ class Section(QWidget):
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(4)
         self.head = wid(QPushButton(), f"{prefix}.toggle")
-        self.head.setObjectName("ghost")
+        self.head.setObjectName("secHead")
         self.head.setCheckable(True)
-        self.head.setStyleSheet("text-align: left; font-weight: 600;")
         self.head.setToolTip(f"Show or hide: {title}")
         self.content = QWidget()
         self.body = QVBoxLayout(self.content)
@@ -140,7 +139,7 @@ class Section(QWidget):
         self._toggled(expanded)
 
     def _toggled(self, on: bool):
-        self.head.setText(("▾  " if on else "▸  ") + self.title)
+        self.head.setText(("▼  " if on else "▶  ") + self.title)
         self.content.setVisible(on)
 
 

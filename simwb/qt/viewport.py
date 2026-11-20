@@ -265,7 +265,7 @@ class Viewport(QWidget):
         by_colour: dict = {}
         for fid, col in self.face_tints.items():
             by_colour.setdefault(col, []).append(fid)
-        items = [(ids, col, 0.7) for col, ids in by_colour.items()]
+        items = [(ids, col, 0.5) for col, ids in by_colour.items()]      # (translucent: the part stays visible under it)
         items.append((self.selection, "#ff9f1c", 0.9))
         if self.hover_highlight and self.hover_id >= 0 and self.hover_id not in self.selection:
             items.append(([self.hover_id], "#ffd8a8", 0.8))
@@ -393,13 +393,14 @@ class Viewport(QWidget):
             a.SetDisplayOffset(0, 16)
             a.PickableOff()
             tp = a.GetTextProperty()
-            tp.SetFontSize(15)
+            tp.SetFontSize(16)
+            tp.SetBold(True)
             tp.SetColor(*rgb(t["ink"]))
             tp.SetBackgroundColor(*rgb(t["panel"]))
-            tp.SetBackgroundOpacity(0.92)
+            tp.SetBackgroundOpacity(0.96)
             tp.SetFrame(True)
             tp.SetFrameColor(*rgb(it.get("color") or t["line_strong"]))
-            tp.SetFrameWidth(2)
+            tp.SetFrameWidth(3)
             tp.SetJustificationToCentered()
             tp.SetVerticalJustificationToBottom()
             a.SetVisibility(self._geo_shown)

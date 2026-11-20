@@ -27,6 +27,10 @@ AIR_KINDS = {"cht_enclosure": ("enclosure",), "external_aero": ("farfield",)}
 STEPS = [("geometry", "Geometry"), ("setup", "Setup"), ("mesh", "Mesh"), ("solve", "Solve"), ("results", "Results")]
 
 
+def label_of(key: str) -> str:
+    return dict(STEPS)[key]
+
+
 class MainWindow(QMainWindow):
     def __init__(self, engine: Engine, bridge: ChatBridge):
         super().__init__()
@@ -80,7 +84,7 @@ class MainWindow(QMainWindow):
         self.setCorner(Qt.BottomLeftCorner, Qt.LeftDockWidgetArea)       # (the side panels keep their full height)
         self.setCorner(Qt.BottomRightCorner, Qt.RightDockWidgetArea)
         self.dock_log = self.logdock
-        self.resizeDocks([self.logdock], [150], Qt.Vertical)
+        self.resizeDocks([self.logdock], [215], Qt.Vertical)
         self.resizeDocks([self.dock_tree, self.dock_panel], [300, 420], Qt.Vertical)
         self.resizeDocks([self.dock_tree, self.dock_chat], [440, 360], Qt.Horizontal)
 
@@ -264,6 +268,7 @@ class MainWindow(QMainWindow):
             bar.hide()
             self.center.setCurrentWidget(self.home)
             self.home.set_recent(self.engine.recent())
+            self.home.to_top()
         else:
             self.center.setCurrentWidget(self.view)
             bar.show()
@@ -432,6 +437,10 @@ class MainWindow(QMainWindow):
             errs = [c for c in (st.get("checks") or []) if c.get("level") == "error"]
             geo, mesh, solved = st["geometry"].get("status") == "ready", st["mesh"].get("status") == "ready", st["solve"].get("status") == "done"
             setup_errs = [c for c in errs if c.get("step") in ("setup",)]
+            warns = {}
+            for c in (st.get("checks") or []):
+                if c.get("level") == "warning":
+                    warns[c.get("step")] = warns.get(c.get("step"), 0) + 1
             marks = {
                 "geometry": ("✓", "Geometry: done") if geo else ("○", "Geometry: import a CAD file"),
                 "setup": (("✓", "Setup: ready") if geo and not setup_errs else ("⚠", f"Setup: {len(setup_errs)} thing(s) missing") if geo else ("○", "Setup: needs the geometry")),
@@ -439,6 +448,11 @@ class MainWindow(QMainWindow):
                 "solve": ("✓", "Solve: done") if solved else ("○", "Solve: not run yet"),
                 "results": ("✓", "Results: ready") if solved else ("○", "Results: run the simulation first"),
             }
+        if st:
+            for k in ("geometry", "setup", "mesh", "solve"):
+                n = warns.get(k, 0)
+                if n and marks[k][0] == "✓":
+                    marks[k] = ("⚠", f"{label_of(k)}: ready, {n} thing(s) to check (see the Messages)")
         for i, (k, label) in enumerate(STEPS, 1):
             mark, tip = marks[k]
             a = self.step_actions[k]
@@ -465,6 +479,7 @@ class MainWindow(QMainWindow):
         self.panels[step].shown()
         self.step_actions[step].setChecked(True)
         self.stack.setCurrentIndex([k for k, _ in STEPS].index(step))
+        self.stack.currentWidget().verticalScrollBar().setValue(0)
         self.assistant.set_context(step)
         self.update_view()
 

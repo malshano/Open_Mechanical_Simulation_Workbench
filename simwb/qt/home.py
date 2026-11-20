@@ -12,6 +12,14 @@ ICONS = {"thermo": "🌡️", "fan": "🌀", "drone": "🚁", "wave": "📳", "b
 ACCENT = {"thermo": "#e4572e", "wave": "#8b5cf6", "flutter": "#3b82f6", "beam": "#10b981", "fan": "#06b6d4", "drone": "#f59e0b"}
 
 
+def elide_middle(text: str, n: int) -> str:
+    """Long names keep their start and their end (the end is what tells two studies apart)."""
+    if len(text) <= n:
+        return text
+    keep = n - 1
+    return text[:keep - keep // 3] + "…" + text[-(keep // 3):]
+
+
 class Card(QFrame):
     """One study type."""
 
@@ -91,6 +99,8 @@ class HomePage(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         sc = QScrollArea()
+        self.scroll = sc
+        sc.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         sc.setWidgetResizable(True)
         sc.setFrameShape(QFrame.NoFrame)
         outer.addWidget(sc)
@@ -152,6 +162,9 @@ class HomePage(QWidget):
         self._cols = 0
         self.set_recent([])
 
+    def to_top(self):
+        self.scroll.verticalScrollBar().setValue(0)
+
     def set_recent(self, recent: list):
         while self.recent_lay.count():
             w = self.recent_lay.takeAt(0).widget()
@@ -163,22 +176,25 @@ class HomePage(QWidget):
         t = QLabel("RECENT STUDIES")
         t.setObjectName("h")
         self.recent_lay.addWidget(t)
-        row = QWidget()
-        r = QHBoxLayout(row)
-        r.setContentsMargins(0, 0, 0, 0)
-        r.setSpacing(8)
         from pathlib import Path
-        shown = recent[:5]
+        shown = recent[:6]
         names = [r["name"] for r in shown]
+        r = None
         for i, rec in enumerate(shown):
+            if i % 3 == 0:                                   # (three to a row: the row never runs off the window)
+                row = QWidget()
+                r = QHBoxLayout(row)
+                r.setContentsMargins(0, 0, 0, 0)
+                r.setSpacing(8)
+                self.recent_lay.addWidget(row)
             label = rec["name"] if names.count(rec["name"]) == 1 else f"{rec['name']}  ({Path(rec['path']).name})"
-            b = wid(QPushButton(label), f"home.recent.{i}")
+            b = wid(QPushButton(elide_middle(label, 34)), f"home.recent.{i}")
             b.setObjectName("chip")
-            b.setToolTip(rec["path"])
+            b.setToolTip(f"{label}\n{rec['path']}")
             b.clicked.connect(lambda _=False, p=rec["path"]: self.openRecent.emit(p))
             r.addWidget(b)
-        r.addStretch(1)
-        self.recent_lay.addWidget(row)
+            if i % 3 == 2 or i == len(shown) - 1:
+                r.addStretch(1)
 
     def resizeEvent(self, e):  # noqa: N802
         """As many columns of cards as fit: the cards re-flow when the window is resized."""

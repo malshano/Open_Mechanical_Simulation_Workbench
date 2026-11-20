@@ -190,6 +190,11 @@ QSlider:focus {{ border: 1px solid {t['focus']}; }}
 QSlider::handle:horizontal:disabled {{ background: {t['disabled']}; }}
 QToolTip {{ background: {t['panel2']}; color: {t['ink']}; border: 1px solid {t['line_strong']}; padding: 5px; }}
 
+QPushButton#secHead {{ text-align: left; font-weight: 600; color: {t['ink']}; background: transparent; border: 0;
+    border-top: 1px solid {t['line']}; border-radius: 0; padding: 8px 4px; }}
+QPushButton#secHead:hover {{ background: {t['raised']}; }}
+QPushButton#secHead:checked {{ color: {t['accent_text']}; }}
+QPushButton#secHead:focus {{ border: 2px solid {t['focus']}; }}
 QWidget#tabhead {{ background: {t['panel2']}; border-bottom: 1px solid {t['line']}; }}
 QPushButton#dtab {{ background: transparent; border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 6px 16px; color: {t['muted']}; }}
 QPushButton#dtab:hover {{ color: {t['ink']}; background: {t['raised']}; }}
