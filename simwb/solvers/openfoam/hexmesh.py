@@ -170,13 +170,15 @@ def make_plan(data: dict, faces: list, info: dict, surf2patch: dict, patches: li
 
     lay = ms.get("layers") or {}
     n_lay = int(lay.get("n") or 0)
-    first = float(lay.get("first") or cases.layer_first_thickness(V, L, nu, data.get("moving_zones") or [])) if n_lay else 0.0
+    lp = cases.layer_plan(V, L, nu, s.get("turbulence", "kOmegaSST"), n_lay, float(lay.get("growth", 1.2)),
+                          data.get("moving_zones") or [], lay.get("first")) if n_lay else None
+    first = lp["first"] if lp else 0.0
 
     # a point in the air, away from every plane of the background grid and from the body
     loc = (lo + base * np.array([1.37, 1.51, 1.23])).tolist()
     return {"L": L, "h_wall": h_wall, "h_body": h_body, "levels": levels, "base": base, "box_min": lo.tolist(),
             "box_max": hi.tolist(), "cells_bg": [int(x) for x in n], "regions": regions, "wall_patches": wall_patches,
-            "layers": {"n": n_lay, "growth": float(lay.get("growth", 1.2)), "first": first}, "location": loc,
+            "layers": {"n": n_lay, "growth": float(lay.get("growth", 1.2)), "first": first, "plan": lp}, "location": loc,
             "preset": ms.get("preset", "medium"), "far_patch": "farfield"}
 
 

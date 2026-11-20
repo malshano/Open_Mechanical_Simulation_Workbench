@@ -2203,7 +2203,7 @@ class Project:
         return hexmesh.unsupported(self.data, self.faces(), self.data["geometry"].get("info") or {})
 
     def set_mesh(self, preset=None, size_max_mm=None, size_min_mm=None, refinements=None, regions=None,
-                 layers=None, defeature_mm=False, method=None):
+                 layers=None, defeature_mm=False, method=None, edge_refinement=None):
         if self.busy():
             raise RuntimeError("Please wait: a job is still running for this project (or cancel it).")
         m = self.data["mesh"]
@@ -2289,7 +2289,16 @@ class Project:
                 raise ValueError("Layer growth must be between 1.0 and 2.0")
             if first is not None and first <= 0:
                 raise ValueError("First layer thickness must be > 0 mm (empty = automatic)")
-            m["layers"] = {"n": n, "growth": g, "first": None if first is None else first / 1000}
+            m["layers"] = {"n": n, "growth": g, "first": None if first is None else first / 1000,
+                           "tolerant": bool(layers.get("tolerant", False))}
+        if edge_refinement is not None:  # fine cells along sharp edges (leading / trailing edges): off | True | factor
+            if edge_refinement in (False, 0, "off"):
+                m.pop("edge_refine", None)
+            else:
+                f = 6.0 if edge_refinement is True else studies.finite(edge_refinement, "Edge refinement factor")
+                if not 2.0 <= f <= 20.0:
+                    raise ValueError("Edge refinement factor must be 2..20 (cells at the edge are the wall size / factor)")
+                m["edge_refine"] = {"factor": f}
         if defeature_mm is not False:  # small-face groups merged into the face they sit on: None / 0 = off
             d = studies.finite(defeature_mm or 0, "Defeature size")
             if not 0 <= d <= 50:
@@ -2300,7 +2309,8 @@ class Project:
                 m.pop("defeature", None)
         # (the tetrahedral mesh gets its layers at the run; the hex-dominant mesh makes them with the mesh)
         only_layers = (layers is not None and preset is None and size_max_mm is None and size_min_mm is None
-                       and refinements is None and regions is None and method is None and m.get("method") != "hex")
+                       and refinements is None and regions is None and method is None and edge_refinement is None
+                       and m.get("method") != "hex")
         self.mark_stale(("solve",) if only_layers else ("mesh", "solve"))  # (layers are added at the run)
         self.save()
 
@@ -2422,6 +2432,28 @@ class Project:
         return stats
 
     def _mesh_work(self, job: Job, p0=0.0, p1=1.0):
+        """Mesh the project and record the RAM the work needed (stats['ram']: peak of this process and the programs it
+        started, minus what they held before)."""
+        from . import memwatch
+
+        with memwatch.PeakMemory() as pm:
+            stats = self._mesh_work_inner(job, p0, p1)
+        with self._lock:
+            if isinstance(stats, dict) and (self.data["mesh"].get("stats") or {}).get("cells") == stats.get("cells"):
+                backend = None
+                if self.data["mesh"].get("method") == "hex" and self.study == "external_aero":
+                    from .solvers.openfoam import runner
+
+                    backend = runner.detect().get("backend")        # snappyHexMesh runs where OpenFOAM does
+                if backend is not None and not memwatch.measurable_backend(backend):
+                    stats["ram"] = {"measured": False, "note": f"not measured: the mesher runs in {backend}"}
+                else:
+                    stats["ram"] = dict(pm.result(), measured=True)
+                self.data["mesh"]["stats"] = stats
+                self.save()
+        return stats
+
+    def _mesh_work_inner(self, job: Job, p0=0.0, p1=1.0):
         if self.data["mesh"].get("method") == "hex" and self.study == "external_aero":
             return self._hex_mesh_work(job, p0, p1)
         payload = {
@@ -3252,8 +3284,36 @@ class Project:
         return JOBS.start("solve", self.id, self._solve_openfoam, False, None, resume_transient=True,
                           extend=(end, wi))
 
-    def _solve_openfoam(self, job: Job, export_only=False, continue_iterations=None, map_from=None,
-                        keep_edit_flag=False, init_case=None, resume_transient=False, extend=None):
+    def _solve_openfoam(self, job: Job, *args, **kwargs):
+        """Run the OpenFOAM case and record the RAM it needed (summary['ram'])."""
+        from . import memwatch
+
+        with memwatch.PeakMemory() as pm:
+            summ = self._solve_openfoam_inner(job, *args, **kwargs)
+        if isinstance(summ, dict) and "case_dir" not in summ:
+            with self._lock:
+                summ["ram"] = self._ram_record(pm.result(), job.extra.get("solver_ram"))
+                if (self.data["solve"].get("summary") or {}) is not summ and self.data["solve"].get("summary"):
+                    self.data["solve"]["summary"]["ram"] = summ["ram"]
+                self.save()
+        return summ
+
+    @staticmethod
+    def _ram_record(whole: dict, solver: dict | None) -> dict:
+        """The RAM figures of a solve: the solver run alone (solver_added_ram_mb / solver_peak_ram_mb) and the whole
+        job including reading the results back (added_ram_mb / peak_ram_mb). A solver that runs in WSL or Docker is
+        invisible to the meter (it would see only wsl.exe), so nothing is reported for it."""
+        from . import memwatch
+
+        if solver is not None and not memwatch.measurable_backend(solver.get("backend")):
+            return {"measured": False, "note": f"not measured: the solver runs in {solver.get('backend')}, outside this process tree"}
+        rec = dict(whole, measured=True)
+        if solver:
+            rec.update(solver_added_ram_mb=solver.get("added_ram_mb"), solver_peak_ram_mb=solver.get("peak_ram_mb"))
+        return rec
+
+    def _solve_openfoam_inner(self, job: Job, export_only=False, continue_iterations=None, map_from=None,
+                              keep_edit_flag=False, init_case=None, resume_transient=False, extend=None):
         from .solvers.openfoam import cases, runner
         from .solvers.openfoam import results_loader
 
@@ -3463,6 +3523,9 @@ class Project:
         job.extra["solver_started"] = True  # the case (and its controlDict) is final: Stop can act on it now
         th = threading.Thread(target=tail, daemon=True)
         th.start()
+        from . import memwatch
+
+        solver_mem = memwatch.PeakMemory().__enter__()   # (the solver run alone: not the results loading after it)
         try:
             if det["backend"] == "windows":
                 cores = f"{n_procs} cores" if n_procs > 1 else "1 core"
@@ -3493,6 +3556,8 @@ class Project:
                         JOBS.update(job, None, None, log=line, quiet=True)
                 proc.wait()
         finally:
+            solver_mem.__exit__(None, None, None)
+            job.extra["solver_ram"] = dict(solver_mem.result(), backend=det["backend"])
             state["running"] = False
             job.proc = None
             th.join(timeout=5)
