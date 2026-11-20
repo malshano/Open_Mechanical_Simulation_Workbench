@@ -21,7 +21,7 @@ from vtkmodules.vtkIOImage import vtkPNGWriter
 from vtkmodules.vtkInteractionStyle import vtkInteractorStyleTrackballCamera
 from vtkmodules.vtkInteractionWidgets import vtkOrientationMarkerWidget
 from vtkmodules.vtkRenderingAnnotation import vtkAxesActor, vtkScalarBarActor
-from vtkmodules.vtkRenderingCore import (vtkActor, vtkPolyDataMapper, vtkRenderer, vtkWindowToImageFilter)
+from vtkmodules.vtkRenderingCore import (vtkActor, vtkBillboardTextActor3D, vtkPolyDataMapper, vtkRenderer, vtkWindowToImageFilter)
 from vtkmodules.vtkRenderingFreeType import vtkVectorText  # noqa: F401  (registers the text renderer)
 import vtkmodules.vtkRenderingOpenGL2  # noqa: F401  (the OpenGL back end)
 import vtkmodules.vtkRenderingFreeType  # noqa: F401
@@ -86,8 +86,15 @@ class Viewport(QWidget):
         self.ren.SetUseDepthPeeling(1)    # see-through surfaces (contours, glass) in the right order from every side
         self.ren.SetMaximumNumberOfPeels(12)
         self.ren.SetOcclusionRatio(0.0)
+        # a second layer on top, sharing the camera, for what is hung on the model (labels): never cut by the model itself
+        self.ren2 = vtkRenderer()
+        self.ren2.SetLayer(1)
+        self.ren2.InteractiveOff()
+        self.ren2.SetActiveCamera(self.ren.GetActiveCamera())
         if self.rw is not None:
+            self.rw.SetNumberOfLayers(2)
             self.rw.AddRenderer(self.ren)
+            self.rw.AddRenderer(self.ren2)
             self.iren.SetInteractorStyle(vtkInteractorStyleTrackballCamera())
         cam = self.ren.GetActiveCamera()
         cam.SetPosition(1, -1.4, 0.9)     # (an oblique start: a camera straight above the up axis warns)
@@ -105,7 +112,13 @@ class Viewport(QWidget):
         self._overlay_index = None          # ... and over the drawn result surface
         self.edge_actors: list = []
         self.mark_actors: list = []         # selection, hover and tint highlights
+        self.label_actors: list = []        # text hung on the model (what a boundary condition carries)
+        self._label_items: list = []
         self.edges_on = True
+        self.geo_keys: list = []             # the volume of each drawn group (parallel to geo_actors and edge_actors)
+        self.hidden_bodies: set = set()
+        self._solid_parts: list = []
+        self._air_parts: list = []
         self.hover_id = -1
         self.hover_highlight = True
         self._press = None
@@ -137,6 +150,8 @@ class Viewport(QWidget):
             a.GetProperty().SetColor(*rgb(t["edge"]))
         for a in self.air_actors[1::2]:            # (each air box is a body and its outline)
             a.GetProperty().SetColor(*rgb(t["air_edge"]))
+        if getattr(self, "label_actors", None):
+            self.set_labels(self._label_items)
         if getattr(self, "_axes", None) is not None:
             for cap in (self._axes.GetXAxisCaptionActor2D(), self._axes.GetYAxisCaptionActor2D(), self._axes.GetZAxisCaptionActor2D()):
                 cap.GetCaptionTextProperty().SetColor(*rgb(t["vp_text"]))
@@ -160,8 +175,9 @@ class Viewport(QWidget):
 
     def _clear(self, actors: list):
         for a in actors:
-            self.ren.RemoveActor(a)
-            self.ren.RemoveViewProp(a)
+            for r in (self.ren, self.ren2):
+                r.RemoveActor(a)
+                r.RemoveViewProp(a)
         actors.clear()
 
     def clear_overlay(self):
@@ -194,10 +210,27 @@ class Viewport(QWidget):
         self._rebuild_marks()
         self.render()
 
+    def _rebuild_index(self):
+        """The pickable faces: those of the parts that are not hidden (a hidden part cannot be clicked), and the air box."""
+        solid = [f for f in self._solid_parts if self._face_volume.get(f[0]) not in self.hidden_bodies]
+        self.index.build(solid, self._air_parts)
+
+    def _apply_visibility(self):
+        for k, a, e in zip(self.geo_keys, self.geo_actors, self.edge_actors):
+            on = self._geo_shown and k not in self.hidden_bodies
+            a.SetVisibility(on)
+            e.SetVisibility(on and self.edges_on)
+
+    def set_hidden_bodies(self, ids):
+        """Hide some parts (by volume id) in the view: they are not drawn and not pickable."""
+        self.hidden_bodies = {int(i) for i in ids}
+        self._rebuild_index()
+        self._apply_visibility()
+        self.render()
+
     def set_edges_visible(self, on: bool):
         self.edges_on = bool(on)
-        for a in self.edge_actors:
-            a.SetVisibility(self.edges_on and self._geo_shown)
+        self._apply_visibility()
         self.render()
 
     def _mark_actor(self, ids, color, opacity=0.85):
@@ -235,6 +268,39 @@ class Viewport(QWidget):
             if a is not None:
                 self.ren.AddActor(a)
                 self.mark_actors.append(a)
+
+    def face_center(self, ids):
+        """The middle of some CAD faces (mean of their vertices), where a label for them goes; None if none are known."""
+        pts, _ = self.index.triangles_of(ids)
+        return None if not len(pts) else [float(v) for v in pts.mean(axis=0)]
+
+    def set_labels(self, items: list):
+        """Text hung at points of the model: [{'point': [x,y,z], 'text': str, 'color': '#rrggbb' (optional)}]. Drawn on a panel-coloured
+        plate with a frame so that it reads on any backdrop, in both themes."""
+        self._label_items = [dict(i) for i in items]
+        self._clear(self.label_actors)
+        t = theme.tokens()
+        rgb = lambda h: tuple(int(h[i:i + 2], 16) / 255.0 for i in (1, 3, 5))  # noqa: E731
+        for it in items:
+            a = vtkBillboardTextActor3D()
+            a.SetInput(str(it["text"]))
+            a.SetPosition(*[float(v) for v in it["point"]])
+            a.SetDisplayOffset(0, 16)
+            a.PickableOff()
+            tp = a.GetTextProperty()
+            tp.SetFontSize(15)
+            tp.SetColor(*rgb(t["ink"]))
+            tp.SetBackgroundColor(*rgb(t["panel"]))
+            tp.SetBackgroundOpacity(0.92)
+            tp.SetFrame(True)
+            tp.SetFrameColor(*rgb(it.get("color") or t["line_strong"]))
+            tp.SetFrameWidth(2)
+            tp.SetJustificationToCentered()
+            tp.SetVerticalJustificationToBottom()
+            a.SetVisibility(self._geo_shown)
+            self.ren2.AddActor(a)
+            self.label_actors.append(a)
+        self.render()
 
     def pick_ray(self, p0, p1):
         """What the segment p0 -> p1 (world coordinates) hits: {'kind': 'face', 'face', 'point', 'air'} for a CAD face (while the CAD
@@ -354,9 +420,8 @@ class Viewport(QWidget):
 
     def show_geometry(self, on: bool):
         self._geo_shown = bool(on)
-        for a in self.geo_actors + self.edge_actors:
-            a.SetVisibility(bool(on) and (a not in self.edge_actors or self.edges_on))
-        for a in self.mark_actors:
+        self._apply_visibility()
+        for a in self.mark_actors + self.label_actors:
             a.SetVisibility(bool(on))
         for a in self.air_actors:
             a.SetVisibility(bool(on) and self.air_on)
@@ -387,7 +452,10 @@ class Viewport(QWidget):
         def parts(fs):
             return [(f["id"], (f.get("mesh") or {}).get("vertices") or [], (f.get("mesh") or {}).get("triangles") or [], f.get("kind"))
                     for f in fs if (f.get("mesh") or {}).get("vertices")]
-        self.index.build(parts(faces), parts(air))
+        self._solid_parts, self._air_parts = parts(faces), parts(air)
+        self._face_volume = {f["id"]: (f.get("volumes") or [0])[0] for f in faces}
+        self.geo_keys = []
+        self._rebuild_index()
         if air:
             self._air_box(air)
             self.geometry_info["air_visible"] = self.air_on
@@ -414,6 +482,7 @@ class Viewport(QWidget):
             act = self._actor(nm.GetOutput(), color=_rgb(BODY_COLORS[i % len(BODY_COLORS)]))
             self.ren.AddActor(act)
             self.geo_actors.append(act)
+            self.geo_keys.append(key)
             fe = vtkFeatureEdges()          # the sharp edges and the outline of every face, thin and dark
             fe.SetInputData(pd)
             fe.BoundaryEdgesOn()

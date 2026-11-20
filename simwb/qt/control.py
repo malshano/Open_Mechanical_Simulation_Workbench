@@ -54,7 +54,9 @@ def modal_alt(id: str):
         return True, "study.new"
     return (id in MODAL), MODAL.get(id)
 
-INTERACTIVE = (QAbstractButton, QComboBox, QAbstractSpinBox, QSlider, QLineEdit, QPlainTextEdit, QTextEdit, QTreeWidget)
+from .panels.common import ClickLabel  # noqa: E402
+
+INTERACTIVE = (QAbstractButton, QComboBox, QAbstractSpinBox, QSlider, QLineEdit, QPlainTextEdit, QTextEdit, QTreeWidget, ClickLabel)
 INTERNAL_PARENTS = (QAbstractSpinBox, QComboBox, QAbstractItemView, QTextEdit, QPlainTextEdit)
 
 
@@ -374,7 +376,7 @@ class Control(QObject):
             if not (w.accessibleName() or w.toolTip() or (hasattr(w, "text") and not isinstance(w, (QPlainTextEdit, QTextEdit)) and w.text())):
                 unlabelled.append(wid_of(w))
             # an affordance: what can be pressed or chosen looks and acts clickable
-            if isinstance(w, (QAbstractButton, QComboBox, QSlider)) and w.cursor().shape() != Qt.PointingHandCursor:
+            if isinstance(w, (QAbstractButton, QComboBox, QSlider, ClickLabel)) and w.cursor().shape() != Qt.PointingHandCursor:
                 no_pointer.append(wid_of(w))
         bad_a, total_a = [], 0
         for a in self.win.findChildren(QAction):
@@ -646,6 +648,46 @@ class Control(QObject):
             self._settle()
             return {"mode": theme.mode(), "effective": theme.effective()}
         R("theme.set", "Switch the look of the window: system, dark or light.", {"mode": (S, "system|dark|light", True)}, set_theme)
+        def setup_panel():
+            if not eng.pid:
+                raise ValueError("No study is open")
+            return win.panels["setup"]
+
+        def bc_add(type, faces=None, name=None):
+            win.go("setup")
+            self._settle()
+            bc = setup_panel().add_bc(type, faces, name)
+            self._settle()
+            return {"bc": bc and {k: bc.get(k) for k in ("id", "name", "type", "faces")}}
+
+        def bc_faces(bc, faces):
+            setup_panel().set_bc_faces(self._bc_id(bc), faces)
+            return {"bc": bc, "faces": list(faces)}
+
+        def bc_delete(bc):
+            setup_panel().delete_bc(self._bc_id(bc))
+            return {"deleted": bc}
+
+        def bc_set(bc, name=None, params=None):
+            cur = next(b for b in eng.state()["bcs"] if b["id"] == self._bc_id(bc))
+            eng.project().update_bc(cur["id"], name=name, params={**(cur.get("params") or {}), **(params or {})} if params else None)
+            eng.changed.emit()
+            return {"bc": bc}
+
+        def setting(key, value):
+            eng.project().set_settings(**{key: value})
+            eng.changed.emit()
+            return {key: value}
+        R("setup.bc_add", "Add a boundary condition of a type (study.types / the study's face_bc_types) on faces (default: the faces selected "
+                          "in the view; none selected: it starts picking faces).",
+          {"type": (S, "boundary-condition type key, e.g. fixed_support, force", True), "faces": ("array", "face ids", False), "name": (S, "name", False)},
+          bc_add)
+        R("setup.bc_faces", "Set the faces of a boundary condition (by id or name).", {"bc": (S, "id or name", True), "faces": ("array", "face ids", True)}, bc_faces)
+        R("setup.bc_delete", "Delete a boundary condition (by id or name).", {"bc": (S, "id or name", True)}, bc_delete)
+        R("setup.bc_set", "Rename a boundary condition and/or change parameters ({'fz_N': -50}).",
+          {"bc": (S, "id or name", True), "name": (S, "new name", False), "params": ("object", "parameters to change", False)}, bc_set)
+        R("setup.setting", "Set a study setting (see the 'Loads and settings' form), e.g. gravity: -z.",
+          {"key": (S, "setting key", True), "value": ("any", "new value", True)}, setting)
         R("view.stats", "What the 3D view holds and whether its picture is blank (bounds, colours).", {}, lambda: win.view.stats())
         # ---- assistant
         R("assistant.ask", "Type a question into the assistant as the user would (it answers asynchronously: see assistant.transcript).",
@@ -657,7 +699,7 @@ class Control(QObject):
         # ---- window
         R("window.resize", "Resize the window.", {"width": (N, "pixels", True), "height": (N, "pixels", True)},
           lambda width, height: (win.resize(int(width), int(height)), {"size": [win.width(), win.height()]})[1])
-        R("dock.show", "Show or hide a dock: outline, step, assistant.", {"name": (S, "dock", True), "visible": (B, "default true", False)},
+        R("dock.show", "Show or hide a dock: outline, step, assistant, log.", {"name": (S, "dock", True), "visible": (B, "default true", False)},
           lambda name, visible=True: self._dock(name, visible))
         R("jobs.status", "Running jobs and the latest job of each kind for the open study.", {}, self._jobs)
 
@@ -670,6 +712,13 @@ class Control(QObject):
             raise ValueError(f"'{example}' is not an example of {study}. Examples: {spec.get('examples')}")
         self.win.new_from_card(study, ex)
         return {"study": self.engine.pid, "example": ex}
+
+    def _bc_id(self, ref):
+        """A boundary condition's id from its id or its name."""
+        for b in self.engine.state().get("bcs") or []:
+            if ref in (b["id"], b["name"]):
+                return b["id"]
+        raise ValueError(f"No boundary condition '{ref}'. Have: {[b['name'] for b in self.engine.state().get('bcs') or []]}")
 
     def _material(self, body_id, material):
         need = self._index().get(f"setup.material.{body_id}")
@@ -697,7 +746,7 @@ class Control(QObject):
     def _dock(self, name, visible):
         d = self.win.findChild(QDockWidget, f"dock.{name}")
         if d is None:
-            raise ValueError("dock must be outline, step or assistant")
+            raise ValueError("dock must be outline, step, assistant or log")
         d.setVisible(bool(visible))
         return {"name": name, "visible": d.isVisible()}
 

@@ -190,6 +190,13 @@ QSlider:focus {{ border: 1px solid {t['focus']}; }}
 QSlider::handle:horizontal:disabled {{ background: {t['disabled']}; }}
 QToolTip {{ background: {t['panel2']}; color: {t['ink']}; border: 1px solid {t['line_strong']}; padding: 5px; }}
 
+QTabWidget::pane {{ border: 0; border-top: 1px solid {t['line']}; background: {t['panel']}; }}
+QTabBar {{ background: {t['panel2']}; }}
+QTabBar::tab {{ background: {t['panel2']}; color: {t['muted']}; padding: 6px 16px; border: 0; border-bottom: 2px solid transparent; }}
+QTabBar::tab:hover {{ color: {t['ink']}; background: {t['raised']}; }}
+QTabBar::tab:selected {{ color: {t['ink']}; font-weight: 600; border-bottom: 2px solid {t['accent']}; background: {t['panel']}; }}
+QTabBar::tab:focus {{ border-bottom: 2px solid {t['focus']}; }}
+QFrame#item {{ background: {t['panel2']}; border: 1px solid {t['line']}; border-radius: {t['radius']}; }}
 QWidget#home, QWidget#homeBody {{ background: {t['bg']}; }}
 QLabel#homeTitle {{ font-size: 30px; font-weight: 700; }}
 QFrame#card {{ background: {t['panel']}; border: 1px solid {t['line']}; border-radius: 12px; }}

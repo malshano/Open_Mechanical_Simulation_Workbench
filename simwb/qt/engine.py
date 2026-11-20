@@ -118,8 +118,8 @@ class Engine(QObject):
         P.delete_project(pid)
 
     # ------------------------------------------------------------------ the steps (each returns the engine's job)
-    def import_step(self, path: str):
-        return self.project().import_step(path)
+    def import_step(self, path: str, scale: float = 1.0):
+        return self.project().import_step(path, scale=scale)
 
     def generate_mesh(self):
         return self.project().generate_mesh()

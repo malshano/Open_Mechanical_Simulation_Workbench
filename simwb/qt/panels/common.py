@@ -76,6 +76,74 @@ class KPI(QFrame):
             v.addWidget(h)
 
 
+class ClickLabel(QLabel):
+    """A line of text that wraps and can be pressed (a button's behaviour without a button's inability to wrap): hand cursor, underline on
+    hover, keyboard focus, Enter/Space presses it."""
+    clicked = Signal()
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self.setWordWrap(True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setTextInteractionFlags(Qt.NoTextInteraction)
+        self.setMinimumWidth(0)
+
+    def click(self):
+        self.clicked.emit()
+
+    def mousePressEvent(self, e):  # noqa: N802
+        if e.button() == Qt.LeftButton:
+            self.clicked.emit()
+
+    def keyPressEvent(self, e):  # noqa: N802
+        if e.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+            self.clicked.emit()
+        else:
+            super().keyPressEvent(e)
+
+
+def clear_layout(layout):
+    """Remove (and delete) everything in a layout, nested layouts included."""
+    while layout.count():
+        it = layout.takeAt(0)
+        w = it.widget()
+        if w is not None:
+            w.setParent(None)
+            w.deleteLater()
+        elif it.layout() is not None:
+            clear_layout(it.layout())
+
+
+class Section(QWidget):
+    """A heading that folds its content away (the 'About this simulation' and 'Advanced' blocks)."""
+
+    def __init__(self, title: str, prefix: str, expanded: bool = True, parent=None):
+        super().__init__(parent)
+        self.title = title
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(4)
+        self.head = wid(QPushButton(), f"{prefix}.toggle")
+        self.head.setObjectName("ghost")
+        self.head.setCheckable(True)
+        self.head.setStyleSheet("text-align: left; font-weight: 600;")
+        self.head.setToolTip(f"Show or hide: {title}")
+        self.content = QWidget()
+        self.body = QVBoxLayout(self.content)
+        self.body.setContentsMargins(8, 0, 0, 0)
+        self.body.setSpacing(6)
+        v.addWidget(self.head)
+        v.addWidget(self.content)
+        self.head.toggled.connect(self._toggled)
+        self.head.setChecked(expanded)
+        self._toggled(expanded)
+
+    def _toggled(self, on: bool):
+        self.head.setText(("▾  " if on else "▸  ") + self.title)
+        self.content.setVisible(on)
+
+
 class _Panel(QWidget):
     changed = Signal()      # what the 3D view draws must be redone
     actionDone = Signal()
@@ -87,6 +155,22 @@ class _Panel(QWidget):
         self.v = QVBoxLayout(self)
         self.v.setContentsMargins(12, 10, 12, 12)
         self.v.setSpacing(8)
+        self.win = None
+        self.view = None
+
+    def bind(self, win):
+        """The window this panel lives in (its 3D view, its step switch): set by the window after it makes the panels."""
+        self.win = win
+        self.view = win.view
+
+    def shown(self):
+        """The panel's step became the current one (put the 3D view's picking in the state this step needs)."""
+
+    def draw_marks(self):
+        """Draw what this step hangs on the 3D model (tints, labels): called after the model was (re)drawn."""
+
+    def left(self):
+        """The step was left."""
 
     def refresh(self, st: dict | None):
         raise NotImplementedError

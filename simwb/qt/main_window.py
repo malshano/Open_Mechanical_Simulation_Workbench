@@ -16,6 +16,7 @@ from .assistant import AssistantPanel, ChatBridge
 from . import theme
 from .engine import Engine
 from .home import HomePage
+from .logdock import LogDock
 from .ids import wid
 from .panels import GeometryPanel, MeshPanel, ResultsPanel, SetupPanel, SolvePanel
 from .viewport import Viewport
@@ -44,10 +45,13 @@ class MainWindow(QMainWindow):
         self._at_home = True
         self._geo_key = None
         self._fit_key = None
+        self.hidden_bodies: set = set()
 
         # ---- the panels of the steps
         self.panels = {"geometry": GeometryPanel(engine), "setup": SetupPanel(engine), "mesh": MeshPanel(engine),
                        "solve": SolvePanel(engine), "results": ResultsPanel(engine)}
+        for p in self.panels.values():
+            p.bind(self)
         self.stack = QStackedWidget()
         for k, _ in STEPS:
             sc = QScrollArea()
@@ -68,7 +72,15 @@ class MainWindow(QMainWindow):
         self.assistant = AssistantPanel(bridge)
         self.assistant.toolDone.connect(lambda *_: self.engine.changed.emit())
         self.dock_chat = self._dock("Claude assistant", self.assistant, Qt.RightDockWidgetArea, "assistant")
-        self.log = QLabel()   # (messages go to the status bar; kept short)
+        self.logdock = LogDock()
+        self.logdock.setObjectName("dock.log")
+        self.logdock.toggleViewAction().setObjectName("dock.log.toggle")
+        self.logdock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
+        self.addDockWidget(Qt.BottomDockWidgetArea, self.logdock)
+        self.setCorner(Qt.BottomLeftCorner, Qt.LeftDockWidgetArea)       # (the side panels keep their full height)
+        self.setCorner(Qt.BottomRightCorner, Qt.RightDockWidgetArea)
+        self.dock_log = self.logdock
+        self.resizeDocks([self.logdock], [150], Qt.Vertical)
         self.resizeDocks([self.dock_tree, self.dock_panel], [220, 480], Qt.Vertical)
         self.resizeDocks([self.dock_tree, self.dock_chat], [440, 360], Qt.Horizontal)
 
@@ -116,7 +128,7 @@ class MainWindow(QMainWindow):
         self.home.openFolder.connect(lambda: self._try(self.open_folder))
         self.home.importFile.connect(lambda: self._try(self.import_zip))
         self.home.openRecent.connect(lambda p: self._try(lambda: self.engine.open_folder(p)))
-        for d in (self.dock_tree, self.dock_panel, self.dock_chat):   # (what the user chose to show while working on a study)
+        for d in (self.dock_tree, self.dock_panel, self.dock_chat, self.dock_log):   # (what the user chose to show while working on a study)
             self._dock_pref[d] = True
             d.visibilityChanged.connect(lambda vis, d=d: None if self._at_home else self._dock_pref.__setitem__(d, bool(vis)))
         self.show_home(True)
@@ -181,7 +193,7 @@ class MainWindow(QMainWindow):
         a.triggered.connect(lambda _=False: self.view.fit())
         v.addAction(a)
         v.addSeparator()
-        for d in (self.dock_tree, self.dock_panel, self.dock_chat):
+        for d in (self.dock_tree, self.dock_panel, self.dock_chat, self.dock_log):
             v.addAction(d.toggleViewAction())
         tm = v.addMenu("&Theme")
         tm.setObjectName("menu.theme")
@@ -243,7 +255,7 @@ class MainWindow(QMainWindow):
     def show_home(self, on: bool):
         """The start screen while no study is open (the working docks and the step bar are put away), the study's views otherwise."""
         self._at_home = on
-        docks = (self.dock_tree, self.dock_panel, self.dock_chat)
+        docks = (self.dock_tree, self.dock_panel, self.dock_chat, self.dock_log)
         bar = self.findChild(QToolBar, "toolbar.steps")
         if on:
             for d in docks:
@@ -339,6 +351,10 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ events from the engine
     def _on_opened(self, pid: str):
         self.show_home(not pid)
+        self.hidden_bodies = set()
+        self.view.set_hidden_bodies(set())
+        self.logdock.load(pid)
+        self.statusBar().clearMessage()
         self._geo_key = None
         self.assistant.set_project(pid)
         self._gate()
@@ -357,6 +373,7 @@ class MainWindow(QMainWindow):
     def _on_job(self, ev: dict):
         j = ev.get("job") or {}
         self.panels["solve"].on_job(ev)
+        self.logdock.on_job(ev)
         running = j.get("status") == "running"
         self.progress.setVisible(running)
         if running:
@@ -394,6 +411,12 @@ class MainWindow(QMainWindow):
         if f:
             self.statusBar().showMessage(f"Face {fid}: {f.get('surface_type', '')}, {f.get('area', 0) * 1e6:.1f} mm\u00b2")
 
+    def toggle_body(self, bid: int):
+        """Hide or show one part in the 3D view (the eye of the web version)."""
+        (self.hidden_bodies.discard if bid in self.hidden_bodies else self.hidden_bodies.add)(bid)
+        self.view.set_hidden_bodies(self.hidden_bodies)
+        self._refresh_all()
+
     def _air_toggled(self, on: bool):
         if self.engine.pid:
             self._air_pref[self.engine.pid] = bool(on)
@@ -404,6 +427,7 @@ class MainWindow(QMainWindow):
         st = self.engine.state() if self.engine.pid else None
         self.act_air.setVisible(bool(st) and st["study"] in AIR_KINDS)
         self._title(st)
+        self.logdock.show_checks(st.get("checks") if st else [])
         self._fill_tree(st)
         for p in self.panels.values():
             p.refresh(st)
@@ -411,7 +435,10 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ steps
     def go(self, step: str):
+        if step != self.step and self.panels.get(self.step) is not None:
+            self.panels[self.step].left()
         self.step = step
+        self.panels[step].shown()
         self.step_actions[step].setChecked(True)
         self.stack.setCurrentIndex([k for k, _ in STEPS].index(step))
         self.assistant.set_context(step)
@@ -506,8 +533,9 @@ class MainWindow(QMainWindow):
                 self.chk_air.blockSignals(True)
                 self.chk_air.setChecked(on)
                 self.chk_air.blockSignals(False)
-                self.view.fit()
+                self.view.set_view("iso")
             self.view.show_geometry(True)
+            self.panels[self.step].draw_marks()
         except Exception as e:  # noqa: BLE001
             self.statusBar().showMessage(f"Cannot draw: {e}", 10000)
 

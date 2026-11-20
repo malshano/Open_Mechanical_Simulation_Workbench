@@ -336,7 +336,7 @@ def test_import_mesh_and_inspect_through_the_window(ctl):
 # ------------------------------------------------------------------------------------------------------------ the start screen
 def test_start_screen_has_a_card_per_study_type(ctl):
     s = ctl.state()
-    assert s["window"]["screen"] == "home" and s["docks"] == {"outline": False, "step": False, "assistant": False}
+    assert s["window"]["screen"] == "home" and s["docks"] == {"outline": False, "step": False, "assistant": False, "log": False}
     assert ctl.widgets("home.new.")["count"] == 6 and ctl.widgets("home.example.")["count"] == 7
     assert {w["id"] for w in ctl.widgets("home.")["widgets"]} >= {"home.open_folder", "home.import", "home.new.static_structural"}
     types = ctl.do("study.types")["result"]["types"]
