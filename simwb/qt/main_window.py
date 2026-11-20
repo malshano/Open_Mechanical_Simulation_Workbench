@@ -27,6 +27,20 @@ AIR_KINDS = {"cht_enclosure": ("enclosure",), "external_aero": ("farfield",)}
 STEPS = [("geometry", "Geometry"), ("setup", "Setup"), ("mesh", "Mesh"), ("solve", "Solve"), ("results", "Results")]
 
 
+class _Shown:
+    """Whether a control is offered at all (a flow study has an air box, a solid one does not)."""
+
+    def __init__(self, widget):
+        self.w, self.on = widget, False
+
+    def setVisible(self, on: bool):
+        self.on = bool(on)
+        self.w.setVisible(self.on)
+
+    def isVisible(self) -> bool:
+        return self.on
+
+
 def label_of(key: str) -> str:
     return dict(STEPS)[key]
 
@@ -107,12 +121,9 @@ class MainWindow(QMainWindow):
             tb.addAction(a)
             self.step_actions[k] = a
         tb.addSeparator()
-        self.chk_air = wid(QCheckBox("Air box"), "view.air_box")
-        self.chk_air.setToolTip("Show the box of air round the part (translucent)")
+        self.chk_air = self.view.viewbar.air                  # (with the other view toggles, in the 3D view's own bar)
         self.chk_air.toggled.connect(self._air_toggled)
-        self.act_air = tb.addWidget(self.chk_air)
-        self.act_air.setObjectName("view.air_box.item")
-        self.act_air.setVisible(False)
+        self.act_air = _Shown(self.chk_air)
         self._air_pref: dict = {}
         chrome.install(self, tb)
         sb = QStatusBar()

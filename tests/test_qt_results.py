@@ -140,7 +140,10 @@ def test_deformation_modes_range_and_labels(ctl, solved):
     c.do("results.show", {"range": [0, 100]})
     assert ov()["range"] == [0.0, 100.0]
     c.do("results.show", {"range": []})                                                            # [] = automatic again
-    assert ov()["range"][1] == pytest.approx(c.engine.state()["solve"]["summary"]["max_von_mises_MPa"], abs=0.05)
+    vmax = c.engine.state()["solve"]["summary"]["max_von_mises_MPa"]
+    top = c.win.view.extrema()["max"]["value"]
+    assert ov()["range"][1] == pytest.approx(top, rel=1e-6)                                        # the legend ends where the drawn surface does
+    assert 0.7 * vmax <= top <= vmax * (1 + 1e-6)                                                  # (the solver's maximum is over the whole volume)
     # the highest and lowest values are labelled on the model
     labels = [la.GetInput() for la in c.win.view.label_actors]
     assert any(t.startswith("Max ") for t in labels) and any(t.startswith("Min") for t in labels)
@@ -152,7 +155,8 @@ def test_deformation_modes_range_and_labels(ctl, solved):
 def test_pinned_values_and_the_line_plot(ctl, solved):
     c = open_results(ctl, solved, "static")
     ex = c.win.view.extrema()
-    assert ex["max"]["value"] == pytest.approx(c.engine.state()["solve"]["summary"]["max_von_mises_MPa"], abs=0.05) and ex["min"]["value"] < 0.1
+    vmax = c.engine.state()["solve"]["summary"]["max_von_mises_MPa"]
+    assert 0.7 * vmax <= ex["max"]["value"] <= vmax * (1 + 1e-6) and ex["min"]["value"] < 0.1      # (surface maximum <= the volume's)
     p = ex["max"]["point"]
     pin = c.do("results.pin", {"x": p[0], "y": p[1], "z": p[2]})["result"]["pin"]
     assert pin["value"] > 0.7 * ex["max"]["value"] and pin["unit"] == "MPa"
