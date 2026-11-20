@@ -45,7 +45,7 @@ class FlowLayout(QLayout):
         w = h = 0
         for it in self._items:
             s = it.minimumSize()
-            w, h = max(w, s.width()), max(h, s.height())
+            w, h = max(w, min(s.width(), 120)), max(h, s.height())      # (a long item may be cut: it never decides the panel's width)
         m = self.contentsMargins()
         return QSize(w + m.left() + m.right(), h + m.top() + m.bottom())
 
@@ -55,6 +55,8 @@ class FlowLayout(QLayout):
         x, y, line_h = r.x(), r.y(), 0
         for it in self._items:
             hint = it.sizeHint()
+            if hint.width() > r.width() > 0:                          # (never wider than the row: a long item is cut, not pushed out)
+                hint = QSize(r.width(), hint.height())
             if x + hint.width() > r.right() + 1 and line_h > 0:      # the row is full: the next line
                 x, y, line_h = r.x(), y + line_h + self._space, 0
             if apply:

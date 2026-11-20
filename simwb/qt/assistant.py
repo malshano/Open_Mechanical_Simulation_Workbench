@@ -186,6 +186,7 @@ class AssistantPanel(QWidget):
         for i, text in enumerate(SUGGESTIONS[kind][:3]):
             b = wid(QPushButton(text), f"assistant.chip.{i}")
             b.setObjectName("chip")
+            b.setToolTip(text)
             b.clicked.connect(lambda _=False, t=text: self.ask(t))
             self.chips.addWidget(b)
 
