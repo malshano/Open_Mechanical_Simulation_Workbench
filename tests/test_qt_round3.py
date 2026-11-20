@@ -261,3 +261,17 @@ def test_a_section_cuts_the_result_open(ctl, solved):
     assert ctl.win.panels["results"].request()["section"] is None and ctl.widget_do("results.section.pos")["enabled"] is False
     with pytest.raises(ValueError, match="section must be"):
         ctl.do("results.show", {"section": "w"})
+
+
+def test_the_solve_step_does_not_show_the_previous_studys_run(ctl, solved):
+    """Opening a study without results showed '100% - Done. The results are ready.' and the log of the study opened before it."""
+    ctl.do("study.import", {"path": solved["static"]})
+    ctl.do("step.go", {"step": "solve"})
+    assert ctl.widget_do("solve.state")["value"] == "Done. The results are ready." and ctl._index()["solve.progress"].value() == 1000
+    ctl.win.panels["solve"].log.setPlainText("Solved in 18.66 s: first mode 4.1 Hz")        # (what the run of that study printed)
+    ctl.do("study.example", {"study": "heat_conduction"})                                    # a study that has not been solved
+    ctl.do("step.go", {"step": "solve"})
+    assert ctl.engine.state()["solve"]["status"] == "none"
+    assert ctl._index()["solve.progress"].value() == 0
+    assert ctl.widget_do("solve.state")["value"] in ("", None)
+    assert "first mode" not in ctl.widget_do("solve.log")["value"]

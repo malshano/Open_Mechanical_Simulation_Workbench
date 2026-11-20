@@ -122,6 +122,11 @@ class SolvePanel(_Panel):
         if sig != self._sig:
             self._sig = sig
             self._solver_card(st, spec)
+        if self.engine.pid != getattr(self, "_pid", None):                 # another study: nothing of the previous one stays on show
+            self._pid = self.engine.pid
+            self.log.clear()
+            self.bar.setValue(0)
+            self.state.setText("")
         j = P.JOBS.latest(self.engine.pid, "solve")
         self.running = bool(j and j.status == "running")
         if j and not self.log.toPlainText() and j.log:                     # (the messages of the run that just finished)
@@ -129,6 +134,10 @@ class SolvePanel(_Panel):
         if s == "done":
             self.state.setText("Done. The results are ready.")
             self.bar.setValue(1000)
+        elif not self.running:                                             # (this study's own state, not a finished run's)
+            self.bar.setValue(0)
+            self.state.setText({"interrupted": "The last run was interrupted.", "failed": "The last run failed: see the output below.",
+                                "stale": "The setup changed since the last run: run it again."}.get(s, ""))
         self.mesh_ready = st["mesh"].get("status") in ("ready",)
         self.done = s == "done"
         self.flow = str(spec.get("solver", "")).startswith("openfoam")
