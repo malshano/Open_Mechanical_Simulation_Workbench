@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import base64
 import os
+import time
 
 import numpy as np
 from PySide6.QtCore import Qt, QTimer, Signal
@@ -27,6 +28,8 @@ import vtkmodules.vtkRenderingFreeType  # noqa: F401
 
 from . import colormaps
 from .legend import Legend
+from .picking import FaceIndex, locator_for
+from .viewtools import ViewBar
 
 # SIMWB_NO_GL=1: no OpenGL window (automated tests, machines without a display). The pipeline is built and described exactly the
 # same; only the drawing and the pictures are left out.
@@ -60,6 +63,7 @@ class Viewport(QWidget):
     facePicked = Signal(int, bool)
     faceHovered = Signal(int)
     pointPicked = Signal(float, float, float)
+    selectionChanged = Signal(list)       # the selection after a click in face mode
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -70,6 +74,8 @@ class Viewport(QWidget):
         lay.addWidget(self.iren, 1)
         self.legend = Legend()
         lay.addWidget(self.legend)
+        self.viewbar = ViewBar(self)
+        lay.insertWidget(0, self.viewbar)
         self.rw = None if headless else self.iren.GetRenderWindow()
         if self.rw is not None:
             self.rw.SetAlphaBitPlanes(1)  # (depth peeling needs an alpha channel and no multisampling)
@@ -96,6 +102,15 @@ class Viewport(QWidget):
         self.pick_mode: str | None = None
         self.selection: list = []
         self.face_tints: dict = {}
+        self.index = FaceIndex()            # ray picking over the CAD faces (works without a window)
+        self._overlay_index = None          # ... and over the drawn result surface
+        self.edge_actors: list = []
+        self.mark_actors: list = []         # selection, hover and tint highlights
+        self.edges_on = True
+        self.hover_id = -1
+        self.hover_highlight = True
+        self._press = None
+        self._hover_t = 0.0
         self.overlay_info: dict = {"kind": "none"}     # what the overlay shows (for the control API and for checking)
         self.geometry_info: dict = {"faces": 0, "bodies": 0}
         self._anim = None      # a mode shape swinging: (points, base, disp, amp)
@@ -105,6 +120,9 @@ class Viewport(QWidget):
             self._triad()
             self.iren.Initialize()
             self.iren.Start()
+            self.iren.AddObserver("LeftButtonPressEvent", self._on_press, 100)
+            self.iren.AddObserver("LeftButtonReleaseEvent", self._on_release, 100)
+            self.iren.AddObserver("MouseMoveEvent", self._on_move, 100)
 
     # ------------------------------------------------------------------ small things
     def _triad(self):
@@ -135,24 +153,195 @@ class Viewport(QWidget):
         self._timer.stop()
         self._anim = None
         self._clear(self.overlay_actors)
+        self._overlay_index = None
         self.legend.clear()
         self.overlay_info = {"kind": "none"}
 
-    # ------------------------------------------------------------------ picking contract (state only until the viewtools work lands)
+    # ------------------------------------------------------------------ picking
     def set_pick_mode(self, mode: str | None):
+        """None: clicks do nothing (hover still reports faces) | 'face': a click selects a face | 'point': a click reports a surface point."""
         if mode not in (None, "face", "point"):
             raise ValueError("pick mode must be None, 'face' or 'point'")
         self.pick_mode = mode
 
     def set_selection(self, ids):
         self.selection = [int(i) for i in ids]
+        self._rebuild_marks()
+        self.render()
 
     def set_face_tints(self, tints: dict):
         self.face_tints = {int(k): str(v) for k, v in tints.items()}
+        self._rebuild_marks()
+        self.render()
+
+    def set_hover_highlight(self, on: bool):
+        self.hover_highlight = bool(on)
+        self._rebuild_marks()
+        self.render()
+
+    def set_edges_visible(self, on: bool):
+        self.edges_on = bool(on)
+        for a in self.edge_actors:
+            a.SetVisibility(self.edges_on and self._geo_shown)
+        self.render()
+
+    def _mark_actor(self, ids, color, opacity=0.85):
+        pts, tris = self.index.triangles_of(ids)
+        if not len(tris):
+            return None
+        pd = self._polydata(pts, tris)
+        m = vtkPolyDataMapper()
+        m.SetInputData(pd)
+        m.SetResolveCoincidentTopologyToPolygonOffset()
+        m.SetRelativeCoincidentTopologyPolygonOffsetParameters(-2, -2)
+        a = vtkActor()
+        a.SetMapper(m)
+        pr = a.GetProperty()
+        pr.SetColor(*_rgb(color))
+        pr.SetOpacity(opacity)
+        pr.SetAmbient(0.9)
+        pr.SetDiffuse(0.2)
+        a.PickableOff()
+        a.SetVisibility(self._geo_shown)
+        return a
+
+    def _rebuild_marks(self):
+        """The highlights drawn over the CAD faces: tints (what a face carries), the selection, the face under the pointer."""
+        self._clear(self.mark_actors)
+        by_colour: dict = {}
+        for fid, col in self.face_tints.items():
+            by_colour.setdefault(col, []).append(fid)
+        items = [(ids, col, 0.7) for col, ids in by_colour.items()]
+        items.append((self.selection, "#ff9f1c", 0.9))
+        if self.hover_highlight and self.hover_id >= 0 and self.hover_id not in self.selection:
+            items.append(([self.hover_id], "#ffd8a8", 0.8))
+        for ids, col, op in items:
+            a = self._mark_actor(ids, col, op)
+            if a is not None:
+                self.ren.AddActor(a)
+                self.mark_actors.append(a)
+
+    def pick_ray(self, p0, p1):
+        """What the segment p0 -> p1 (world coordinates) hits: {'kind': 'face', 'face', 'point', 'air'} for a CAD face (while the CAD
+        model is shown), {'kind': 'surface', 'cell', 'point'} for the drawn result, or None."""
+        if self._geo_shown:
+            h = self.index.pick(p0, p1, air_pickable=self.air_on)
+            if h is not None:
+                return {"kind": "face", **h}
+        if self._overlay_index is not None and self.overlay_actors and self.overlay_actors[0].GetVisibility():
+            h = self._overlay_index.hit(p0, p1)
+            if h is not None:
+                return {"kind": "surface", "cell": h[0], "point": h[1]}
+        return None
+
+    def screen_ray(self, x: float, y: float):
+        """The world-space segment under the pixel (x, y) of the 3D view (origin top-left, as Qt reports it). Needs the window."""
+        if self.rw is None:
+            raise ValueError("The 3D view has no OpenGL window here (SIMWB_NO_GL): give a ray with pick_ray")
+        h = self.iren.height()
+        pts = []
+        for z in (0.0, 1.0):
+            self.ren.SetDisplayPoint(float(x), float(h - 1 - y), z)
+            self.ren.DisplayToWorld()
+            w = self.ren.GetWorldPoint()
+            pts.append([w[0] / w[3], w[1] / w[3], w[2] / w[3]] if w[3] else list(w[:3]))
+        return pts[0], pts[1]
+
+    def world_to_screen(self, point):
+        """Where a world point is on the 3D view's pixels (origin top-left); for clicking on it from the control API."""
+        if self.rw is None:
+            raise ValueError("The 3D view has no OpenGL window here (SIMWB_NO_GL)")
+        self.ren.SetWorldPoint(float(point[0]), float(point[1]), float(point[2]), 1.0)
+        self.ren.WorldToDisplay()
+        d = self.ren.GetDisplayPoint()
+        return [float(d[0]), float(self.iren.height() - 1 - d[1])]
+
+    def click_face(self, fid: int, add: bool = False):
+        """What a click on a face does: tell the panels (facePicked) and, in face mode, change the selection (Ctrl/Shift adds or removes
+        one face; a plain click selects just that face; a click on nothing clears it)."""
+        if fid >= 0:
+            self.facePicked.emit(int(fid), bool(add))
+        if self.pick_mode == "face":
+            sel = list(self.selection)
+            if fid < 0:
+                sel = [] if not add else sel
+            elif add:
+                sel = [i for i in sel if i != fid] if fid in sel else sel + [int(fid)]
+            else:
+                sel = [int(fid)]
+            self.set_selection(sel)
+            self.selectionChanged.emit(list(self.selection))
+
+    def click_at(self, x: float, y: float, add: bool = False):
+        """A click at pixel (x, y) of the 3D view (as the mouse would): what is hit, or None."""
+        h = self.pick_ray(*self.screen_ray(x, y))
+        if h is None:
+            self.click_face(-1, add)
+            return None
+        if h["kind"] == "face":
+            self.click_face(h["face"], add)
+        if self.pick_mode == "point":
+            self.pointPicked.emit(*h["point"])
+        return h
+
+    def hover_at(self, x: float, y: float):
+        h = self.pick_ray(*self.screen_ray(x, y))
+        fid = h["face"] if h and h["kind"] == "face" else -1
+        self._set_hover(fid)
+        return h
+
+    def _set_hover(self, fid: int):
+        if fid != self.hover_id:
+            self.hover_id = fid
+            if self.hover_highlight:
+                self._rebuild_marks()
+                self.render()
+            self.faceHovered.emit(int(fid))
+
+    # (the mouse: a press and release that hardly moved is a click, anything else is the camera being turned)
+    def _on_press(self, obj, event):
+        self._press = tuple(self.iren.GetEventPosition())
+
+    def _on_release(self, obj, event):
+        p, self._press = self._press, None
+        if p is None:
+            return
+        q = self.iren.GetEventPosition()
+        if abs(q[0] - p[0]) + abs(q[1] - p[1]) > 4:
+            return
+        add = bool(self.iren.GetControlKey() or self.iren.GetShiftKey())
+        self.click_at(q[0], self.iren.height() - 1 - q[1], add)
+
+    def _on_move(self, obj, event):
+        if self._press is not None:
+            return
+        now = time.monotonic()
+        if now - self._hover_t < 0.05:
+            return
+        self._hover_t = now
+        q = self.iren.GetEventPosition()
+        self.hover_at(q[0], self.iren.height() - 1 - q[1])
+
+    def picture(self, path: str):
+        """The 3D view with its colour legend as a PNG."""
+        img = self.image()
+        if self.legend.height() > 0 and self.legend.isVisible():
+            leg = self.legend.grab().toImage().scaledToWidth(img.width()) if self.legend.width() else None
+            if leg is not None:
+                out = QImage(img.width(), img.height() + leg.height(), QImage.Format_RGB888)
+                from PySide6.QtGui import QPainter
+                p = QPainter(out)
+                p.drawImage(0, 0, img)
+                p.drawImage(0, img.height(), leg)
+                p.end()
+                img = out
+        img.save(path, "PNG")
 
     def show_geometry(self, on: bool):
         self._geo_shown = bool(on)
-        for a in self.geo_actors:
+        for a in self.geo_actors + self.edge_actors:
+            a.SetVisibility(bool(on) and (a not in self.edge_actors or self.edges_on))
+        for a in self.mark_actors:
             a.SetVisibility(bool(on))
         for a in self.air_actors:
             a.SetVisibility(bool(on) and self.air_on)
@@ -177,6 +366,13 @@ class Viewport(QWidget):
         air = [f for f in faces if f.get("kind") in air_kinds]
         faces = [f for f in faces if f.get("kind") not in air_kinds]
         self.geometry_info = {"faces": len(faces) + len(air), "bodies": 0, "air_faces": len(air), "air_visible": False}
+        self._clear(self.edge_actors)
+        self._clear(self.mark_actors)
+
+        def parts(fs):
+            return [(f["id"], (f.get("mesh") or {}).get("vertices") or [], (f.get("mesh") or {}).get("triangles") or [], f.get("kind"))
+                    for f in fs if (f.get("mesh") or {}).get("vertices")]
+        self.index.build(parts(faces), parts(air))
         if air:
             self._air_box(air)
             self.geometry_info["air_visible"] = self.air_on
@@ -203,6 +399,28 @@ class Viewport(QWidget):
             act = self._actor(nm.GetOutput(), color=_rgb(BODY_COLORS[i % len(BODY_COLORS)]))
             self.ren.AddActor(act)
             self.geo_actors.append(act)
+            fe = vtkFeatureEdges()          # the sharp edges and the outline of every face, thin and dark
+            fe.SetInputData(pd)
+            fe.BoundaryEdgesOn()
+            fe.FeatureEdgesOn()
+            fe.SetFeatureAngle(30)
+            fe.ManifoldEdgesOff()
+            fe.NonManifoldEdgesOn()
+            fe.ColoringOff()
+            fe.Update()
+            em = vtkPolyDataMapper()
+            em.SetInputConnection(fe.GetOutputPort())
+            em.SetResolveCoincidentTopologyToPolygonOffset()
+            em.SetRelativeCoincidentTopologyLineOffsetParameters(-1, -1)
+            ea = vtkActor()
+            ea.SetMapper(em)
+            ea.GetProperty().SetColor(0.07, 0.08, 0.11)
+            ea.GetProperty().SetLineWidth(1.3)
+            ea.PickableOff()
+            ea.SetVisibility(self.edges_on and self._geo_shown)
+            self.ren.AddActor(ea)
+            self.edge_actors.append(ea)
+        self._rebuild_marks()
         self.render()
 
     def _air_box(self, faces: list):
@@ -323,6 +541,7 @@ class Viewport(QWidget):
             lut.SetTableRange(lo, hi)
             lut.SetNanColor(0.6, 0.6, 0.6, 1.0)
             lut.Build()
+        self._overlay_index = locator_for(pd)
         self.overlay_info = {"kind": "categories" if cats else "scalar", "name": name, "unit": unit, "range": [float(lo), float(hi)],
                              "triangles": int(len(idx)), "per": p.get("per"), "scale": p.get("scale") or "linear",
                              "colormap": None if cats else ("quality (fixed)" if fixed_quality else cmap), "reverse": bool(reverse),

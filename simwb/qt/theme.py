@@ -81,6 +81,8 @@ QLabel#badge {{ background: {t['panel2']}; border: 1px solid {t['line']}; border
 QLabel#chipLabel {{ background: {t['accent_soft']}; border-radius: 9px; padding: 2px 9px; font-size: 11px; }}
 QPushButton#ghostBorder {{ background: transparent; border: 1px solid {t['line']}; }}
 QPushButton#ghostBorder:hover {{ border-color: {t['accent']}; }}
+QWidget#viewbar {{ background: {t['panel2']}; border-bottom: 1px solid {t['line']}; }}
+QPushButton#viewbtn {{ padding: 3px 10px; font-size: 12px; }}
 QGroupBox {{ border: 1px solid {t['line']}; border-radius: {t['radius']}; margin-top: 14px; padding: 12px 8px 8px 8px; }}
 QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 5px; color: {t['muted']}; }}
 """

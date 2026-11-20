@@ -33,6 +33,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1100, 700)
         self.view = wid(Viewport(), "view.canvas")
         wid(self.view.legend, "view.legend")
+        self.view.faceHovered.connect(self._hover_tip)
         self.home = wid(HomePage(), "home.page")
         self.center = QStackedWidget()
         self.center.addWidget(self.home)
@@ -348,6 +349,15 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "The job failed", str(j.get("error") or j.get("message")))
         elif j.get("status") == "done":
             self.statusBar().showMessage(f"{j.get('kind', '')} done", 6000)
+
+    def _hover_tip(self, fid: int):
+        """The face under the pointer, in the status bar (the web version showed it as a tooltip)."""
+        if fid < 0 or not self.engine.pid:
+            self.statusBar().clearMessage()
+            return
+        f = self.engine.project().face_map().get(fid)
+        if f:
+            self.statusBar().showMessage(f"Face {fid}: {f.get('surface_type', '')}, {f.get('area', 0) * 1e6:.1f} mm\u00b2")
 
     def _air_toggled(self, on: bool):
         if self.engine.pid:

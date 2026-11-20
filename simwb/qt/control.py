@@ -43,7 +43,7 @@ from .ids import of as wid_of
 MODAL = {
     "file.open_folder": "study.open_folder", "file.save_as": "study.save_as", "file.export": "study.export",
     "file.import": "study.import", "geometry.import": "geometry.import", "help.about": None,
-    "home.open_folder": "study.open_folder", "home.import": "study.import",
+    "home.open_folder": "study.open_folder", "home.import": "study.import", "viewbar.picture": "view.picture",
 }
 
 
@@ -608,13 +608,29 @@ class Control(QObject):
             return {"visible": win.chk_air.isChecked(), "geometry": win.view.geometry_info}
         R("view.air_box", "Show or hide the air box of a flow or cooling study (translucent).", {"visible": (B, "default true", False)}, air_box)
         def pick_face(id, add=False):
-            win.view.facePicked.emit(int(id), bool(add))      # as a click on that face would (the contract in Viewport)
+            win.view.click_face(int(id), bool(add))           # as a click on that face would (the contract in Viewport)
             return {"picked": int(id), "add": bool(add), "selection": win.view.selection}
         R("view.pick_face", "Click a CAD face in the 3D view (emits Viewport.facePicked): what a panel does with a picked face.",
           {"id": (N, "face id", True), "add": (B, "Ctrl/Shift held: add to the selection", False)}, pick_face)
         R("view.pick_point", "Click a point of the shown surface (emits Viewport.pointPicked), coordinates in metres.",
           {"x": (N, "x", True), "y": (N, "y", True), "z": (N, "z", True)},
           lambda x, y, z: (win.view.pointPicked.emit(float(x), float(y), float(z)), {"picked": [x, y, z]})[1])
+        R("view.click", "Click at a pixel of the 3D view as the mouse would (needs the OpenGL window): picks the face or surface point there.",
+          {"x": (N, "pixel x (origin top-left of the 3D view)", True), "y": (N, "pixel y", True), "add": (B, "Ctrl held", False)},
+          lambda x, y, add=False: {"hit": win.view.click_at(float(x), float(y), bool(add)), "selection": win.view.selection})
+        R("view.pick_ray", "What a segment p0 -> p1 (world coordinates, m) hits in the 3D view, without clicking: a CAD face (while the model "
+                           "is shown) or a point of the drawn result.",
+          {"p0": ("array", "[x,y,z]", True), "p1": ("array", "[x,y,z]", True)}, lambda p0, p1: {"hit": win.view.pick_ray(p0, p1)})
+        R("view.project", "Where a world point is on the 3D view's pixels (to click it with view.click).", {"point": ("array", "[x,y,z] in m", True)},
+          lambda point: {"pixel": win.view.world_to_screen(point)})
+        R("view.selection", "Set the selected faces (as a panel would).", {"ids": ("array", "face ids", True)},
+          lambda ids: (win.view.set_selection(ids), {"selection": win.view.selection})[1])
+        R("view.pick_mode", "What a click in the 3D view does: face | point | none.", {"mode": (S, "face|point|none", True)},
+          lambda mode: (win.view.set_pick_mode(None if mode in ("none", "") else mode), {"pick_mode": win.view.pick_mode})[1])
+        R("view.edges", "Show or hide the edges and face outlines of the model.", {"visible": (B, "default true", False)},
+          lambda visible=True: (win.view.viewbar.edges.setChecked(bool(visible)), {"edges": win.view.edges_on})[1])
+        R("view.picture", "Save the 3D view with its colour scale as a PNG.", {"path": (S, "full path of the .png", True)},
+          lambda path: (win.view.picture(path), {"file": path})[1])
         R("view.stats", "What the 3D view holds and whether its picture is blank (bounds, colours).", {}, lambda: win.view.stats())
         # ---- assistant
         R("assistant.ask", "Type a question into the assistant as the user would (it answers asynchronously: see assistant.transcript).",
