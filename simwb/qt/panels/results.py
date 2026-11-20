@@ -205,7 +205,7 @@ class ResultsPanel(_Panel):
         v = self.pages["probe"]
         v.addWidget(_h("Probe"))
         v.addWidget(_muted("Click points on the result to read their value and keep it in the list. Click the model with Probe on."))
-        self.probe_btn = wid(QPushButton("⌖  Probe is off: click to start"), "results.probe")
+        self.probe_btn = wid(QPushButton("⌖  Probe: off. Click to start probing"), "results.probe")
         self.probe_btn.setCheckable(True)
         self.probe_btn.setObjectName("seg")
         self.probe_btn.setToolTip("While this is on, a click on the model pins the value there")
@@ -258,7 +258,7 @@ class ResultsPanel(_Panel):
         self.clear_btn.setToolTip("Remove the line and the pinned values" if has else "Nothing is pinned yet")
 
     def _probe_toggled(self, on):
-        self.probe_btn.setText("⌖  Probe is ON: click points on the model" if on else "⌖  Probe is off: click to start")
+        self.probe_btn.setText("✓  Probe is ON: click points on the model" if on else "⌖  Probe: off. Click to start probing")
         self.probe_on = on
         self.view.set_pick_mode("point" if (on or self.line_pick) else None)
 

@@ -12,6 +12,7 @@ from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import (QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QTextBrowser, QVBoxLayout, QWidget)
 
 from .. import agent
+from .flow import FlowLayout
 from .ids import wid
 
 SUGGESTIONS = {
@@ -121,8 +122,7 @@ class AssistantPanel(QWidget):
         self.view.setOpenExternalLinks(True)
         self.view.setPlaceholderText("Ask Claude to set up, mesh, run or explain this study.")
         v.addWidget(self.view, 1)
-        self.chips = QHBoxLayout()
-        self.chips.setSpacing(6)
+        self.chips = FlowLayout(spacing=6)                  # (wraps: the panel need not be as wide as three chips)
         v.addLayout(self.chips)
         self.status = wid(QLabel(""), "assistant.status")
         self.status.setObjectName("muted")
@@ -188,7 +188,6 @@ class AssistantPanel(QWidget):
             b.setObjectName("chip")
             b.clicked.connect(lambda _=False, t=text: self.ask(t))
             self.chips.addWidget(b)
-        self.chips.addStretch(1)
 
     # ------------------------------------------------------------------ conversation
     def _send_clicked(self):

@@ -30,7 +30,6 @@ class SolvePanel(_Panel):
         # the solver and the software behind each step (rebuilt when the study changes)
         self.solver_box = QVBoxLayout()
         self.solver_box.setSpacing(6)
-        self.v.addLayout(self.solver_box)
         row = QHBoxLayout()
         self.btn = wid(QPushButton("▶  Run the simulation"), "solve.run")
         self.btn.setObjectName("primary")
@@ -58,6 +57,7 @@ class SolvePanel(_Panel):
         self.v.addWidget(self.bar)
         self.state = wid(_muted(), "solve.state")
         self.v.addWidget(self.state)
+        self.v.addLayout(self.solver_box)                   # (which solver, and the software behind each step: below the run controls)
         self.v.addWidget(_h("Solver output (latest lines)"))
         self.log = wid(QPlainTextEdit(), "solve.log")
         self.log.setReadOnly(True)
@@ -171,7 +171,7 @@ class SolvePanel(_Panel):
                 st_lab.setWordWrap(True)
                 st_lab.setStyleSheet(f"color: {t['ok_text'] if ok else t['bad_text']};")
                 v.addWidget(st_lab)
-            sec = Section("Software used for each step", "solve.software", expanded=True)
+            sec = Section("Software used for each step", "solve.software", expanded=False)
             for r in d["elements"]:
                 row = QLabel(f"{r['element'].replace('_', ' ').capitalize()}: <b>{r['software']}</b> · {r['licence']}"
                              + ("" if r.get("installed", True) else " · not installed"))

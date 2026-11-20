@@ -147,3 +147,40 @@ def test_a_fitted_view_is_fitted_again_when_resized_until_the_user_moves_the_cam
     assert v._autofit is True
     ctl.do("view.camera", {"position": [1, 2, 3]}) if "view.camera" in ctl.actions else v.set_camera(position=[1, 2, 3])
     assert v._autofit is False
+
+
+def test_the_docks_start_with_sizes_that_favour_the_3d_view_and_the_step_panel(ctl, solved):
+    ctl.do("study.import", {"path": solved["static"]})
+    w = ctl.win
+    w.resize(1500, 920)
+    w.default_layout()
+    ctl._settle()
+    assert w.dock_chat.width() <= 0.3 * w.width() and w.dock_chat.width() >= 250       # the assistant is a side panel, not half the window
+    assert w.view.width() > w.dock_chat.width() * 1.4                                 # the 3D view has the most width
+    assert w.dock_panel.height() > 1.5 * w.dock_tree.height()                         # the step panel has the height, the outline is short
+
+
+def test_the_solve_step_leads_with_run_and_progress_and_folds_the_software_list(ctl, solved):
+    ctl.do("study.import", {"path": solved["static"]})
+    ctl.do("step.go", {"step": "solve"})
+    idx = ctl._index()
+    run, prog, state, sw = idx["solve.run"], idx["solve.progress"], idx["solve.state"], idx["solve.software.toggle"]
+    y = lambda wdg: wdg.mapTo(ctl.win, wdg.rect().topLeft()).y()  # noqa: E731
+    assert y(run) < y(prog) < y(state) < y(sw)                                         # run first, the software list below
+    assert ctl.widget_do("solve.software.toggle")["value"] == {"checked": False}        # folded away until wanted
+
+
+def test_the_assistant_panel_can_be_narrow_and_its_suggestions_wrap(ctl, solved):
+    """The suggestion chips were one row, so the panel could not be narrower than three chips (about 970 px) and squeezed the 3D view."""
+    ctl.do("study.import", {"path": solved["static"]})
+    ctl.do("step.go", {"step": "results"})
+    a = ctl.win.assistant
+    assert a.minimumSizeHint().width() < 450
+    chips = [ctl._index()[f"assistant.chip.{i}"] for i in range(3)]
+    ctl.win.dock_chat.setMinimumWidth(0)
+    a.resize(330, 700)
+    a.layout().activate()
+    ctl._settle()
+    ys = {c.mapTo(a, c.rect().topLeft()).y() for c in chips}
+    assert len(ys) >= 2                                                                # at a narrow width they take more than one line
+    assert all(c.mapTo(a, c.rect().topLeft()).x() + c.width() <= a.width() + 2 for c in chips)    # and none runs off the panel

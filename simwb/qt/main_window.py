@@ -268,6 +268,19 @@ class MainWindow(QMainWindow):
         self.engine.new_study(name, key, self._save_dir())
         self.engine.import_step(path)
 
+    def default_layout(self):
+        """Sizes the docks sensibly for the window: the 3D view gets the width, the step panel the height."""
+        w, h = self.width(), self.height()
+        self.resizeDocks([self.dock_tree, self.dock_chat], [min(430, int(w * 0.27)), min(380, int(w * 0.25))], Qt.Horizontal)
+        self.resizeDocks([self.dock_tree, self.dock_panel], [200, max(h - 200 - 190, 360)], Qt.Vertical)
+        self.resizeDocks([self.logdock], [190], Qt.Vertical)
+
+    def showEvent(self, e):  # noqa: N802
+        super().showEvent(e)
+        if not getattr(self, "_laid_out", False):
+            self._laid_out = True
+            QTimer.singleShot(0, self.default_layout)
+
     def show_home(self, on: bool):
         """The start screen while no study is open (the working docks and the step bar are put away), the study's views otherwise."""
         self._at_home = on
@@ -282,6 +295,7 @@ class MainWindow(QMainWindow):
             self.home.to_top()
         else:
             self.center.setCurrentWidget(self.view)
+            QTimer.singleShot(0, self.default_layout)        # (the docks were put away: back to their sizes)
             bar.show()
             for d in docks:
                 d.setVisible(self._dock_pref.get(d, True))
