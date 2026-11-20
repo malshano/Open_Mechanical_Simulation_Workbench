@@ -667,15 +667,56 @@ def face_extents(f) -> list:
     return sorted((proj.max(0) - proj.min(0)).tolist())
 
 
-def sharp_edges(gmsh, face_ids, min_length: float, max_face_angle: float = 140.0, limit: int = 200):
+def _toward_face(gmsh, s, p, e, d):
+    """d or -d, whichever points from the edge point p into face s. A short step from p along each is tested: the
+    closest point of the face to it must be (nearly) the point itself and lie inside the face's trimmed domain. That
+    holds for L-shaped and wrapping faces where the face's centre can lie outside the face or on the wrong side. When
+    the test cannot decide (a very narrow face, a failing call) the side of the face's centre decides."""
+    centre = np.array(gmsh.model.occ.getCenterOfMass(2, s), float)
+    c = centre - p
+    dc = float(np.linalg.norm(c - (c @ e) * e))
+    step = max(0.1 * dc, 1e-9)
+    ok = []
+    for sign in (1.0, -1.0):
+        q = p + sign * step * d
+        try:
+            cp, uv = gmsh.model.getClosestPoint(2, s, [float(x) for x in q])
+            near = float(np.linalg.norm(np.array(cp, float) - q)) < 0.25 * step
+            ok.append(bool(near and gmsh.model.isInside(2, s, list(uv), True)))
+        except Exception:  # noqa: BLE001
+            ok.append(False)
+    if ok[0] != ok[1]:
+        return d if ok[0] else -d
+    return d if d @ c >= 0 else -d
+
+
+def edge_cells_estimate(length: float, h_edge: float, h_wall: float, growth: float) -> float:
+    """Cells that a refinement of cell size h_edge along `length` of edges adds, beyond the h_wall cells that would be
+    there anyway. The size grows linearly from h_edge at the edge to h_wall at r_max = (h_wall - h_edge) / (growth - 1)
+    (the field of the mesher); a tetrahedron of edge s has the volume s^3 / (6 sqrt 2); the zone is the full tube round
+    the edge (an upper bound: part of it is inside the body)."""
+    if length <= 0 or h_edge >= h_wall:
+        return 0.0
+    r_max = (h_wall - h_edge) / (growth - 1.0)                    # the size h_edge + (growth - 1) r reaches h_wall
+    r = np.linspace(0.0, r_max, 400)
+    s = h_edge + (growth - 1.0) * r
+    vol = 1.0 / (6.0 * math.sqrt(2.0))
+    dens = 2.0 * math.pi * r * (1.0 / (vol * s ** 3) - 1.0 / (vol * h_wall ** 3))
+    return float(length * np.trapezoid(dens, r))
+
+
+def sharp_edges(gmsh, face_ids, min_length: float, max_face_angle: float = 140.0, limit: int = 200,
+                flow_axis=None, max_parallel: float = 0.7):
     """The edges (gmsh curves) shared by exactly two of the faces `face_ids` where the faces meet sharply, longest first:
     [(curve tag, face angle in degrees, length)].
 
     The face angle is the angle between the two faces seen from the edge: 180 = smooth (a fillet seam), 90 = the
     corner of a box, a few degrees = a knife edge such as the leading edge of a wing. At the middle of the edge it is
     measured between the directions that lie in each face's tangent plane, perpendicular to the edge and pointing into
-    the face (the side of the face's centre), so it does not depend on which way the CAD normals point and it is right
-    for curved faces too. Edges shorter than min_length are left out."""
+    the face (found by testing which side still lies on the face, see _toward_face), so it does not depend on which
+    way the CAD normals point and it is right for curved and L-shaped faces too. Edges shorter than min_length are
+    left out. With flow_axis (0, 1 or 2) edges running along the flow (direction component along it above
+    max_parallel) are left out: only edges across the flow are leading / trailing edges."""
     ids = set(int(i) for i in face_ids)
     found = []
     for _, tag in gmsh.model.getEntities(1):
@@ -683,7 +724,11 @@ def sharp_edges(gmsh, face_ids, min_length: float, max_face_angle: float = 140.0
         surfs = sorted({int(s) for s in up if int(s) in ids})
         if len(surfs) != 2:
             continue
-        length = float(gmsh.model.occ.getMass(1, tag))
+        try:
+            length = float(gmsh.model.occ.getMass(1, tag))
+        except Exception:  # noqa: BLE001  (a curve that is not an OpenCASCADE one: its bounding box instead)
+            bb = gmsh.model.getBoundingBox(1, tag)
+            length = float(np.linalg.norm(np.subtract(bb[3:], bb[:3])))
         if length < min_length:
             continue
         lo, hi = gmsh.model.getParametrizationBounds(1, tag)
@@ -693,6 +738,8 @@ def sharp_edges(gmsh, face_ids, min_length: float, max_face_angle: float = 140.0
         if np.linalg.norm(e) < 1e-30:
             continue
         e /= np.linalg.norm(e)
+        if flow_axis is not None and abs(e[int(flow_axis)]) > max_parallel:
+            continue                                             # an edge along the flow: not a leading / trailing edge
         dirs = []
         for s in surfs:
             uv = gmsh.model.getParametrization(2, s, [float(x) for x in p])
@@ -701,9 +748,7 @@ def sharp_edges(gmsh, face_ids, min_length: float, max_face_angle: float = 140.0
             if np.linalg.norm(d) < 1e-12:
                 continue
             d /= np.linalg.norm(d)
-            if d @ (np.array(gmsh.model.occ.getCenterOfMass(2, s), float) - p) < 0:
-                d = -d                                           # ... pointing to the side the face lies on
-            dirs.append(d)
+            dirs.append(_toward_face(gmsh, s, p, e, d))          # ... pointing to the side the face lies on
         if len(dirs) != 2:
             continue
         angle = math.degrees(math.acos(float(np.clip(dirs[0] @ dirs[1], -1.0, 1.0))))
@@ -1197,30 +1242,45 @@ def task_mesh(job: dict) -> dict:
         fields.setNumber(ft, "DistMax", float(r["size"]) * 10)
         use.append(ft)
 
-    # sharp edges (leading and trailing edges, corners): cells of wall size / factor along them, back to the wall size
-    # within 12 edge cells. Flow quantities change fastest there (a laminar plate's first 5 % of length carries about
-    # 22 % of its friction), and it costs few cells because only a thin tube round each edge is refined.
+    # sharp edges (leading and trailing edges, corners): cells of wall size / factor along them, growing back to the
+    # wall size with the mesh growth ratio (like the wall field, so no jump in cell size). Flow quantities change
+    # fastest there (a laminar plate's first 5 % of length carries about 22 % of its friction).
+    # (The first version ramped to the far-field size within 12 edge cells: a size gradient of about 6, which broke the
+    # layer step and the cell quality as the mesh was refined.)
+    # Only edges that cross the flow matter (a leading or trailing edge; an edge along the flow does not), and the cells
+    # this adds are estimated before meshing and capped (default 150,000): where the estimate is over the cap the edge
+    # cells are made coarser until it fits, so the option can never run the mesher out of memory by itself.
     edge_info = None
     if study == "external_aero" and ms.get("edge_refine") and not ms.get("size_min"):
-        factor = float(ms["edge_refine"].get("factor", 6.0))
+        er = ms["edge_refine"]
+        factor = float(er.get("factor", 6.0))
+        cap = float(er.get("max_cells", 150_000))
+        flow_axis = ((info.get("domain") or {}).get("spec") or {}).get("flow_axis")
         h_edge = max(h_wall / factor, L / 3000.0)
         if h_edge < 0.9 * h_wall:
-            edges = sharp_edges(gmsh, wall_faces, max(0.03 * L, 8 * h_edge))
-            if edges:
+            edges = sharp_edges(gmsh, wall_faces, max(0.03 * L, 8 * h_edge), flow_axis=flow_axis)
+            total_len = sum(e[2] for e in edges)
+            est = edge_cells_estimate(total_len, h_edge, h_wall, growth)
+            while edges and est > cap and h_edge < 0.9 * h_wall:
+                h_edge *= 1.15
+                est = edge_cells_estimate(total_len, h_edge, h_wall, growth)
+            if edges and h_edge < 0.9 * h_wall:
                 fe = fields.add("Distance")
                 fields.setNumbers(fe, "CurvesList", [e[0] for e in edges])
-                fields.setNumber(fe, "Sampling", int(min(2000, max(50, 2 * max(e[2] for e in edges) / h_edge))))
-                fte = fields.add("Threshold")
-                fields.setNumber(fte, "InField", fe)
-                fields.setNumber(fte, "SizeMin", h_edge)
-                fields.setNumber(fte, "SizeMax", size_far)
-                fields.setNumber(fte, "DistMin", h_edge)
-                fields.setNumber(fte, "DistMax", h_edge * 12)
+                fields.setNumber(fe, "Sampling", int(min(20000, max(50, 2 * max(e[2] for e in edges) / h_edge))))
+                # size = h_edge + (growth - 1) x distance: the mesh growth ratio exactly, and no ceiling. (A Threshold
+                # field returns its SizeMax everywhere beyond DistMax, so a SizeMax of h_wall made the whole air box
+                # wall-sized, about 12 million cells; the far field keeps its own size from the other fields.)
+                fte = fields.add("MathEval")
+                fields.setString(fte, "F", f"{h_edge!r} + {growth - 1.0!r} * F{fe}")
+                dist_max = (h_wall - h_edge) / (growth - 1.0)             # where it reaches the wall size
                 use.append(fte)
-                edge_info = {"edges": len(edges), "size": h_edge, "factor": factor,
-                             "min_face_angle": min(e[1] for e in edges), "total_length": sum(e[2] for e in edges)}
-                progress(0.09, f"Sharp edges refined: {len(edges)} edge(s), {edge_info['total_length']:.3g} m long, "
-                               f"cells of {h_edge * 1e3:.2f} mm")
+                edge_info = {"edges": len(edges), "size": h_edge, "factor": factor, "size_far_of_edge_field": h_wall,
+                             "factor_used": h_wall / h_edge, "growth": growth, "dist_max": dist_max,
+                             "estimated_extra_cells": est, "cap_cells": cap,
+                             "min_face_angle": min(e[1] for e in edges), "total_length": total_len}
+                progress(0.09, f"Sharp edges refined: {len(edges)} edge(s) across the flow, {total_len:.3g} m long, "
+                               f"cells of {h_edge * 1e3:.2f} mm, about {est:,.0f} extra cells")
 
     mn = fields.add("Min")
     fields.setNumbers(mn, "FieldsList", use)

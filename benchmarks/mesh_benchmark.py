@@ -89,6 +89,35 @@ def final_cells(pr, mesh_cells: int) -> int:
     return int(mesh_cells)
 
 
+def layer_table(case: Path):
+    """The layer step's own final table: the mean number of layers the wall got and the share of the target thickness
+    (snappyHexMesh: 'patch faces layers overall thickness / target mesh [m] [%]'). Faces that merely kept a thin layer
+    count as extruded in the 'Extruding' lines, so this is the honest figure. None when the log has no such table."""
+    p = Path(case) / "log.snappyHexMesh"
+    if not p.exists():
+        return None
+    txt = p.read_text(errors="ignore")
+    i = txt.rfind("overall thickness")
+    if i < 0:
+        return None
+    rows = re.findall(r"(?m)^\s*(\S+)\s+(\d+)\s+(\d+)\s+([\d.]+)\s+([\d.eE+-]+)\s+([\d.]+)\s*$", txt[i:i + 600])
+    if not rows:
+        return None
+    faces = [int(r[1]) for r in rows]
+    w = lambda k: sum(float(r[k]) * f for r, f in zip(rows, faces)) / max(sum(faces), 1)  # noqa: E731
+    return {"layers_mean": round(w(3), 2), "layers_target": int(rows[0][2]), "thickness_percent": round(w(5), 1)}
+
+
+def layers_ok(row: dict) -> bool:
+    """One rule for 'the layers are there': at least 80 % of the target thickness when the log says so, else at least
+    90 % of the wall faces extruded; a run with layers requested and neither figure cannot be checked: not ok."""
+    if not row.get("layers"):
+        return True
+    if row.get("layers_thickness_percent") is not None:
+        return row["layers_thickness_percent"] >= 80.0
+    return row.get("layers_kept_percent") is not None and row["layers_kept_percent"] >= 90.0
+
+
 def layer_share(pr, stats: dict):
     """Percent of the wall faces that kept their layers (the last 'Extruding' line of the layer step)."""
     if (stats.get("hex") or {}).get("layers_extruded_percent") is not None:
@@ -106,7 +135,13 @@ def run_one(method: str, preset: str, opts: dict) -> dict:
     os.environ.setdefault("SIMWB_AUTO_OPENFOAM", "0")
     import simwb.project as P
 
-    out = {"method": method, "preset": preset, "layers": layers, "growth": growth, "mode": mode, "shape": shape,
+    try:   # which code made the row: results of an older version of a method must not be mixed with the current one
+        rev = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, cwd=ROOT).stdout.strip()
+        dirty = bool(subprocess.run(["git", "status", "--porcelain", "--", "simwb"], capture_output=True, text=True, cwd=ROOT).stdout.strip())
+    except Exception:  # noqa: BLE001
+        rev, dirty = "unknown", False
+    out = {"git": rev + ("+uncommitted" if dirty else ""), "edge_field": "v2", "method": method, "preset": preset,
+           "layers": layers, "growth": growth, "mode": mode, "shape": shape,
            "cf_reference": reference_cf(mode) if shape == "sharp" else None}   # (no exact answer for the blunt slab)
     pr = P.create_project("Plate", "external_aero")
     j = pr.import_step(plate_step(Path(home) / "plate.step", sharp=(shape == "sharp")), original_name="plate.step")
@@ -148,17 +183,20 @@ def run_one(method: str, preset: str, opts: dict) -> dict:
     ram = sm.get("ram") or {}
     out["cells_final"] = final_cells(pr, out["cells"])
     out["layers_kept_percent"] = layer_share(pr, st)
+    lt = layer_table(pr.case_dir)
+    if lt:
+        out.update(layers_mean=lt["layers_mean"], layers_thickness_percent=lt["thickness_percent"])
     visc = sm.get("viscous_force_N") or [0, 0, 0]
     q = 0.5 * RHO * U * U
     out.update(cf=abs(visc[0]) / (q * 2 * L * B), viscous_force_N=visc[0], drag_N=sm.get("drag_N"), yplus=sm.get("yPlus"),
                solve_ram_mb=ram.get("solver_added_ram_mb") if ram.get("solver_added_ram_mb") is not None else ram.get("added_ram_mb"),
                converged=bool((sm.get("convergence") or {}).get("converged")), iterations=(sm.get("convergence") or {}).get("iterations"))
-    # valid = converged AND the wall layers it was meant to have are mostly there: a mesh that lost half of its layers
+    # valid = converged AND the wall layers it was meant to have are there (layers_ok): a mesh that lost its layers
     # (a leading edge without a boundary-layer mesh) says nothing about the method, and its error can be anything
-    kept = out.get("layers_kept_percent")
-    out["valid"] = out["converged"] and (layers == 0 or kept is None or kept >= 90.0)
+    out["valid"] = out["converged"] and layers_ok({**out, "layers": layers})
     if out["converged"] and not out["valid"]:
-        out["invalid_reason"] = f"only {kept:.0f} % of the wall faces kept their layers"
+        out["invalid_reason"] = (f"the wall got {out['layers_mean']} of {layers} layers ({out['layers_thickness_percent']} % of the "
+                                 "target thickness)" if out.get("layers_mean") is not None else "layer coverage could not be checked")
     mr, sr = out.get("mesh_ram_mb"), out.get("solve_ram_mb")
     if mr is not None and sr is not None:
         out["total_ram_mb"] = max(mr, sr)       # the mesher and the solver do not run together: the larger one is the need

@@ -2289,8 +2289,10 @@ class Project:
                 raise ValueError("Layer growth must be between 1.0 and 2.0")
             if first is not None and first <= 0:
                 raise ValueError("First layer thickness must be > 0 mm (empty = automatic)")
+            # (an option not given keeps its value: a call that only changes the number of layers must not switch
+            # the tolerant limits off)
             m["layers"] = {"n": n, "growth": g, "first": None if first is None else first / 1000,
-                           "tolerant": bool(layers.get("tolerant", False))}
+                           "tolerant": bool(layers.get("tolerant", (m.get("layers") or {}).get("tolerant", False)))}
         if edge_refinement is not None:  # fine cells along sharp edges (leading / trailing edges): off | True | factor
             if edge_refinement in (False, 0, "off"):
                 m.pop("edge_refine", None)
