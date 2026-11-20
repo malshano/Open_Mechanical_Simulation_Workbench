@@ -97,7 +97,7 @@ def test_the_thermal_summary(ctl, solved):
     kp = {w["id"]: w["text"] for w in c.widgets("results.kpi.")["widgets"]}
     sm = c.engine.state()["solve"]["summary"]
     assert "Max temperature" in kp["results.kpi.max_temperature"] and f"{sm['T_max']:.1f}" in kp["results.kpi.max_temperature"]
-    assert any("heat balance closes" in t for t in kp.values())
+    assert any(("heat balance closes" in t or "% off" in t) for t in kp.values())   # the verdict in words
     bars = c.win.panels["results"].findChildren(__import__("simwb.qt.charts", fromlist=["HBar"]).HBar)
     assert sorted(b.label for b in bars) == ["Plate", "Resistor"]
 
@@ -157,7 +157,8 @@ def test_pinned_values_and_the_line_plot(ctl, solved):
     pin = c.do("results.pin", {"x": p[0], "y": p[1], "z": p[2]})["result"]["pin"]
     assert pin["value"] > 0.7 * ex["max"]["value"] and pin["unit"] == "MPa"
     assert any(la.GetInput().startswith("A: ") for la in c.win.view.label_actors)
-    assert c.widget_do("results.pin.0.delete")["visible"] in (True, False)
+    c.do("results.tab", {"name": "probe"})
+    assert c.widget_do("results.pin.0.delete")["visible"] is True
     d = c.do("results.line_minmax")["result"]["line"]
     assert d["max"] > d["min"] and d["n_inside"] > 10 and d["length"] > 0.01
     chart = c.win.panels["results"].chart

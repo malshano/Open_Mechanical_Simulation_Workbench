@@ -11,12 +11,20 @@ def open_mesh(ctl, solved):
     return ctl
 
 
+def open_sections(c, *names):
+    """Unfold sections of the advanced options, as a user would."""
+    for n in names:
+        if not c.widget_do(f"mesh.{n}.toggle")["value"]["checked"]:
+            c.widget_do(f"mesh.{n}.toggle", "click")
+
+
 def mesh(c):
     return c.engine.state()["mesh"]
 
 
 def test_advanced_sizes_and_defeaturing(ctl, solved):
     c = open_mesh(ctl, solved)
+    open_sections(c, "sizes")
     c.widget_do("mesh.size_max", "set", "4")
     assert mesh(c)["size_max"] == pytest.approx(0.004)
     c.widget_do("mesh.size_min", "set", "0.8")
@@ -30,6 +38,7 @@ def test_advanced_sizes_and_defeaturing(ctl, solved):
 
 def test_part_sizing(ctl, solved):
     c = open_mesh(ctl, solved)
+    open_sections(c, "parts")
     assert c.widget_do("mesh.part.pick")["value"]["items"][-1].startswith("Selected faces")
     c.widget_do("mesh.part.add", "click")                                               # the first part: all its faces
     refs = mesh(c)["refinements"]
@@ -47,6 +56,7 @@ def test_part_sizing(ctl, solved):
 
 def test_refinement_regions_box_and_cylinder(ctl, solved):
     c = open_mesh(ctl, solved)
+    open_sections(c, "regions")
     c.widget_do("mesh.region.add_box", "click")
     c.widget_do("mesh.region.add_cyl", "click")
     regs = mesh(c)["regions"]
@@ -80,6 +90,7 @@ def test_wall_layers_and_the_mesh_type_belong_to_flow_studies(ctl):
 
 def test_simple_mode_leaves_only_the_presets(ctl, solved):
     c = open_mesh(ctl, solved)
+    open_sections(c, "sizes")
     assert c.widget_do("mesh.size_max")["visible"] is True
     c.do("app.mode", {"mode": "simple"})
     assert c.widget_do("mesh.size_max")["visible"] is False and c.widget_do("mesh.preset.coarse")["visible"] is True
@@ -114,6 +125,7 @@ def test_the_poorest_cells_can_be_shown_and_looked_at(ctl, solved):
 def test_the_mesh_panel_is_legible_with_everything_open(ctl, solved, name):
     c = open_mesh(ctl, solved)
     c.do("theme.set", {"mode": name})
+    open_sections(c, "sizes", "parts", "regions")
     c.widget_do("mesh.region.add_box", "click")
     c._settle()
     weak, seen = [], 0

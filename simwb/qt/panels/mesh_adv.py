@@ -38,6 +38,12 @@ class MeshAdvanced(QWidget):
         self.v.setContentsMargins(0, 0, 0, 0)
         self.v.setSpacing(8)
         self._sig = None
+        self._open: dict = {}               # which sections the user has open (kept when the content is rebuilt)
+
+    def _sec(self, title, prefix, default):
+        s = Section(title, prefix, expanded=self._open.get(prefix, default))
+        s.head.toggled.connect(lambda on, k=prefix: self._open.__setitem__(k, on))
+        return s
 
     @property
     def engine(self):
@@ -69,7 +75,7 @@ class MeshAdvanced(QWidget):
         return row, e
 
     def _sizes(self, m):
-        s = Section("Advanced sizes and defeaturing", "mesh.sizes", expanded=bool(m.get("size_max") or m.get("size_min") or m.get("defeature")))
+        s = self._sec("Advanced sizes and defeaturing", "mesh.sizes", bool(m.get("size_max") or m.get("size_min") or m.get("defeature")))
         for text, key, val, tip in (("Largest cell [mm]", "size_max", m.get("size_max"), "Largest cells of the mesh, in the bulk (empty: from the preset)"),
                                     ("Smallest cell [mm]", "size_min", m.get("size_min"), "Smallest cells, at walls and small features (empty: from the preset)"),
                                     ("Defeature [mm]", "defeature", m.get("defeature"), "Small faces below this size are merged into the face they sit on (0 = off)")):
@@ -90,7 +96,7 @@ class MeshAdvanced(QWidget):
     # ---- part sizing
     def _parts(self, st, m):
         refs = m.get("refinements") or []
-        s = Section(f"Part sizing ({len(refs)})", "mesh.parts", expanded=bool(refs))
+        s = self._sec(f"Part sizing ({len(refs)})", "mesh.parts", bool(refs))
         names = {b["id"]: b["name"] for b in st["body_list"]}
         for i, r in enumerate(refs):
             row = QHBoxLayout()
@@ -167,7 +173,7 @@ class MeshAdvanced(QWidget):
     # ---- refinement regions
     def _regions(self, st, m):
         regs = m.get("regions") or []
-        s = Section(f"Refinement regions ({len(regs)})", "mesh.regions", expanded=bool(regs))
+        s = self._sec(f"Refinement regions ({len(regs)})", "mesh.regions", bool(regs))
         for i, r in enumerate(regs):
             card = _item()
             cv = QVBoxLayout(card)
@@ -263,7 +269,7 @@ class MeshAdvanced(QWidget):
     # ---- wall layers
     def _layers(self, m):
         ly = m.get("layers") or {}
-        s = Section("Wall layers (prism / inflation)", "mesh.layers", expanded=bool(ly.get("n")))
+        s = self._sec("Wall layers (prism / inflation)", "mesh.layers", bool(ly.get("n")))
         s.body.addWidget(_muted("Thin layers of cells along the walls, for the boundary layer (added by OpenFOAM before the run). 0 layers = off."))
         f = ParamForm([{"key": "n", "label": "number of layers", "unit": "", "default": 0, "min": 0, "max": 20},
                        {"key": "growth", "label": "growth ratio", "unit": "", "default": 1.2, "min": 1.0, "max": 2.0},

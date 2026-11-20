@@ -67,7 +67,7 @@ class KPI(QFrame):
         val = QLabel(f"{value} <span style='font-size:12px;color:{theme.tokens()['muted']}'>{unit}</span>")
         val.setObjectName("kpiv")
         wid(self, "results.kpi." + "".join(c if c.isalnum() else "_" for c in label.lower()).strip("_"))
-        self.setProperty("api_text", f"{label}: {value} {unit}".strip() + (f" ({tone})" if tone else ""))
+        self.setProperty("api_text", f"{label}: {value} {unit}".strip() + (f" ({tone})" if tone else "") + (f": {hint}" if hint else ""))
         v.addWidget(l)
         v.addWidget(val)
         if hint:
