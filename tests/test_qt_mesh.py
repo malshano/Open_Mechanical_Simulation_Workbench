@@ -86,6 +86,7 @@ def test_wall_layers_and_the_mesh_type_belong_to_flow_studies(ctl):
     ctl.do("step.go", {"step": "mesh"})
     shown = {w["id"] for w in ctl.widgets("mesh.")["widgets"] if w["visible"]}
     assert "mesh.layers.n" not in shown and "mesh.method.tet" not in shown              # (a solid study has neither)
+    assert not ctl.win.panels["mesh"].method_h.isVisibleTo(ctl.win.panels["mesh"])        # nor a heading with nothing under it
 
 
 def test_simple_mode_leaves_only_the_presets(ctl, solved):

@@ -48,7 +48,8 @@ class MeshPanel(_Panel):
         self.frac = 0.5
         self.poor_on = False
         self.poor_thr = 0.1
-        self.v.addWidget(_h("Mesh type"))
+        self.method_h = _h("Mesh type")
+        self.v.addWidget(self.method_h)
         w, self.method_grp, self.method_btns = _seg([("tet", "Tetrahedral"), ("hex", "Hex-dominant")], "tet", prefix="mesh.method")
         for k, b in self.method_btns.items():
             b.clicked.connect(lambda _=False, k=k: self._method(k))
@@ -176,6 +177,7 @@ class MeshPanel(_Panel):
         m = st["mesh"]
         aero = st["study"] == "external_aero"
         self.method_box.setVisible(aero)
+        self.method_h.setVisible(aero)
         self.method_note.setVisible(aero)
         if aero:
             self.method_btns["hex"].setEnabled(not st.get("hex_unsupported"))
