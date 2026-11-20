@@ -93,6 +93,7 @@ class Viewport(QWidget):
         self.ren2.SetLayer(1)
         self.ren2.InteractiveOff()
         self.ren2.SetActiveCamera(self.ren.GetActiveCamera())
+        self._style = None                   # the camera's interactor style (put aside while a label is dragged, then given back)
         if self.rw is not None:
             self.rw.SetNumberOfLayers(2)
             self.rw.AddRenderer(self.ren)
@@ -124,7 +125,6 @@ class Viewport(QWidget):
         self._label_state: list = []        # per label: its point, size and place on the screen (to find the one under the mouse)
         self._label_user: dict = {}         # key -> (dx, dy) in pixels: where the user dragged a label to (kept while the same result is shown)
         self._drag = None                   # (label index, press position, offset at the press, the camera style put aside)
-        self._style = None
         self._shown_name = None
         self.edges_on = True
         self.geo_keys: list = []             # the volume of each drawn group (parallel to geo_actors and edge_actors)
@@ -558,7 +558,7 @@ class Viewport(QWidget):
     # (the mouse: a press and release that hardly moved is a click, anything else is the camera being turned)
     def _on_press(self, obj, event):
         self._press = tuple(self.iren.GetEventPosition())
-        i = self._label_at(*self._press) if self._label_state else None
+        i = self._label_at(*self._press) if self._label_state and self._style is not None else None
         if i is not None:                                   # a label is taken: it moves with the mouse and the camera stays where it is
             self._drag = (i, self._press, self._label_state[i]["off"], self._style)
             self.iren.SetInteractorStyle(None)
@@ -566,7 +566,8 @@ class Viewport(QWidget):
     def _on_release(self, obj, event):
         p, self._press = self._press, None
         if self._drag is not None:
-            self.iren.SetInteractorStyle(self._drag[3])
+            if self._drag[3] is not None:
+                self.iren.SetInteractorStyle(self._drag[3])
             self._drag = None
             return
         if p is None:
