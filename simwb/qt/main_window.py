@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDockWidget, QFileDialog, Q
 from .. import project as P
 from .. import studies
 from .assistant import AssistantPanel, ChatBridge
+from . import theme
 from .engine import Engine
 from .home import HomePage
 from .ids import wid
@@ -52,6 +53,7 @@ class MainWindow(QMainWindow):
             sc = QScrollArea()
             sc.setWidgetResizable(True)
             sc.setFrameShape(QScrollArea.NoFrame)
+            sc.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)      # (panels wrap their text; nothing scrolls sideways)
             sc.setWidget(self.panels[k])
             self.stack.addWidget(sc)
             self.panels[k].changed.connect(self.update_view)
@@ -68,7 +70,7 @@ class MainWindow(QMainWindow):
         self.dock_chat = self._dock("Claude assistant", self.assistant, Qt.RightDockWidgetArea, "assistant")
         self.log = QLabel()   # (messages go to the status bar; kept short)
         self.resizeDocks([self.dock_tree, self.dock_panel], [220, 480], Qt.Vertical)
-        self.resizeDocks([self.dock_tree, self.dock_chat], [340, 400], Qt.Horizontal)
+        self.resizeDocks([self.dock_tree, self.dock_chat], [440, 360], Qt.Horizontal)
 
         # ---- step bar, status bar
         tb = QToolBar("Steps")
@@ -181,6 +183,21 @@ class MainWindow(QMainWindow):
         v.addSeparator()
         for d in (self.dock_tree, self.dock_panel, self.dock_chat):
             v.addAction(d.toggleViewAction())
+        tm = v.addMenu("&Theme")
+        tm.setObjectName("menu.theme")
+        tm.menuAction().setObjectName("menu.theme.open")
+        grp = QActionGroup(self)
+        self.theme_actions = {}
+        for key, label in (("system", "Follow the system"), ("dark", "Dark"), ("light", "Light")):
+            a = QAction(label, self)
+            a.setObjectName(f"theme.{key}")
+            a.setCheckable(True)
+            a.setChecked(theme.mode() == key)
+            a.triggered.connect(lambda _=False, k=key: self.set_theme(k))
+            grp.addAction(a)
+            tm.addAction(a)
+            self.theme_actions[key] = a
+        theme.bus.changed.connect(lambda _: self._on_theme())
         h = mb.addMenu("&Help")
         act(h, "&About", lambda: QMessageBox.about(self, "About", "Mechanical Simulation Workbench (Qt)\nOpen source, GPLv3."), None, "help.about")
         self._gate()
@@ -349,6 +366,24 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "The job failed", str(j.get("error") or j.get("message")))
         elif j.get("status") == "done":
             self.statusBar().showMessage(f"{j.get('kind', '')} done", 6000)
+
+    def set_theme(self, choice: str):
+        """Dark, light or the system's theme; remembered for the next start."""
+        theme.apply(self.app_ref(), choice)
+        self.engine.settings.setValue("theme", choice)
+
+    def app_ref(self):
+        from PySide6.QtWidgets import QApplication
+        return QApplication.instance()
+
+    def _on_theme(self):
+        a = self.theme_actions.get(theme.mode())
+        if a is not None and not a.isChecked():
+            a.setChecked(True)
+        if self.engine.pid:
+            self._refresh_all()        # (some text carries its colours: tiles, the legend's hints)
+        else:
+            self.home.set_recent(self.engine.recent())
 
     def _hover_tip(self, fid: int):
         """The face under the pointer, in the status bar (the web version showed it as a tooltip)."""

@@ -45,7 +45,10 @@ class SolvePanel(_Panel):
         if not st:
             return
         s = st["solve"].get("status", "none")
-        self.btn.setEnabled(st["mesh"].get("status") in ("ready",) or s == "done")
+        can = st["mesh"].get("status") in ("ready",) or s == "done"
+        self.btn.setEnabled(can)
+        # a control that is off says why (and what to do)
+        self.btn.setToolTip("Run the simulation" if can else "Not yet: generate the mesh first (step 3, Mesh)")
         if s == "done":
             self.state.setText("Done. Open the Results step.")
             self.bar.setValue(1000)

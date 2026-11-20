@@ -26,7 +26,7 @@ from vtkmodules.vtkRenderingFreeType import vtkVectorText  # noqa: F401  (regist
 import vtkmodules.vtkRenderingOpenGL2  # noqa: F401  (the OpenGL back end)
 import vtkmodules.vtkRenderingFreeType  # noqa: F401
 
-from . import colormaps
+from . import colormaps, theme
 from .legend import Legend
 from .picking import FaceIndex, locator_for
 from .viewtools import ViewBar
@@ -69,6 +69,7 @@ class Viewport(QWidget):
         super().__init__(parent)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)               # (no gaps between the toolbar, the 3D view and the legend: they showed the plain backdrop)
         headless = no_gl()
         self.iren = QWidget(self) if headless else QVTKRenderWindowInteractor(self)
         lay.addWidget(self.iren, 1)
@@ -81,8 +82,6 @@ class Viewport(QWidget):
             self.rw.SetAlphaBitPlanes(1)  # (depth peeling needs an alpha channel and no multisampling)
             self.rw.SetMultiSamples(0)
         self.ren = vtkRenderer()
-        self.ren.SetBackground(0.62, 0.68, 0.78)       # a soft vertical gradient, light at the bottom
-        self.ren.SetBackground2(0.30, 0.36, 0.46)
         self.ren.GradientBackgroundOn()
         self.ren.SetUseDepthPeeling(1)    # see-through surfaces (contours, glass) in the right order from every side
         self.ren.SetMaximumNumberOfPeels(12)
@@ -120,17 +119,33 @@ class Viewport(QWidget):
             self._triad()
             self.iren.Initialize()
             self.iren.Start()
+        self.apply_theme()
+        theme.bus.changed.connect(lambda _: self.apply_theme())
+        if self.rw is not None:
             self.iren.AddObserver("LeftButtonPressEvent", self._on_press, 100)
             self.iren.AddObserver("LeftButtonReleaseEvent", self._on_release, 100)
             self.iren.AddObserver("MouseMoveEvent", self._on_move, 100)
 
     # ------------------------------------------------------------------ small things
+    def apply_theme(self):
+        """Background gradient, axis labels and outlines in the colours of the theme (they must stay readable in both)."""
+        t = theme.tokens()
+        rgb = lambda h: tuple(int(h[i:i + 2], 16) / 255.0 for i in (1, 3, 5))  # noqa: E731
+        self.ren.SetBackground(*rgb(t["vp_bottom"]))
+        self.ren.SetBackground2(*rgb(t["vp_top"]))
+        for a in self.edge_actors:
+            a.GetProperty().SetColor(*rgb(t["edge"]))
+        for a in self.air_actors[1::2]:            # (each air box is a body and its outline)
+            a.GetProperty().SetColor(*rgb(t["air_edge"]))
+        if getattr(self, "_axes", None) is not None:
+            for cap in (self._axes.GetXAxisCaptionActor2D(), self._axes.GetYAxisCaptionActor2D(), self._axes.GetZAxisCaptionActor2D()):
+                cap.GetCaptionTextProperty().SetColor(*rgb(t["vp_text"]))
+        self.render()
+
     def _triad(self):
         axes = vtkAxesActor()
         axes.SetTotalLength(1, 1, 1)
-        axes.GetXAxisCaptionActor2D().GetCaptionTextProperty().SetColor(1, 0.5, 0.5)
-        axes.GetYAxisCaptionActor2D().GetCaptionTextProperty().SetColor(0.5, 1, 0.5)
-        axes.GetZAxisCaptionActor2D().GetCaptionTextProperty().SetColor(0.6, 0.7, 1)
+        self._axes = axes
         w = vtkOrientationMarkerWidget()
         w.SetOrientationMarker(axes)
         w.SetInteractor(self.iren)

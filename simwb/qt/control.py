@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (QAbstractButton, QAbstractItemView, QAbstractSpin
 
 from .. import project as P
 from .. import studies, ui_bridge
+from . import theme
 from .ids import of as wid_of
 
 # controls that open a modal dialog: they cannot be driven (the dialog would wait for a person); use the named action instead
@@ -360,7 +361,7 @@ class Control(QObject):
 
     def coverage(self) -> dict:
         """Controls and menu entries that have no id: nothing may be out of reach of the API."""
-        bad_w, total_w = [], 0
+        bad_w, total_w, unlabelled, no_pointer = [], 0, [], []
         for w in self.win.findChildren(QWidget):
             if isinstance(w, QToolButton) or not isinstance(w, INTERACTIVE) or self._is_internal(w):
                 continue
@@ -368,6 +369,13 @@ class Control(QObject):
             if not wid_of(w):
                 bad_w.append({"class": type(w).__name__, "text": getattr(w, "text", lambda: "")() if hasattr(w, "text") else "",
                               "inside": self._owner_id(w)})
+                continue
+            # a signifier: the control says what it is
+            if not (w.accessibleName() or w.toolTip() or (hasattr(w, "text") and not isinstance(w, (QPlainTextEdit, QTextEdit)) and w.text())):
+                unlabelled.append(wid_of(w))
+            # an affordance: what can be pressed or chosen looks and acts clickable
+            if isinstance(w, (QAbstractButton, QComboBox, QSlider)) and w.cursor().shape() != Qt.PointingHandCursor:
+                no_pointer.append(wid_of(w))
         bad_a, total_a = [], 0
         for a in self.win.findChildren(QAction):
             if a.isSeparator():
@@ -376,7 +384,8 @@ class Control(QObject):
             if not a.objectName():
                 bad_a.append({"text": a.text()})
         return {"widgets": total_w, "actions": total_a, "unnamed_widgets": bad_w, "unnamed_actions": bad_a,
-                "complete": not bad_w and not bad_a}
+                "unlabelled": unlabelled, "no_pointer_cursor": no_pointer,
+                "complete": not bad_w and not bad_a and not unlabelled and not no_pointer}
 
     def widget_do(self, id: str, op: str = "get", value=None) -> dict:
         """op: get | click | set | select (a tree item, by its path 'Study/Geometry') | text."""
@@ -477,6 +486,7 @@ class Control(QObject):
         self.log.pull_vtk()
         return {
             "window": {"title": win.windowTitle(), "size": [win.width(), win.height()], "step": win.step,
+                       "theme": {"mode": theme.mode(), "effective": theme.effective()},
                        "screen": "home" if win.center.currentWidget() is win.home else "study",
                        "status_message": win.statusBar().currentMessage(), "visible": win.isVisible()},
             "study": st,
@@ -631,6 +641,11 @@ class Control(QObject):
           lambda visible=True: (win.view.viewbar.edges.setChecked(bool(visible)), {"edges": win.view.edges_on})[1])
         R("view.picture", "Save the 3D view with its colour scale as a PNG.", {"path": (S, "full path of the .png", True)},
           lambda path: (win.view.picture(path), {"file": path})[1])
+        def set_theme(mode):
+            win.set_theme(mode)
+            self._settle()
+            return {"mode": theme.mode(), "effective": theme.effective()}
+        R("theme.set", "Switch the look of the window: system, dark or light.", {"mode": (S, "system|dark|light", True)}, set_theme)
         R("view.stats", "What the 3D view holds and whether its picture is blank (bounds, colours).", {}, lambda: win.view.stats())
         # ---- assistant
         R("assistant.ask", "Type a question into the assistant as the user would (it answers asynchronously: see assistant.transcript).",
