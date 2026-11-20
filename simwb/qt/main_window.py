@@ -634,6 +634,9 @@ class MainWindow(QMainWindow):
                 return
             if self.step == "results" and st["solve"].get("status") in ("done", "stale"):
                 r = self.panels["results"].request()
+                names = [f["name"] for f in self.engine.result_fields()]
+                if names and r["field"] not in names:         # (the field of the study opened before this one: draw this study's first;
+                    r = {**r, "field": names[0]}               #  the panel's own list follows when it refreshes)
                 if r["field"]:
                     p = self.engine.result_surface(r["field"], section=r.get("section"))
                     info = next((f for f in self.panels["results"].fields if f["name"] == r["field"]), {})

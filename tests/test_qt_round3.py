@@ -275,3 +275,18 @@ def test_the_solve_step_does_not_show_the_previous_studys_run(ctl, solved):
     assert ctl._index()["solve.progress"].value() == 0
     assert ctl.widget_do("solve.state")["value"] in ("", None)
     assert "first mode" not in ctl.widget_do("solve.log")["value"]
+
+
+def test_a_field_of_the_previous_study_is_not_drawn_in_the_next_one(ctl, solved):
+    """Opening a study after one with another field list tried to draw the old field: 'Cannot draw: Unknown field ...' in the status bar."""
+    ctl.do("study.import", {"path": solved["static"]})
+    ctl.do("step.go", {"step": "results"})
+    ctl.do("results.show", {"field": "Total deformation"})
+    ctl.do("study.import", {"path": solved["heat"]})
+    ctl.do("step.go", {"step": "results"})
+    ctl._settle()
+    names = [f["name"] for f in ctl.engine.result_fields()]
+    assert "Total deformation" not in names
+    assert ctl.widget_do("results.field")["value"]["text"] in names
+    assert "Cannot draw" not in ctl.win.statusBar().currentMessage()
+    assert ctl.state()["view"]["overlay"]["name"] in names                               # (and something of this study is drawn)
