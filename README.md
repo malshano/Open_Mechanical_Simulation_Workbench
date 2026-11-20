@@ -10,6 +10,10 @@ with a Claude assistant that can do the setup for you.
 | **Heat transfer in solids** | built-in finite-element solver (no install) | heated plates, PCBs, enclosures with convection coefficients |
 | **Static structural (stress, deformation)** | built-in linear static FEM, quadratic tetrahedra (no install) | brackets, shafts, housings: von Mises and principal stresses, deflection, safety factor, estimated stress error under forces, pressures, gravity |
 | **Vibration (natural frequencies, shake test)** | built-in modal FEM, quadratic tetrahedra (no install) | brackets, mounts, PCBs: will a part resonate with a motor or rotor? Optional sine-sweep shake test: stress, movement and acceleration against frequency |
+| **Flutter (multiphysics: structure + air)** | built-in modal FEM coupled to unsteady strip aerodynamics (p-k method), on the start page's Multiphysics tab | wings, blades, fins, panels: flutter and divergence speed, frequency, margin on the design speed, V-f and V-g diagrams |
+| **Flutter (CFD-coupled)** | built-in modal FEM coupled to OpenFOAM (3D transient flow, moving mesh, damping from the decay), Multiphysics tab | the same wings with 3D flow and stall: flutter speed with its uncertainty, several air speeds, hours per speed |
+| **Thermal stress** | built-in heat FEM then static FEM (or CalculiX), Multiphysics tab | temperatures from heating and cooling, then the stress and warping they cause |
+| **Vibro-acoustics (harmonic)** | openCFS (optional download, MIT licence), Multiphysics tab | a panel or housing shaken at a range of frequencies and the sound it radiates |
 | **Heatsink / electronics cooling** | OpenFOAM `chtMultiRegionSimpleFoam` | chip + heatsink in a duct or enclosure with a fan |
 | **Drone / external aerodynamics** | OpenFOAM `simpleFoam` (k-ω SST) + actuator-disk rotors | drag, rotor downwash, trim pitch in forward flight |
 

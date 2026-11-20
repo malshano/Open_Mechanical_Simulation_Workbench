@@ -12,12 +12,18 @@ Boundary conditions
                          tilted plane needs a rotated local system per node: not written yet, a clear error says so)
     force / pressure     nodal forces (*CLOAD)
     gravity              *DLOAD GRAV on every body
+    thermal (optional)   *EXPANSION per material with the stress-free reference temperature (ZERO=), an *INITIAL
+                         CONDITIONS TYPE=TEMPERATURE at that reference and a nodal *TEMPERATURE field in the step
+                         (corner temperatures of the built-in heat solution, mid-edge nodes the mean of their corners
+                         = the linear interpolation the built-in solver uses). A plain *STATIC step: one-way
+                         coupling (CalculiX's own *COUPLED TEMPERATURE-DISPLACEMENT is not used).
+    orthotropic bodies   *ELASTIC, TYPE=ENGINEERING CONSTANTS with an *ORIENTATION for the material axes
 """
 from __future__ import annotations
 
 import numpy as np
 
-from ..modal_fem import quadratic_mesh
+from ..modal_fem import EDGES, quadratic_mesh
 from ..static_fem import _tri_normals
 
 # CalculiX numbers the C3D10 mid-edge nodes 5..10 on edges 1-2, 2-3, 3-1, 1-4, 2-4, 3-4 - the same order as
@@ -75,8 +81,48 @@ def _axis_of(n_hat, A):
     return k if ok else None
 
 
-def build(mesh: dict, body_props: dict, bcs: list, mode: str, gravity=None, n_modes: int = 10, log=print) -> Deck:
-    """mode: "static" or "modal". body_props: {id: {E, nu, rho, name}}; bcs as in the built-in solvers."""
+def _material_lines(bid, bp, thermal):
+    """*MATERIAL block (without the section): elastic constants, density and, for a thermal study, the expansion."""
+    from ...materials import orthotropic_alpha, orthotropic_compliance, material_axes
+
+    L = [f"*MATERIAL, NAME=M{int(bid)}"]
+    o = bp.get("orthotropic")
+    if o:
+        material_axes(o)  # (validate the axes and the constants)
+        orthotropic_compliance(o)
+        L += ["*ELASTIC, TYPE=ENGINEERING CONSTANTS",
+              ", ".join(f"{float(o[k]):.9e}" for k in ("E1", "E2", "E3")) + ", "
+              + ", ".join(f"{float(o[k]):.6f}" for k in ("nu12", "nu13", "nu23")) + ", "
+              + ", ".join(f"{float(o[k]):.9e}" for k in ("G12", "G13")),
+              f"{float(o['G23']):.9e}, 0."]
+    else:
+        L += ["*ELASTIC", f"{float(bp['E']):.9e}, {float(bp['nu']):.6f}"]
+    L += ["*DENSITY", f"{float(bp['rho']):.6e}"]
+    if thermal is not None:
+        amap = thermal.get("alpha") or {}
+        a = next((amap[k] for k in (bid, int(bid), str(bid)) if k in amap), None)
+        if a is None:
+            a = bp.get("alpha")
+        if a is None and o:
+            a = orthotropic_alpha(o)
+        if a is None:
+            raise ValueError(f"{bp.get('name', bid)}: no thermal expansion coefficient (alpha) for this material.")
+        zero = f", ZERO={float(thermal.get('T_ref_C', 20.0)):.9g}"
+        a = np.atleast_1d(np.asarray(a, float))
+        if a.size == 3 and o:
+            L += [f"*EXPANSION, TYPE=ORTHO{zero}", f"{a[0]:.9e}, {a[1]:.9e}, {a[2]:.9e}, 0."]
+        else:
+            L += [f"*EXPANSION{zero}", f"{a[0]:.9e}"]
+    return L
+
+
+def build(mesh: dict, body_props: dict, bcs: list, mode: str, gravity=None, n_modes: int = 10, log=print,
+          thermal=None) -> Deck:
+    """mode: "static" or "modal". body_props: {id: {E, nu, rho, name}}; bcs as in the built-in solvers.
+    thermal (static only): {"T_C": corner-node temperatures [degC], "T_ref_C": stress-free temperature,
+    "alpha": {body id: [1/K]}} - see the module docstring."""
+    if thermal is not None and mode != "static":
+        raise ValueError("A thermal load is only written for static analyses.")
     p = np.asarray(mesh["nodes"], float)
     t = mesh["tets"].astype(np.int64)
     tv = mesh["tet_vol"]
@@ -86,10 +132,11 @@ def build(mesh: dict, body_props: dict, bcs: list, mode: str, gravity=None, n_mo
     d.n_corner = len(p)
 
     for bid, bp in body_props.items():
-        if (tv == int(bid)).any() and float(bp.get("E") or 0) <= 0:
+        if (tv == int(bid)).any() and float(bp.get("E") or 0) <= 0 and not bp.get("orthotropic"):
             raise ValueError(f"Body {bp.get('name', bid)} has no material (stiffness) assigned.")
 
     p10, t10, edge_node = quadratic_mesh(p, t)
+    t10_raw = t10
     t10, d.flipped = oriented_tets(p10, t10)
     d.n_nodes, d.n_elements = len(p10), len(t10)
     L = d.lines
@@ -102,9 +149,14 @@ def build(mesh: dict, body_props: dict, bcs: list, mode: str, gravity=None, n_mo
             continue
         L.append(f"*ELEMENT, TYPE=C3D10, ELSET=B{int(bid)}")
         L += [f"{int(e) + 1}, " + ", ".join(str(int(n) + 1) for n in t10[e]) for e in sel]
-        L += [f"*MATERIAL, NAME=M{int(bid)}", "*ELASTIC", f"{float(bp['E']):.9e}, {float(bp['nu']):.6f}",
-              "*DENSITY", f"{float(bp['rho']):.6e}",
-              f"*SOLID SECTION, ELSET=B{int(bid)}, MATERIAL=M{int(bid)}"]
+        L += _material_lines(bid, bp, thermal)
+        if bp.get("orthotropic"):  # (axes: a point on material axis 1, a point in the 1-2 plane)
+            from ...materials import material_axes
+
+            R = material_axes(bp["orthotropic"])
+            L += [f"*ORIENTATION, NAME=OR{int(bid)}", ", ".join(f"{x:.9f}" for x in (*R[0], *R[1]))]
+        L.append(f"*SOLID SECTION, ELSET=B{int(bid)}, MATERIAL=M{int(bid)}"
+                 + (f", ORIENTATION=OR{int(bid)}" if bp.get("orthotropic") else ""))
         d.mass += float(bp["rho"]) * float(
             np.abs(np.einsum("ij,ij->i", np.cross(p[t[sel, 1]] - p[t[sel, 0]], p[t[sel, 2]] - p[t[sel, 0]]),
                              p[t[sel, 3]] - p[t[sel, 0]])).sum() / 6.0)
@@ -171,6 +223,8 @@ def build(mesh: dict, body_props: dict, bcs: list, mode: str, gravity=None, n_mo
     if not boundary and mode == "modal":
         raise ValueError("The CalculiX modal solver needs a fixed support (a free part has six rigid-body modes): "
                          "add one, or use the built-in FEM for free-free modes.")
+    if thermal is not None:
+        L += ["*INITIAL CONDITIONS, TYPE=TEMPERATURE", f"NALL, {float(thermal.get('T_ref_C', 20.0)):.9g}"]
     for name, nodes in sets:
         L.append(f"*NSET, NSET={name}")
         _ids(L, nodes + 1)
@@ -187,6 +241,16 @@ def build(mesh: dict, body_props: dict, bcs: list, mode: str, gravity=None, n_mo
         L += ["*FREQUENCY", f"{int(n_modes)}", "*NODE FILE", "U"]
     else:
         L.append("*STATIC")
+        if thermal is not None:
+            Tc = np.asarray(thermal["T_C"], float)
+            if Tc.shape != (len(p),):
+                raise ValueError(f"The temperature field has {Tc.size} values but the mesh has {len(p)} corner nodes.")
+            T10 = np.zeros(len(p10))
+            T10[:len(p)] = Tc
+            for a, (i, j) in enumerate(EDGES):
+                T10[t10_raw[:, 4 + a]] = 0.5 * (Tc[t10_raw[:, i]] + Tc[t10_raw[:, j]])
+            L.append("*TEMPERATURE")
+            L += [f"{i + 1}, {T10[i]:.9g}" for i in range(len(p10))]
         nz = np.argwhere(loads != 0.0)
         if len(nz):
             L.append("*CLOAD")

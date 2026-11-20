@@ -96,6 +96,14 @@ def meta():
     }
 
 
+@app.get("/api/engine_guide")
+def engine_guide():
+    """Which engine for which problem: one row per study (and per planned study), with the engines' availability."""
+    from . import guide
+
+    return {"rows": guide.rows(studies.STUDIES, guide.engine_status())}
+
+
 @app.get("/api/openfoam")
 def openfoam(refresh: bool = False):
     from .solvers.openfoam import installer, runner
@@ -135,6 +143,56 @@ def calculix_install():
         raise RuntimeError("The built-in CalculiX setup is for Windows; install CalculiX with your package manager "
                            "(it is found on the PATH) or set SIMWB_CCX.")
     return _job(installer.start(P.JOBS))
+
+
+@app.get("/api/opencfs")
+def opencfs_status(refresh: bool = False):
+    from .solvers.opencfs import installer
+
+    info = dict(installer.detect(refresh=refresh))
+    j = installer.running_job(P.JOBS)
+    if j:
+        info["install_job"] = j.to_dict(log_tail=0)
+    return info
+
+
+@app.post("/api/opencfs/install")
+def opencfs_install():
+    from .solvers.opencfs import installer
+
+    if not installer.supported():
+        raise RuntimeError("The built-in openCFS setup is for Windows; install openCFS yourself and set SIMWB_OPENCFS.")
+    return _job(installer.start(P.JOBS))
+
+
+@app.get("/api/projects/{pid}/flutter_cfd")
+def flutter_cfd_status(pid: str):
+    """The CFD-coupled flutter run: its state and the partial results (the hours-long run is a detached process)."""
+    from .flutter_cfd_study import FlutterCfdStudy
+
+    pr = P.open_project(pid)
+    if pr.study != "aeroelastic_flutter_cfd":
+        raise ValueError("This is for the CFD-coupled flutter study")
+    out = FlutterCfdStudy(pr).status()
+    sm = (pr.data.get("solve") or {}).get("summary") or {}
+    out["summary"] = sm if sm.get("kind") == "flutter_cfd" else None
+    return out
+
+
+@app.get("/api/projects/{pid}/flutter_cfd/plan")
+def flutter_cfd_plan(pid: str):
+    """The speeds, run lengths and the cost estimate of the CFD-coupled flutter study (needs the structure mesh)."""
+    from .flutter_cfd_study import FlutterCfdStudy
+
+    pr = P.open_project(pid)
+    if pr.study != "aeroelastic_flutter_cfd":
+        raise ValueError("This is for the CFD-coupled flutter study")
+    if pr.data["mesh"].get("status") != "ready":
+        raise ValueError("Generate the mesh first")
+    study = FlutterCfdStudy(pr)
+    study.tag_if_needed()
+    pl = study.plan()
+    return {k: v for k, v in pl.items()}
 
 
 @app.get("/api/projects/{pid}/software")

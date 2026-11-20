@@ -1,0 +1,44 @@
+{
+  "kind": "flutter_cfd",
+  "status": "complete",
+  "strip": {
+    "flutter_speed_m_s": 52.0,
+    "frequency_Hz": 8.4,
+    "sweep": {
+      "speed_m_s": [10, 20, 30, 40, 50, 60, 70],
+      "roots": [
+        {"label": "mode 1", "frequency_Hz": [4.1, 4.2, 4.4, 4.9, 5.8, 7.0, 8.0], "damping_percent": [3.0, 3.4, 3.9, 4.0, 3.0, 0.5, -3.0]},
+        {"label": "mode 2", "frequency_Hz": [14.0, 13.9, 13.5, 12.0, 10.5, 9.0, 8.6], "damping_percent": [1.0, 0.9, 0.5, -0.1, -0.8, -1.5, -2.2]}
+      ]
+    }
+  },
+  "modes": [
+    {"index": 1, "frequency_Hz": 4.0, "generalized_mass_kg": 0.82},
+    {"index": 2, "frequency_Hz": 14.2, "generalized_mass_kg": 0.31}
+  ],
+  "mesh": {"cells": 1250000},
+  "settings": {"t_release": 0.2, "n_speeds": 3},
+  "speeds": [
+    {"U": 30.0, "mach": 0.088, "state": "done", "t_release": 0.2, "duration_s": 1.5, "n_exchanges": 750, "wall_s": 5400,
+     "poles": [{"f_Hz": 4.4, "zeta": 0.039, "zeta_sigma": 0.004, "mode_label": "mode 1", "ok": true, "spread": 0.1}],
+     "critical": {"f_Hz": 13.5, "zeta": 0.004, "zeta_sigma": 0.003}, "verdict": "decaying",
+     "series": {"t": [0.0, 0.5, 1.0, 1.5], "q": [[0.0, 0.002, -0.001, 0.0006], [0.0, 0.001, 0.0005, -0.0002]], "labels": ["mode 1", "mode 2"]}},
+    {"U": 50.0, "mach": 0.147, "state": "done", "t_release": 0.2, "duration_s": 1.5, "n_exchanges": 750, "wall_s": 5600,
+     "poles": [{"f_Hz": 8.2, "zeta": -0.001, "zeta_sigma": 0.004, "mode_label": "mode 1", "ok": true, "spread": 0.2}],
+     "critical": {"f_Hz": 8.2, "zeta": -0.001, "zeta_sigma": 0.004}, "verdict": "neutral",
+     "series": {"t": [0.0, 0.5, 1.0, 1.5], "q": [[0.0, 0.002, -0.002, 0.002], [0.0, 0.001, 0.001, -0.001]], "labels": ["mode 1", "mode 2"]}},
+    {"U": 70.0, "mach": 0.206, "state": "done", "t_release": 0.2, "duration_s": 1.0, "n_exchanges": 500, "wall_s": 3600,
+     "poles": [{"f_Hz": 8.0, "zeta": -0.03, "zeta_sigma": 0.02, "mode_label": "mode 1", "ok": false, "spread": 0.9}],
+     "critical": {"f_Hz": 8.0, "zeta": -0.03, "zeta_sigma": 0.02}, "verdict": "unreliable",
+     "series": {"t": [0.0, 0.5, 1.0], "q": [[0.0, 0.002, 0.008], [0.0, 0.001, 0.003]], "labels": ["mode 1", "mode 2"]}}
+  ],
+  "damping_curve": [
+    {"U": 30.0, "zeta": 0.004, "sigma": 0.003, "strip_zeta": 0.005, "f": 13.5, "strip_f": 13.5, "ok": true},
+    {"U": 50.0, "zeta": -0.001, "sigma": 0.004, "strip_zeta": 0.001, "f": 8.2, "strip_f": 8.3, "ok": true},
+    {"U": 70.0, "zeta": -0.03, "sigma": 0.02, "strip_zeta": -0.022, "f": 8.0, "strip_f": 8.6, "ok": false}
+  ],
+  "flutter": {"speed_m_s": 48.5, "sigma_m_s": 4.0, "bracket": [30.0, 50.0], "frequency_Hz": 8.3, "basis": "interpolated", "vs_strip_percent": -6.7},
+  "warnings": ["Speed 70 m/s: the fit spread is large, treat as unreliable <b>"],
+  "assumptions": ["Linear structure, first two modes only", "Air properties at sea level"],
+  "seconds": 14600
+}

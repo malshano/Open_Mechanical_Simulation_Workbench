@@ -47,7 +47,8 @@ def get_project_state(pr, a):
 
 def list_options(pr, a):
     st = pr.spec if pr else (studies.study(a["study"]) if a.get("study") else None)
-    mech = st is not None and (st is studies.STUDIES["vibration_modal"] or st is studies.STUDIES["static_structural"])
+    mech = st is not None and (st is studies.STUDIES["vibration_modal"] or st is studies.STUDIES["static_structural"]
+                               or st is studies.STUDIES["aeroelastic_flutter"] or st is studies.STUDIES["thermal_stress"])
     out = {
         "solid_materials": {k: (f"{v['label']} (E={v['E'] / 1e9:g} GPa, density={v['rho']:g} kg/m3"
                                 + (f", yield {v['Sy'] / 1e6:g} MPa)" if v.get("Sy") else ", no yield strength)")
@@ -199,11 +200,34 @@ def check_setup(pr, a):
 def run_simulation(pr, a):
     job = pr.solve(export_only=bool(a.get("export_only")), continue_iterations=a.get("continue_iterations"),
                    init_from=a.get("init_from") or None)
-    if pr.spec["solver"] == "builtin_fem":
+    if pr.spec["solver"] == "builtin_fem" and pr.study != "aeroelastic_flutter_cfd":
         return _wait(job, 600)
     job.wait(20)
     return {"status": job.status, "job_id": job.id, "message": job.message, "error": job.error,
             "note": "OpenFOAM runs can take minutes to hours; call wait_for_run to wait for it."}
+
+
+def suggest_flutter_faces(pr, a):
+    """The root and the aerodynamic faces the CFD-coupled flutter study would take (nothing is changed)."""
+    from .flutter_cfd_study import FlutterCfdStudy
+
+    if pr.study != "aeroelastic_flutter_cfd":
+        raise ValueError("This is for the CFD-coupled flutter study")
+    return FlutterCfdStudy(pr).auto_tag()
+
+
+def get_flutter_cfd_status(pr, a):
+    """The CFD-coupled flutter run: state, per-speed states and the partial summary."""
+    from .flutter_cfd_study import FlutterCfdStudy
+
+    if pr.study != "aeroelastic_flutter_cfd":
+        raise ValueError("This is for the CFD-coupled flutter study")
+    out = FlutterCfdStudy(pr).status()
+    sm = (pr.data.get("solve") or {}).get("summary") or {}
+    if sm.get("kind") == "flutter_cfd":
+        out["flutter"] = sm.get("flutter")
+        out["speeds"] = [{"U": s["U"], "state": s["state"], "verdict": s["verdict"], "critical": s["critical"]} for s in sm["speeds"]]
+    return out
 
 
 def get_run_status(pr, a):
@@ -533,6 +557,12 @@ TOOLS = [
      {"type": "object", "properties": {"export_only": {"type": "boolean"}, "continue_iterations": INT,
                                        "init_from": STR}},
      run_simulation),
+    ("suggest_flutter_faces", "CFD-coupled flutter: the root face and the aerodynamic faces the study would take from the "
+                              "shape (the larger flat end face across the span axis is the root).",
+     {"type": "object", "properties": {}}, suggest_flutter_faces),
+    ("get_flutter_cfd_status", "CFD-coupled flutter: the state of the (hours-long) run, each air speed's verdict and "
+                               "the flutter speed so far.",
+     {"type": "object", "properties": {}}, get_flutter_cfd_status),
     ("get_run_status", "Progress of the latest solver run (iteration, residuals, log tail).",
      {"type": "object", "properties": {"log_lines": INT}}, get_run_status),
     ("get_results", "Engineering summary of the latest results (temperatures, forces, pressure drop, convergence).",
@@ -572,7 +602,7 @@ PROJECT_OPTIONAL = {"list_options"}  # project-free, but uses the project when o
 
 MCP_EXTRA = [
     ("list_projects", "List workbench projects.", {"type": "object", "properties": {}}, list_projects),
-    ("create_project", "Create a project. study: heat_conduction | static_structural | vibration_modal | cht_enclosure | "
+    ("create_project", "Create a project. study: heat_conduction | static_structural | thermal_stress | vibration_modal | vibro_acoustics | aeroelastic_flutter | aeroelastic_flutter_cfd | cht_enclosure | "
                        "external_aero. "
                        "Optional step_path imports a STEP file (absolute path); or example = a bundled example name "
                        "(heated_plate.step, camera_mount.step, heatsink_duct.step, quadcopter.step). "

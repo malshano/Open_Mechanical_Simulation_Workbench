@@ -138,6 +138,76 @@ STUDIES = {
         ],
         "needs": ["materials for all parts", "fixed supports for a mounted part (none = free-free modes)"],
     },
+    "aeroelastic_flutter": {
+        "label": "Flutter (structure + air)",
+        "icon": "flutter",
+        "category": "multiphysics",
+        "physics": ["Structure: modal finite elements (built in)", "Air: unsteady strip aerodynamics (Theodorsen)"],
+        "solver": "builtin_fem",
+        "solver_label": "Built-in FEM modes coupled to strip aerodynamics (p-k method)",
+        "description": "Aeroelastic stability of a wing, blade, fin or plate: the air speed at which the structure "
+                       "starts to flutter or diverge, with the frequency and shape of the motion.",
+        "examples": ["airplane_wing.step", "flutter_plate.step"],
+        "face_bc_types": {
+            "fixed_support": {
+                "label": "Fixed support (root)", "color": "#e4572e",
+                "help": "Face held completely still: the root of the wing, blade or fin where it is clamped or bolted.",
+                "params": [],
+            },
+            "aero_surface": {
+                "label": "Aerodynamic surface", "color": "#3a86ff",
+                "help": "The faces the air flows over and that carry the air loads: the upper and lower skin of the "
+                        "wing, blade or fin (select both sides). Faces not marked here (a root block, a pod, a "
+                        "mount) feel no air. None marked = every face counts.",
+                "params": [],
+            },
+            "added_mass": {
+                "label": "Added mass", "color": "#8338ec",
+                "help": "Mass of a component that is not modelled (a pod, tip tank, motor) on the face it is "
+                        "mounted to: inertia only, no stiffness. Wing-mounted masses change the flutter speed a lot.",
+                "params": [P("mass_kg", "Mass", "kg", 0.05, min=0, max=10000),
+                           P("cg_height_mm", "CG height above the face", "mm", 0.0, min=0, max=10000,
+                             help="Distance from the mounting face to the component's centre of gravity.")],
+            },
+        },
+        "default_face_bc": {"label": "Free"},
+        "body_roles": ["solid"],
+        "body_params": [],
+        "settings": [
+            P("flow_direction", "Air flows towards", "", "+x", options=["+x", "-x", "+y", "-y", "+z", "-z"],
+              help="The direction the air moves relative to the structure, along the chord of the wing (from the "
+                   "leading edge to the trailing edge)."),
+            P("span_axis", "Span direction", "", "y", options=["x", "y", "z"],
+              help="The axis along the wing from root to tip. The air must flow across it. The aerodynamic faces "
+                   "are cut into strips along this axis."),
+            P("n_modes", "Number of modes", "", 8, min=2, max=40,
+              help="Natural modes used for the structure (lowest first). Flutter usually involves the first bending "
+                   "and torsion modes; more modes make little difference once these are in."),
+            P("n_strips", "Strips along the span", "", 16, min=2, max=100,
+              help="Number of strips the aerodynamic faces are cut into. 10-20 is enough for a wing."),
+            P("altitude_m", "Altitude", "m", 0.0, min=-500, max=20000,
+              help="Sets the air density and the speed of sound from the standard atmosphere (0 = sea level, "
+                   "density 1.225 kg/m³). Flutter speeds are lower in denser air."),
+            P("speed_max_ms", "Highest air speed", "m/s", 0.0, min=0, max=2000,
+              help="Speeds from near zero up to this value are examined. 0 = automatic: up to Mach 0.6, the limit "
+                   "of the incompressible aerodynamics used here."),
+            P("design_speed_ms", "Design speed (for the margin)", "m/s", 0.0, min=0, max=2000,
+              help="The highest speed the structure is used at (a dive or maximum speed). The result then states "
+                   "the flutter margin = flutter speed / design speed; aircraft rules ask for 1.15 or more. "
+                   "0 = no margin is computed."),
+            P("damping_percent", "Structural damping", "% of critical", 0.0, min=0, max=20,
+              help="Damping ratio of every mode. 0 gives the lowest (conservative) flutter speed; measured values "
+                   "are 0.5-2 % for metal structures. Damping raises the flutter speed but cannot be predicted "
+                   "reliably: use a measured value or 0."),
+            P("finite_wing", "Finite-wing correction", "", "on", options=["on", "off"],
+              help="Reduces the lift of every strip for the finite aspect ratio (a short wing carries less lift per "
+                   "unit span than a 2-D airfoil): AR / (AR + 2). Standard 'modified strip theory'. Off = pure 2-D "
+                   "strip theory, which gives lower (conservative) flutter speeds."),
+            P("n_speeds", "Speeds examined", "", 100, min=20, max=400, adv=True,
+              help="Number of air speeds between zero and the highest speed. The crossing is then refined exactly."),
+        ],
+        "needs": ["materials for all parts", "a fixed support at the root", "aerodynamic faces (the wing skin)"],
+    },
     "static_structural": {
         "label": "Static structural",
         "icon": "beam",
@@ -422,10 +492,188 @@ STUDIES = {
 
 
 # ---- plain-language explanations shown in the GUI when a study or a model option is selected
+
+# Thermal stress: heat conduction (steady or transient) feeding the linear static solver (one-way coupling): the part
+# expands with its temperature and the supports hold it back.
+STUDIES["thermal_stress"] = {
+    "label": "Thermal stress",
+    "icon": "thermo",
+    "category": "multiphysics",
+    "physics": ["Heat conduction (built in)", "Linear elasticity (built in or CalculiX)"],
+    "solver": "builtin_fem",
+    "solver_label": "Built-in FEM (heat conduction, then thermal stress; one-way)",
+    "description": "Temperatures from heating and cooling, then the stress and deformation they cause in the same parts.",
+    "examples": [],
+    "face_bc_types": {**STUDIES["heat_conduction"]["face_bc_types"], **STUDIES["static_structural"]["face_bc_types"]},
+    "default_face_bc": {"label": "Free (insulated, unsupported)"},
+    "body_roles": ["solid"],
+    "body_params": [P("heat_W", "Heat generated", "W", 0.0, min=0)],
+    "settings": [
+        *STUDIES["heat_conduction"]["settings"],
+        P("T_ref", "Stress-free temperature", "°C", 20.0,
+          help="The temperature at which the part carries no thermal stress (assembly or cure temperature). Thermal "
+               "stress is proportional to T - T_ref."),
+        P("T_uniform", "Uniform part temperature (no heat condition)", "°C", None,
+          help="Use instead of a heat problem when the whole part simply sits at one temperature (a soak): leave the "
+               "heat conditions out and enter it here. Blank = solve the heat conduction."),
+        *STUDIES["static_structural"]["settings"],
+    ],
+    "needs": ["materials with thermal expansion", "a cooling or fixed-temperature face (or a uniform temperature)",
+              "supports that stop rigid-body motion (frictionless supports let the part expand freely)"],
+}
+
+
+# Harmonic vibro-acoustics: a vibrating structure and the air around it (openCFS: mechanics + acoustics, coupled at the
+# wet surface). The air is meshed with the same machinery as the electronics-cooling air volume (an automatic air box).
+STUDIES["vibro_acoustics"] = {
+    "label": "Vibro-acoustics (harmonic)",
+    "icon": "wave",
+    "category": "multiphysics",
+    "physics": ["Structure vibration (openCFS)", "Sound in air (openCFS)"],
+    "solver": "builtin_fem",
+    "solver_label": "openCFS (harmonic coupled structure-acoustics, finite elements)",
+    "badge": "openCFS (separate program, optional install) · seconds to minutes",
+    "description": "A part or panel shaken by a force or pressure at a range of frequencies, and the sound it radiates "
+                   "into the surrounding air.",
+    "examples": [],
+    "domain": {
+        "enclosure_mode": {"label": "Air volume", "options": {
+            "auto_box": "Create a box of air around the parts automatically",
+            "body": "One of the STEP bodies is the air volume"}, "default": "auto_box"},
+    },
+    "face_bc_types": {
+        "fixed_support": {"label": "Fixed support", "color": "#e4572e",
+                          "help": "Face held completely still (bolted or clamped).", "params": []},
+        "force": {"label": "Harmonic force (total)", "color": "#ff006e",
+                  "help": "A force that oscillates sinusoidally at every frequency of the sweep, spread uniformly over "
+                          "the selected faces (amplitude in N, components along x, y, z).",
+                  "params": [P("fx_N", "Force x", "N", 0.0), P("fy_N", "Force y", "N", 0.0), P("fz_N", "Force z", "N", 1.0)]},
+        "pressure": {"label": "Harmonic pressure", "color": "#fb5607",
+                     "help": "Pressure oscillating at every frequency of the sweep, pushing into the selected faces "
+                             "(positive = into the surface).",
+                     "params": [P("pressure_Pa", "Pressure amplitude", "Pa", 1.0)]},
+        "normal_velocity": {"label": "Surface velocity (air side)", "color": "#3a86ff",
+                            "help": "A face of the air volume that moves with a given normal velocity amplitude (a "
+                                    "loudspeaker cone, a piston).",
+                            "params": [P("velocity_m_s", "Normal velocity", "m/s", 0.001)]},
+        "absorbing": {"label": "Absorbing boundary (open air)", "color": "#06d6a0",
+                      "help": "Air-side boundary that lets sound leave without reflection (first-order absorbing). "
+                              "Air faces without a condition are absorbing by default.", "params": []},
+    },
+    "default_face_bc": {"label": "Free (air side: absorbing)"},
+    "body_roles": ["solid", "fluid"],
+    "body_params": [],
+    "settings": [
+        P("f_min_hz", "Lowest frequency", "Hz", 100.0, min=1, max=100000,
+          help="Start of the frequency sweep."),
+        P("f_max_hz", "Highest frequency", "Hz", 1000.0, min=1, max=100000,
+          help="End of the sweep. Keep the air mesh finer than about a sixth of the wavelength at this frequency "
+               "(wavelength = 343 m/s / f)."),
+        P("n_freq", "Number of frequencies", "", 20, min=1, max=500, help="Frequencies computed between the two limits."),
+        P("sampling", "Spacing", "", "linear", options=["linear", "log"], help="How the frequencies are spread."),
+        P("damping_percent", "Structural damping", "% of critical", 2.0, min=0, max=50,
+          help="Damping of the structure (Rayleigh-type, mass and stiffness proportional). It limits the resonance peaks."),
+        P("air_c", "Speed of sound", "m/s", 343.0, min=100, max=3000, adv=True),
+        P("air_rho", "Air density", "kg/m³", 1.2, min=0.01, max=2000, adv=True),
+        P("absorbing_boundary", "Absorbing outer boundary", "", "on", options=["on", "off"], adv=True,
+          help="On: sound leaves the air box (open space). Off: the box walls are rigid and reflect."),
+        P("timeout_min", "Time limit", "min", 60, min=1, max=100000, adv=True),
+    ],
+    "needs": ["materials for the parts", "a support (or the part floats)", "a harmonic force, pressure or surface velocity",
+              "openCFS installed (Solve step)"],
+}
+
+
+# CFD-coupled flutter: the modal structure in a 3D transient flow (OpenFOAM), at several air speeds. Hours per speed; see
+# simwb/flutter_cfd_study.py and docs/ROADMAP.md.
+STUDIES["aeroelastic_flutter_cfd"] = {
+    "label": "Flutter (CFD-coupled)",
+    "icon": "flutter",
+    "category": "multiphysics",
+    "physics": ["Structure: modal finite elements (built in)", "Air: 3D transient CFD (OpenFOAM)"],
+    "solver": "builtin_fem",
+    "solver_label": "Built-in FEM modes coupled to OpenFOAM (pimpleFoam, moving mesh), damping from the decay",
+    "badge": "OpenFOAM CFD + built-in structure · hours per air speed",
+    "description": "Flutter of a wing, blade or fin found from a real 3D flow simulation coupled to the structure: it "
+                   "captures 3D flow and stall (shocks follow in a later step). Takes hours: use the fast flutter study "
+                   "first to choose the speeds.",
+    "examples": ["airplane_wing.step"],
+    "face_bc_types": {
+        "fixed_support": {"label": "Fixed support (root)", "color": "#e4572e",
+                          "help": "The clamped root face. It also becomes the symmetry plane of the CFD model (half wing).",
+                          "params": []},
+        "aero_surface": {"label": "Aerodynamic surface", "color": "#3a86ff",
+                         "help": "The faces the air flows over. None marked = every face except the root (set "
+                                 "automatically when you solve).", "params": []},
+        "added_mass": {"label": "Added mass", "color": "#8338ec",
+                       "help": "Mass of a component that is not modelled, on the face it is mounted to (inertia only).",
+                       "params": [P("mass_kg", "Mass", "kg", 0.05, min=0, max=10000),
+                                  P("cg_height_mm", "CG height above the face", "mm", 0.0, min=0, max=10000)]},
+    },
+    "default_face_bc": {"label": "Free"},
+    "body_roles": ["solid"],
+    "body_params": [],
+    "settings": [
+        P("flow_direction", "Air flows towards", "", "+x", options=["+x", "-x", "+y", "-y", "+z", "-z"],
+          help="The direction the air moves relative to the wing, along the chord (leading edge to trailing edge)."),
+        P("span_axis", "Span direction", "", "y", options=["x", "y", "z"],
+          help="The axis along the wing from root to tip. The air must flow across it."),
+        P("n_modes", "Number of modes", "", 6, min=2, max=30,
+          help="Modes of the structure used (lowest first). Include the first torsion mode."),
+        P("altitude_m", "Altitude", "m", 0.0, min=-500, max=20000, help="Sets the air density (standard atmosphere)."),
+        P("damping_percent", "Structural damping", "% of critical", 0.0, min=0, max=20,
+          help="Damping of every mode. 0 gives the lowest (conservative) flutter speed."),
+        P("design_speed_ms", "Design speed (for the margin)", "m/s", 0.0, min=0, max=2000,
+          help="The highest speed the structure is used at; the flutter speed is compared with it. 0 = none."),
+        P("speed_min_ms", "Lowest air speed", "m/s", 0.0, min=0, max=2000,
+          help="With 'Highest air speed': the speeds are spread between the two. 0 = automatic from the fast "
+               "flutter study (around its flutter speed)."),
+        P("speed_max_ms", "Highest air speed", "m/s", 0.0, min=0, max=2000,
+          help="0 = automatic. The incompressible solver is valid up to Mach 0.3 (about 100 m/s at sea level)."),
+        P("n_cfd_speeds", "Number of air speeds", "", 3, min=1, max=12,
+          help="Air speeds to run. Each takes hours: 3-4 is the usual choice to bracket the flutter speed."),
+        P("turbulence", "Flow model", "", "kOmegaSST", options=["kOmegaSST", "laminar", "kOmegaSSTDDES"],
+          help="kOmegaSST: RANS, the default. kOmegaSSTDDES: resolves the eddies behind a stalled wing (costs more). "
+               "laminar: only for small, slow wings (low Reynolds number)."),
+        P("cfd_mesh", "CFD mesh", "", "coarse", options=["coarse", "medium", "fine"],
+          help="Mesh of the air around the wing. Coarse is about 50,000 cells for the half wing: a first look."),
+        P("settle_chords", "Flow development", "chords", 20, min=5, max=500,
+          help="Chord lengths of flow before the wing is released (also at least two span lengths)."),
+        P("n_periods", "Periods to follow", "", 8, min=4, max=40,
+          help="Periods of the slowest mode of interest followed after the release. The damping is only reliable with "
+               "about 8 or more; fewer is faster and less certain."),
+        P("excite_tip_mm", "Release amplitude", "mm", 1.0, min=0.01, max=100,
+          help="Tip amplitude of the small disturbance the wing is released with (keep it small: linear regime)."),
+        P("time_limit_h", "Time limit (all speeds)", "h", 12.0, min=0, max=1000,
+          help="Wall-clock budget of the whole run; what is finished is kept (partial results). 0 = none."),
+        P("speed_time_limit_h", "Time limit (per speed)", "h", 6.0, min=0, max=1000),
+        P("n_procs", "CPU cores", "", 0, min=0, max=256, help="0 = all physical cores."),
+        P("n_strips", "Strips (fast prediction)", "", 16, min=2, max=100, adv=True),
+        P("finite_wing", "Finite-wing correction (fast prediction)", "", "on", options=["on", "off"], adv=True),
+        P("n_lumped", "Lumped nodes along the span", "", 10, min=3, max=40, adv=True,
+          help="Nodes of the stick model that carry the load and the motion between the CFD and the structure."),
+        P("parallel_runs", "Speeds at the same time", "", 1, min=1, max=4, adv=True,
+          help="Each coupled run waits most of the time for the file exchange, so 2-3 can share the cores. Measure first."),
+        P("max_co", "Courant limit", "", 6.0, min=0.5, max=20, adv=True),
+        P("n_outer", "Outer correctors", "", 2, min=1, max=6, adv=True),
+        P("stall_timeout_s", "Stall timeout", "s", 120, min=10, max=36000, adv=True,
+          help="No exchange for this long (or 20 times the usual): the solver is restarted from the last checkpoint."),
+        P("max_retries", "Restarts per speed", "", 2, min=0, max=10, adv=True),
+    ],
+    "needs": ["materials for the wing", "the root marked as a fixed support (or the larger end face is taken)",
+              "OpenFOAM (installed by the workbench)", "hours of computing time"],
+}
+
 # Settings a bundled example (examples/*.step) gets when it is imported, so that it can run at once. They are
 # assumptions for the example, not data of the CAD model: the user changes them in Setup.
 EXAMPLE_SETTINGS = {
+    "airplane_wing.step": {"design_speed_ms": 30.0},  # a small aircraft's top speed (flutter margin)
     "quadcopter.step": {"mass_kg": 1.2},  # all-up mass of a ~450 mm class quad (rotors carry it: ~2.9 N each in hover)
+}
+
+# Materials a bundled example gets (body name -> material key), where the aluminium default would make no sense
+EXAMPLE_MATERIALS = {
+    "airplane_wing.step": {"Wing": "pla"},  # a 3D-printed model wing: flutters at model-aircraft speeds
 }
 
 EXPLAIN = {
@@ -438,6 +686,31 @@ EXPLAIN = {
         "Modal analysis: the natural frequencies at which the parts like to vibrate, and the shape of each "
         "vibration. No loads are needed, only how the parts are held (and any added masses). Keep these "
         "frequencies away from what shakes the part (motors, rotors, road) to avoid resonance."),
+    "aeroelastic_flutter": (
+        "Flutter and divergence (a multiphysics study: the structure and the air are solved together). The natural "
+        "modes of the structure from the built-in finite elements are put in a stream of air; the air forces on every "
+        "strip of the wing follow its motion (unsteady thin-airfoil theory). The air speed is raised until the "
+        "motion stops decaying and grows: the flutter speed, with the frequency and shape of the flutter motion. A "
+        "fast engineering method (seconds) for wings, blades, fins and panels; it does not replace a CFD-coupled "
+        "check for transonic flow or large motion."),
+    "aeroelastic_flutter_cfd": (
+        "CFD-coupled flutter (a multiphysics study: structure and air solved together). The modes of the structure "
+        "are coupled to a 3D transient flow simulation (OpenFOAM) through a stick model along the span: every time step "
+        "the pressure forces go to the structure and its motion goes back to the mesh. The wing is released from rest at "
+        "several air speeds and the damping of its motion is read from how it decays or grows; flutter is where the "
+        "damping reaches zero. Unlike the fast flutter study it includes 3D flow and stall. It takes hours per speed, "
+        "keeps running if you close the workbench and can be continued after a restart."),
+    "vibro_acoustics": (
+        "Harmonic vibro-acoustics (a multiphysics study: structure and sound solved together by openCFS). The structure "
+        "is shaken at a range of frequencies by a force or pressure; its surface pushes the air, the air pushes back, "
+        "and the sound spreads into an air box with an absorbing boundary. Results: sound pressure and displacement at "
+        "the frequency of the strongest response, and the response against frequency at chosen points."),
+    "thermal_stress": (
+        "Thermal stress (a multiphysics study: heat first, then stress). The temperature of every point comes from "
+        "the heat conduction (fixed temperatures, convection, heat sources) or is given as one uniform value; the "
+        "parts expand in proportion to the temperature above the stress-free temperature, and the stress and "
+        "deformation follow from how the supports hold them back. One-way: the deformation does not change the heat "
+        "flow. Small strains, linear materials."),
     "static_structural": (
         "Linear static stress analysis: how much the parts deform and how high the stress is under steady loads "
         "(forces, pressure, gravity), with the safety factor against yield. Assumes small deformations and that the "
@@ -662,6 +935,10 @@ SYMMETRY_BC = {
             "rotors or rotating zones must not cross it.",
 }
 SYMMETRY_HELP = {
+    "aeroelastic_flutter_cfd": "Not offered: the root face becomes the symmetry plane of the CFD half model by itself.",
+    "vibro_acoustics": "Not offered (the openCFS set-up solves the whole model).",
+    "thermal_stress": "A mirror for both physics: no heat crosses the plane (adiabatic) and the faces cannot move along "
+                      "the plane normal. Heat sources and loads must be mirror-symmetric.",
     "static_structural": "Acts like a frictionless support on the plane: the faces cannot move along the plane "
                          "normal. Own weight must act along the plane.",
     "vibration_modal": "Constrains the movement along the plane normal: only the modes that are symmetric across "
@@ -681,6 +958,8 @@ for _k, _s in STUDIES.items():
     else:
         _s["face_bc_types"]["symmetry"].update(plane=True, help=SYMMETRY_BC["help"] + " " + SYMMETRY_HELP.get(_k, ""))
         _s["face_bc_types"]["symmetry"].pop("face_kinds", None)
+STUDIES["vibro_acoustics"]["face_bc_types"].pop("symmetry", None)
+STUDIES["aeroelastic_flutter_cfd"]["face_bc_types"].pop("symmetry", None)
 
 # Settings shown in Expert mode only (the GUI's Simple mode hides them; their defaults suit a first run). Values
 # set earlier, by the chat or by a script are kept and used either way.
@@ -691,3 +970,8 @@ for _s in STUDIES.values():
     for _p in _s["settings"]:
         if _p["key"] in EXPERT_SETTINGS:
             _p["adv"] = True
+
+# every study says which problem it is for and which engines can run it (simwb/guide.py; shown on the Multiphysics tab)
+from .guide import apply_guides  # noqa: E402
+
+apply_guides(STUDIES)

@@ -185,11 +185,13 @@ def create_project(name: str, study: str, location: str | None = None) -> "Proje
     data = {
         "name": name, "study": study, "created": _now(), "updated": _now(),
         "geometry": {"status": "none"},
-        "domain": {"enclosure_mode": "body"} if study == "cht_enclosure" else {},
+        "domain": ({"enclosure_mode": "body"} if study == "cht_enclosure"
+                   else {"enclosure_mode": "auto_box"} if study == "vibro_acoustics" else {}),
         "bodies": {}, "bcs": [], "rotors": [],
         "settings": studies.default_settings(study),
         # OpenFOAM studies start on Coarse (a first run in minutes, not hours); the built-in FEM is instant
         "mesh": {"preset": {"heat_conduction": "medium", "vibration_modal": "medium", "static_structural": "medium",
+                            "aeroelastic_flutter": "medium", "thermal_stress": "medium",
                             "cht_enclosure": "quick"}.get(study, "coarse"),
                  "refinements": [], "status": "none"},
         "solve": {"status": "none"},
@@ -255,6 +257,9 @@ def delete_project(pid: str):
     if loc.pop(pid, None) is not None:
         _save_locations(loc)
     shutil.rmtree(WORKSPACE / ".checks" / pid, ignore_errors=True)
+
+
+ENCLOSURE_STUDIES = ("cht_enclosure", "vibro_acoustics")  # solid parts + an air volume (a body, or an automatic box)
 
 
 class Project:
@@ -333,6 +338,12 @@ class Project:
             self.save(quiet=True)
 
     # ------------------------------------------------------------------ basics
+    @property
+    def mesh_study(self) -> str:
+        """The study name the mesher knows: an acoustics study meshes like the cooling study (solid parts plus an
+        air volume with conformal interfaces)."""
+        return {"vibro_acoustics": "cht_enclosure", "aeroelastic_flutter_cfd": "aeroelastic_flutter"}.get(self.study, self.study)
+
     @property
     def study(self) -> str:
         return self.data["study"]
@@ -516,6 +527,8 @@ class Project:
                 if k in self.data["settings"] and not self.data["settings"][k]:
                     self.data["settings"][k] = v
         self.data["geometry"]["pending"] = {"original_name": original_name or src.name, "scale": scale, "format": fmt}
+        if src.parent.resolve() == EXAMPLES.resolve():
+            self.data["geometry"]["pending"]["example"] = src.name  # (the example's own materials: studies.EXAMPLE_MATERIALS)
         if self.data["geometry"].get("status") in (None, "none", "error"):
             self.data["geometry"]["status"] = "importing"
         self.save()
@@ -835,7 +848,7 @@ class Project:
             shutil.rmtree(stage, ignore_errors=True)
             grazed.clear()
             payload = {
-                "study": self.study, "step_file": str(step), "out_dir": str(stage),
+                "study": self.mesh_study, "step_file": str(step), "out_dir": str(stage),
                 "domain": self._air_dom(),
                 "scale": (pending or self.data["geometry"]).get("scale", 1.0),
                 "rotation": rotation, "translation": translation, "symmetry": planes, "edits": edits,
@@ -913,7 +926,7 @@ class Project:
                 else:
                     self.data["geometry"].pop("edits", None)
                 mode = (info.get("domain") or {}).get("enclosure_mode")
-                if self.study == "cht_enclosure" and mode and mode != self.data["domain"].get("enclosure_mode"):
+                if self.study in ENCLOSURE_STUDIES and mode and mode != self.data["domain"].get("enclosure_mode"):
                     self.data["domain"]["enclosure_mode"] = mode  # e.g. single part: air box built automatically
                 if turn is not None:
                     self.data["geometry"]["rotation"] = rotation
@@ -1048,8 +1061,10 @@ class Project:
                 same = [ob for ob in old_bodies if ob["role"] == "solid" and ob["name"] == b["name"]]
                 if len(same) == 1:
                     src = old_cfg.get(str(same[0]["id"]))
-            new_cfg[str(b["id"])] = src or {"material": "aluminium_6061", "heat_W": 0.0, "name": b["name"],
-                                            "material_is_default": True}
+            ex_mat = studies.EXAMPLE_MATERIALS.get(self.data["geometry"].get("example"), {}).get(b["name"])
+            new_cfg[str(b["id"])] = src or ({"material": ex_mat, "heat_W": 0.0, "name": b["name"]} if ex_mat else
+                                            {"material": "aluminium_6061", "heat_W": 0.0, "name": b["name"],
+                                             "material_is_default": True})
         self.data["bodies"] = new_cfg
         self._sync_symmetry_bcs()
         if self.study == "external_aero" and not self.data["rotors"] and not self.data.get("symmetry"):
@@ -1339,7 +1354,7 @@ class Project:
         for k in [k for k, v in d.items() if v is None]:
             d.pop(k)
         info = self.data["geometry"].get("info") or {}
-        auto = self.study == "external_aero" or (self.study == "cht_enclosure" and d.get("enclosure_mode") == "auto_box")
+        auto = self.study == "external_aero" or (self.study in ENCLOSURE_STUDIES and d.get("enclosure_mode") == "auto_box")
         if auto and info.get("parts_bbox") and d.get("size"):  # check now, not in the background job
             from . import domain as air
 
@@ -1438,7 +1453,7 @@ class Project:
         info = self.data["geometry"]["info"]
         dom = self._air_dom(dom)
         aero = self.study == "external_aero"
-        return air.resolve(dom, self.study, info["parts_bbox"], info["ref_length"],
+        return air.resolve(dom, self.mesh_study, info["parts_bbox"], info["ref_length"],
                            (info.get("domain") or {}).get("span") if aero else None,
                            self._flow_dir() if aero else (1, 0, 0),
                            "xyz".index(self.data["settings"].get("up_axis", "+z")[1]) if aero else None)
@@ -1454,7 +1469,8 @@ class Project:
         self.data["settings"] = studies.default_settings(study)
         self.data["bcs"] = []
         self.data["rotors"] = []
-        self.data["domain"] = {"enclosure_mode": "body"} if study == "cht_enclosure" else {}
+        self.data["domain"] = ({"enclosure_mode": "body"} if study == "cht_enclosure"
+                               else {"enclosure_mode": "auto_box"} if study == "vibro_acoustics" else {})
         self.save()
         if (self.geo_dir / "source.step").exists():
             return self.prepare_geometry()
@@ -1497,7 +1513,7 @@ class Project:
         self.save()
 
     def set_body(self, body_id: int, material: str | None = None, heat_W: float | None = None,
-                 name: str | None = None):
+                 name: str | None = None, axis1=None, axis2=None):
         b = next((b for b in self.bodies() if b["id"] == int(body_id)), None)
         if b is None:
             raise ValueError(f"No body with id {body_id}")
@@ -1515,6 +1531,12 @@ class Project:
             cfg["heat_W"] = q
         if name:
             cfg["name"] = name
+        for key, v in (("axis1", axis1), ("axis2", axis2)):  # material axes of an orthotropic material (global directions)
+            if v is not None:
+                vec = [studies.finite(x, "Material axis") for x in v]
+                if len(vec) != 3 or not any(vec):
+                    raise ValueError("A material axis is a direction (x, y, z), not zero")
+                cfg[key] = vec
         self.mark_stale(("solve",))
         self.save()
         return self._body_view(b)
@@ -1596,6 +1618,12 @@ class Project:
                 b["faces"] = [f for f in b["faces"] if f not in fs]
                 b["signature"] = [self._sig(f) for f in b["faces"]]
 
+    def _wet_face(self, face) -> bool:
+        """A face between a part and the air volume (the acoustics study takes loads and supports there: the part
+        inside an air box has no other faces)."""
+        fluid = {int(b["id"]) for b in self.bodies() if b.get("role") == "fluid"}
+        return bool({int(v) for v in (face.get("volumes") or [])} & fluid)
+
     def _check_faces(self, faces, bc_type, allow_empty=False):
         fm = self.face_map()
         out = []
@@ -1605,7 +1633,7 @@ class Project:
             if f not in fm:
                 raise ValueError(f"Face {f} does not exist")
             face = fm[f]
-            if face.get("interface"):
+            if face.get("interface") and not (self.study == "vibro_acoustics" and self._wet_face(face)):
                 raise ValueError(f"Face {f} is an internal contact face between two bodies; "
                                  f"boundary conditions only apply to outer faces")
             if kinds and face.get("kind") not in kinds:
@@ -2010,7 +2038,7 @@ class Project:
                 err(msg, "setup")
             for msg in self._symmetry_grazing(planes):
                 warn(msg, "setup")
-            if self.study in ("static_structural", "heat_conduction", "cht_enclosure"):
+            if self.study in ("static_structural", "heat_conduction", "cht_enclosure", "thermal_stress"):
                 warn("Symmetry: loads and heat sources you enter act on the kept half only - enter the share that "
                      "belongs to it (half of a total that is shared between two halves).", "setup")
         types = [b["type"] for b in self.data["bcs"] if b["faces"]]
@@ -2044,6 +2072,66 @@ class Project:
             lo, hi = float(s.get("excitation_min_hz") or 0), float(s.get("excitation_max_hz") or 0)
             if hi and lo > hi:
                 err("Excitation 'from' is above 'up to' - swap them", "setup")
+        elif st == "aeroelastic_flutter":
+            s = self.data["settings"]
+            if "fixed_support" not in types:
+                err("Mark the root of the wing (the clamped or bolted face) as 'Fixed support': flutter of a free "
+                    "structure is not covered", "setup")
+            if "aero_surface" not in types:
+                warn("No aerodynamic surface: every face is treated as carrying air loads. Select the upper and "
+                     "lower skin of the wing and add 'Aerodynamic surface'.", "setup")
+            else:
+                ok("Aerodynamic surface marked", "setup")
+            flow = s.get("flow_direction", "+x")
+            if str(flow).lstrip("+-") == s.get("span_axis", "y"):
+                err("The air flows along the span direction: choose a span axis across the flow", "setup",
+                    '[data-setting="span_axis"]')
+            for b in self.data["bcs"]:
+                if b["type"] == "added_mass" and b["faces"] and not float(b["params"].get("mass_kg") or 0):
+                    warn(f"Added mass '{b['name']}' is 0 kg", "setup")
+            if float(s.get("design_speed_ms") or 0) and float(s.get("speed_max_ms") or 0)                     and float(s["design_speed_ms"]) * 1.15 > float(s["speed_max_ms"]):
+                warn("'Highest air speed' is below 1.15 x the design speed: the flutter margin cannot be shown "
+                     "unless the sweep reaches it", "setup", '[data-setting="speed_max_ms"]')
+        elif st == "aeroelastic_flutter_cfd":
+            from .solvers.openfoam import runner as _runner
+
+            s = self.data["settings"]
+            if "fixed_support" not in types:
+                warn("No root marked: the larger flat end face across the span will be taken as the clamped root "
+                     "(check it), and every other face as the aerodynamic surface", "setup")
+            if str(s.get("flow_direction", "+x")).lstrip("+-") == s.get("span_axis", "y"):
+                err("The air flows along the span direction: choose a span axis across the flow", "setup",
+                    '[data-setting="span_axis"]')
+            if not _runner.detect().get("available"):
+                err("OpenFOAM is not available yet (the built-in copy is set up on the first start)", "solve")
+            tw = (self.data.get("twins") or {}).get("cfd")
+            if self.data["mesh"].get("status") == "ready" and not tw:
+                warn("The CFD mesh is not made yet: generate the mesh again", "mesh")
+            warn("A coupled CFD run takes hours per air speed (the estimate is shown when the run starts); the fast "
+                 "flutter study is the way to choose the speeds first", "solve")
+        elif st == "vibro_acoustics":
+            s = self.data["settings"]
+            from .solvers.opencfs import installer as _cfs
+
+            if not _cfs.detect()["available"]:
+                warn("openCFS is not installed: install it from the Solve step before running", "solve")
+            if not any(t in types for t in ("force", "pressure", "normal_velocity")):
+                err("Add a harmonic force or pressure on a part face (or a surface velocity on an air face)", "setup")
+            if "fixed_support" not in types:
+                warn("No fixed support: the part floats in the air (free vibration plus sound)", "setup")
+            if float(s.get("f_min_hz") or 0) >= float(s.get("f_max_hz") or 0):
+                err("'Lowest frequency' must be below 'Highest frequency'", "setup", '[data-setting="f_min_hz"]')
+        elif st == "thermal_stress":
+            s = self.data["settings"]
+            if not any(t in types for t in ("fixed_support", "frictionless_support", "displacement", "symmetry")):
+                err("Add supports that stop rigid-body motion (frictionless supports let the part expand freely)", "setup")
+            sink = any(t in types for t in ("fixed_temperature", "convection", "radiation_convection", "natural_convection"))
+            if not sink and s.get("analysis") != "transient" and s.get("T_uniform") in (None, ""):
+                err("Add a fixed temperature or convection face so the heat can leave (or set a uniform part temperature)",
+                    "setup", '[data-setting="T_uniform"]')
+            if s.get("T_ref") in (None, ""):
+                warn("Stress-free temperature not set: the start temperature (or 20 °C) is used", "setup",
+                     '[data-setting="T_ref"]')
         elif st == "static_structural":
             if not any(t in types for t in ("fixed_support", "frictionless_support", "displacement")):
                 err("Add a support (fixed, frictionless/pin or prescribed displacement) so the part is held", "setup")
@@ -2286,11 +2374,23 @@ class Project:
     def generate_mesh(self) -> Job:
         if self.data["geometry"].get("status") != "ready":
             raise ValueError("Import geometry first")
+        if self.study == "aeroelastic_flutter_cfd":
+            return JOBS.start("mesh", self.id, self._flutter_cfd_mesh_work)
         return JOBS.start("mesh", self.id, self._mesh_work)
+
+    def _flutter_cfd_mesh_work(self, job: Job):
+        """The structure mesh (solid, like the fast flutter study) and the mesh of the CFD twin (air around the half wing)."""
+        from .flutter_cfd_study import FlutterCfdStudy
+
+        study = FlutterCfdStudy(self)
+        study.tag_if_needed()
+        self._mesh_work(job, 0.0, 0.4)
+        JOBS.update(job, 0.4, "Preparing the CFD model (half wing on a symmetry plane)")
+        study.mesh_twin(job, 0.45, 1.0)
 
     def _mesh_work(self, job: Job, p0=0.0, p1=1.0):
         payload = {
-            "study": self.study, "out_dir": str(self.mesh_dir), "brep": str(self.geo_dir / "domain.brep"),
+            "study": self.mesh_study, "out_dir": str(self.mesh_dir), "brep": str(self.geo_dir / "domain.brep"),
             "bodies_json": str(self.geo_dir / "bodies.json"), "faces_json": str(self.geo_dir / "faces.json"),
             "domain_info": str(self.geo_dir / "domain_info.json"),
             "mesh": self.data["mesh"], "rotors": self._rotors_with_wake(),
@@ -2318,8 +2418,18 @@ class Project:
     # ------------------------------------------------------------------ mesh sensitivity
     KEY_OUTPUTS = {
         "heat_conduction": [("Max temperature", "°C", lambda s: s.get("T_max"))],
+        "aeroelastic_flutter_cfd": [("Flutter speed", "m/s", lambda s: (s.get("flutter") or {}).get("speed_m_s")),
+                                    ("Flutter frequency", "Hz", lambda s: (s.get("flutter") or {}).get("frequency_Hz"))],
+        "vibro_acoustics": [("Peak sound pressure", "Pa", lambda s: s.get("max_pressure_Pa")),
+                            ("Peak displacement", "mm", lambda s: s.get("max_displacement_mm"))],
+        "thermal_stress": [("Max temperature", "°C", lambda s: (s.get("thermal") or {}).get("T_max")),
+                           ("Max deformation", "mm", lambda s: s.get("max_displacement_mm")),
+                           ("Max von Mises stress", "MPa", lambda s: s.get("max_von_mises_MPa"))],
         "static_structural": [("Max deformation", "mm", lambda s: s.get("max_displacement_mm")),
                               ("Max von Mises stress", "MPa", lambda s: s.get("max_von_mises_MPa"))],
+        "aeroelastic_flutter": [("Flutter speed", "m/s", lambda s: (s.get("flutter") or {}).get("speed_m_s")),
+                                ("Flutter frequency", "Hz", lambda s: (s.get("flutter") or {}).get("frequency_Hz")),
+                                ("First natural frequency", "Hz", lambda s: s.get("first_frequency_Hz"))],
         "vibration_modal": [(f"Mode {i} frequency", "Hz",
                              (lambda i: lambda s: next((m["frequency_Hz"] for m in s.get("modes", [])
                                                         if m.get("elastic_index") == i), None))(i)) for i in (1, 2, 3)],
@@ -2699,6 +2809,10 @@ class Project:
 
     def solve(self, export_only=False, continue_iterations=None, init_from=None, end_time=None,
               write_interval=None) -> Job:
+        if self.study == "aeroelastic_flutter_cfd":  # hours: a monitoring job around a detached run (it can be re-attached)
+            if self.busy():
+                raise RuntimeError("Please wait: a job is still running for this project (or cancel it).")
+            return JOBS.start("solve", self.id, self._solve_flutter_cfd)
         if end_time is not None:  # carry a finished transient run on to a later end time
             return self._extend_transient(end_time, write_interval)
         if continue_iterations:
@@ -2881,8 +2995,14 @@ class Project:
     def _solve_builtin(self, job: Job):
         if self.study == "vibration_modal":
             return self._solve_modal(job)
+        if self.study == "aeroelastic_flutter":
+            return self._solve_flutter(job)
         if self.study == "static_structural":
             return self._solve_static(job)
+        if self.study == "thermal_stress":
+            return self._solve_thermal_stress(job)
+        if self.study == "vibro_acoustics":
+            return self._solve_vibroacoustics(job)
         from .solvers import thermal_fem
 
         self.data["solve"] = {"status": "running", "backend": "builtin", "started": _now()}
@@ -2937,12 +3057,7 @@ class Project:
         self.data["solve"] = {"status": "running", "backend": "builtin", "started": _now()}
         self.save()
         m = self.load_mesh()
-        props = {}
-        for b in self.bodies():
-            cfg = self.data["bodies"].get(str(b["id"]), {})
-            mat = materials.get_solid(cfg.get("material") or "aluminium_6061")
-            props[b["id"]] = {"E": mat["E"], "nu": mat["nu"], "rho": mat["rho"], "yield": mat.get("Sy"),
-                              "name": cfg.get("name") or b["name"]}
+        props = self._structural_props()
         s = self.data["settings"]
         sine = None
         if s.get("shake_axis") in ("x", "y", "z"):
@@ -2997,9 +3112,99 @@ class Project:
         self.save()
         return rep
 
-    def _solve_static(self, job: Job):
-        from .solvers import static_fem
-        from .studies import AXES
+    def _solve_flutter(self, job: Job):
+        """Flutter study: modal FEM of the structure coupled to strip aerodynamics (simwb.solvers.flutter_study)."""
+        from .solvers import flutter_study
+
+        self.data["solve"] = {"status": "running", "backend": "builtin", "started": _now()}
+        self.save()
+        m = self.load_mesh()
+        props = self._structural_props()
+        log = lambda msg: JOBS.update(job, None, msg, log=msg)  # noqa: E731
+        JOBS.update(job, 0.1, "Structure modes and air forces")
+        try:
+            res = flutter_study.solve_study(m, props, self.data["bcs"], self.data["settings"], log=log)
+        except BaseException as e:
+            self.data["solve"] = {"status": "failed", "backend": "builtin", "error_tail": str(e)}
+            self.save()
+            raise
+        JOBS.update(job, 0.9, "Saving results")
+        bodies = self.bodies()
+        reg_index = {b["id"]: i for i, b in enumerate(bodies)}
+        tr = np.array([reg_index[int(v)] for v in m["tet_vol"]]) if len(bodies) > 1 else np.zeros(len(m["tets"]), int)
+        groups, sgroup = self._tri_groups(m)
+        fields = {}
+        for name, vec in res["fields"].items():  # the flutter and divergence shapes first
+            fields[name] = ("node", vec.astype(np.float32), "relative")
+        for mode, shape in zip(res["modes"], res["shapes"]):
+            if not mode["rigid_body"]:
+                fields[f"Mode {mode['elastic_index']}"] = ("node", shape.astype(np.float32), "relative")
+        rs = ResultSet(m["nodes"], m["tets"], tr, [self._body_view(b)["name"] for b in bodies], fields,
+                       m["tris"], _owner_of_tris(m), sgroup, groups)
+        self.results_dir.mkdir(exist_ok=True)
+        rs.save(self.results_dir / "result.npz")
+        self._results = rs
+        rep = res["report"]
+        self._remember_previous()
+        self.data["solve"] = {"status": "done", "backend": "builtin", "finished": _now(), "summary": rep}
+        self.save()
+        return rep
+
+    def _solve_flutter_cfd(self, job: Job):
+        from .flutter_cfd_study import FlutterCfdStudy
+
+        try:
+            return FlutterCfdStudy(self).solve(job, JOBS)
+        except BaseException as e:
+            self.data["solve"] = {"status": "failed", "backend": "openfoam", "error_tail": str(e)}
+            self.save()
+            raise
+
+    def _solve_vibroacoustics(self, job: Job):
+        """Harmonic vibro-acoustics with openCFS (structure + air, one coupled mesh)."""
+        from .solvers import opencfs
+
+        self.data["solve"] = {"status": "running", "backend": "opencfs", "started": _now()}
+        self.save()
+        m = self.load_mesh()
+        props = {}
+        for b in self.bodies():
+            cfg = self.data["bodies"].get(str(b["id"]), {})
+            if b["role"] == "fluid":
+                props[b["id"]] = {"fluid": True, "name": cfg.get("name") or b["name"]}  # rho, c come from the settings
+            else:
+                mat = materials.get_solid(cfg.get("material") or "aluminium_6061")
+                props[b["id"]] = {"E": mat["E"], "nu": mat["nu"], "rho": mat["rho"], "name": cfg.get("name") or b["name"]}
+        log = lambda msg: JOBS.update(job, None, msg, log=msg)  # noqa: E731
+        JOBS.update(job, 0.1, "Solving structure and sound with openCFS")
+        try:
+            res = opencfs.solve_vibroacoustics(
+                m, props, self.data["bcs"], self.data["settings"], self.case_dir.parent / "opencfs_case", log=log,
+                on_proc=self._job_proc(job), on_step=lambda i, n: JOBS.update(job, 0.1 + 0.8 * i / max(n, 1), f"Frequency {i} of {n}"))
+        except BaseException as e:
+            self.data["solve"] = {"status": "failed", "backend": "opencfs", "error_tail": str(e)}
+            self.save()
+            raise
+        JOBS.update(job, 0.9, "Saving results")
+        bodies = self.bodies()
+        reg_index = {b["id"]: i for i, b in enumerate(bodies)}
+        tr = np.array([reg_index[int(v)] for v in m["tet_vol"]]) if len(bodies) > 1 else np.zeros(len(m["tets"]), int)
+        groups, sgroup = self._tri_groups(m)
+        fields = {n: ("node", np.asarray(v).astype(np.float32), u) for n, (v, u) in res["fields"].items()}  # Pa, mm
+        rs = ResultSet(m["nodes"], m["tets"], tr, [self._body_view(b)["name"] for b in bodies], fields,
+                       m["tris"], _owner_of_tris(m), sgroup, groups)
+        self.results_dir.mkdir(exist_ok=True)
+        rs.save(self.results_dir / "result.npz")
+        self._results = rs
+        rep = res["report"]
+        self._remember_previous()
+        self.data["solve"] = {"status": "done", "backend": "opencfs", "finished": _now(), "summary": rep}
+        self.save()
+        return rep
+
+    def _solve_thermal_stress(self, job: Job):
+        """Heat conduction, then the thermal stress it causes (one-way), built-in or CalculiX for the structure."""
+        from .solvers import thermal_stress
 
         self.data["solve"] = {"status": "running", "backend": "builtin", "started": _now()}
         self.save()
@@ -3008,8 +3213,57 @@ class Project:
         for b in self.bodies():
             cfg = self.data["bodies"].get(str(b["id"]), {})
             mat = materials.get_solid(cfg.get("material") or "aluminium_6061")
-            props[b["id"]] = {"E": mat["E"], "nu": mat["nu"], "rho": mat["rho"], "yield": mat.get("Sy"),
+            props[b["id"]] = {"E": mat["E"], "nu": mat["nu"], "rho": mat["rho"], "cp": mat["cp"], "k": mat["k"],
+                              "alpha": mat["alpha"], "yield": mat.get("Sy"), "heat_W": cfg.get("heat_W", 0.0),
+                              "orthotropic": mat.get("orthotropic") or cfg.get("orthotropic"),
                               "name": cfg.get("name") or b["name"]}
+        log = lambda msg: JOBS.update(job, None, msg, log=msg)  # noqa: E731
+        engine = self._structural_engine()
+        self.data["solve"]["backend"] = engine
+        JOBS.update(job, 0.1, "Solving heat conduction, then thermal stress" + (" (CalculiX)" if engine == "calculix" else ""))
+        try:
+            res = thermal_stress.solve(m, props, self.data["bcs"], self.data["settings"], log=log, engine=engine,
+                                       workdir=self.case_dir.parent / "calculix_case", on_proc=self._job_proc(job),
+                                       progress=lambda f, msg: JOBS.update(job, 0.1 + 0.8 * f, msg))
+        except BaseException as e:
+            self.data["solve"] = {"status": "failed", "backend": engine, "error_tail": str(e)}
+            self.save()
+            raise
+        JOBS.update(job, 0.9, "Saving results")
+        bodies = self.bodies()
+        reg_index = {b["id"]: i for i, b in enumerate(bodies)}
+        tr = np.array([reg_index[int(v)] for v in m["tet_vol"]]) if len(bodies) > 1 else np.zeros(len(m["tets"]), int)
+        groups, sgroup = self._tri_groups(m)
+        fields = {"Von Mises stress": ("node", (res["von_mises"] / 1e6).astype(np.float32), "MPa"),
+                  "Total deformation": ("node", (res["displacement"] * 1e3).astype(np.float32), "mm")}
+        for name, (val, unit) in (res.get("fields") or {}).items():  # temperature, principal stresses, error, safety
+            fields[name] = ("node", (val / 1e6 if unit == "Pa" else val).astype(np.float32), "MPa" if unit == "Pa" else unit)
+        fr = res.get("frames")
+        frames = None
+        if fr:  # a transient run: every saved time of temperature, stress and deformation
+            frames = {"Temperature": [np.asarray(x, np.float32) for x in fr["temperature"]],
+                      "Von Mises stress": [np.asarray(x, np.float32) / 1e6 for x in fr["von_mises"]],
+                      "Total deformation": [np.asarray(x, np.float32) * 1e3 for x in fr["displacement"]]}
+            frames = {k: v for k, v in frames.items() if k in fields}
+        rs = ResultSet(m["nodes"], m["tets"], tr, [self._body_view(b)["name"] for b in bodies], fields,
+                       m["tris"], _owner_of_tris(m), sgroup, groups, times=fr and fr["times"], frames=frames)
+        self.results_dir.mkdir(exist_ok=True)
+        rs.save(self.results_dir / "result.npz")
+        self._results = rs
+        rep = res["report"]
+        self._remember_previous()
+        self.data["solve"] = {"status": "done", "backend": engine, "finished": _now(), "summary": rep}
+        self.save()
+        return rep
+
+    def _solve_static(self, job: Job):
+        from .solvers import static_fem
+        from .studies import AXES
+
+        self.data["solve"] = {"status": "running", "backend": "builtin", "started": _now()}
+        self.save()
+        m = self.load_mesh()
+        props = self._structural_props()
         gdir = self.data["settings"].get("gravity", "off")
         grav = None if gdir == "off" else (9.81 * np.array(AXES[gdir], float)).tolist()
         log = lambda msg: JOBS.update(job, None, msg, log=msg)  # noqa: E731
@@ -3049,6 +3303,25 @@ class Project:
         self.data["solve"] = {"status": "done", "backend": engine, "finished": _now(), "summary": rep}
         self.save()
         return rep
+
+    def _structural_props(self) -> dict:
+        """Material data of every solid for the structural solvers: stiffness, density, yield, thermal expansion and, for an
+        orthotropic material (wood, composite), its constants with the material axes of the body (cfg axis1 / axis2)."""
+        props = {}
+        for b in self.bodies():
+            cfg = self.data["bodies"].get(str(b["id"]), {})
+            mat = materials.get_solid(cfg.get("material") or "aluminium_6061")
+            p = {"E": mat["E"], "nu": mat["nu"], "rho": mat["rho"], "yield": mat.get("Sy"), "alpha": mat.get("alpha"),
+                 "name": cfg.get("name") or b["name"]}
+            orth = cfg.get("orthotropic") or mat.get("orthotropic")
+            if orth:
+                orth = dict(orth)
+                for k in ("axis1", "axis2"):
+                    if cfg.get(k):
+                        orth[k] = list(cfg[k])
+                p["orthotropic"] = orth
+            props[b["id"]] = p
+        return props
 
     def _structural_engine(self) -> str:
         """Which program solves a structural study: "builtin" (the workbench's own FEM) or "calculix"."""

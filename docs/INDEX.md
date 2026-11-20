@@ -10,6 +10,8 @@ purpose: Router for humans and LLMs. Pick the document by the task.
 | Use the workbench: create a study, set up, mesh, solve, read results, use the Claude chat and terminal | [USER_MANUAL.md](USER_MANUAL.md) |
 | Change the software: architecture, file map, API, data model, how to add a study / endpoint / visualisation, tests, pitfalls | [TECHNICAL_MANUAL.md](TECHNICAL_MANUAL.md) |
 | Add other AI providers (Ollama, API keys) with a sandbox: step-by-step plan | [AI_PROVIDERS_PLAN.md](AI_PROVIDERS_PLAN.md) |
+| See what is planned for multiphysics (CFD-coupled flutter, more engines) and which engine to use when | [ROADMAP.md](ROADMAP.md) |
+| Investigate a native Windows build of MOOSE (no WSL) | [MOOSE_WINDOWS.md](MOOSE_WINDOWS.md) |
 | Start quickly, install, environment variables | [../README.md](../README.md) |
 | Report a security problem; how the workbench is protected | [../SECURITY.md](../SECURITY.md) |
 | Contribute (tests, pull requests, sign-off) | [../CONTRIBUTING.md](../CONTRIBUTING.md) |

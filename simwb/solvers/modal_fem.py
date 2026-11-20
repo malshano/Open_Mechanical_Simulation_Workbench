@@ -1,6 +1,6 @@
 """Built-in modal analysis (natural frequencies and mode shapes) with quadratic tetrahedra.
 
-    K phi = omega^2 M phi          linear elasticity, isotropic material per body, no damping
+    K phi = omega^2 M phi          linear elasticity, isotropic or orthotropic material per body, no damping
 
 The mesher writes linear (4-node) tetrahedra; this solver adds a node on every edge (straight edges) and solves with
 10-node tetrahedra, which do not lock in bending the way linear tetrahedra do. Mode shapes are reported at the
@@ -119,8 +119,63 @@ def quadratic_mesh(nodes, tets):
     return np.vstack([nodes, mids]), tets10, edge_node
 
 
-def _assemble(p10, t10, B, V, lam_e, mu_e, rho_e, log, chunk=20000):
-    """Global stiffness and consistent mass of 10-node tetrahedra (B: corner barycentric gradients (M,4,3))."""
+def shape_gradients(G, q):
+    """Gradients dN_a/dx of the 10 shape functions at the barycentric point q (4,) for elements with corner gradients
+    G (ne,4,3): (ne, 10, 3)."""
+    D = np.zeros((len(G), 10, 3))
+    D[:, :4] = (4 * q[:4] - 1)[None, :, None] * G
+    for a, (i, j) in enumerate(EDGES):
+        D[:, 4 + a] = 4 * (q[i] * G[:, j] + q[j] * G[:, i])
+    return D
+
+
+def strain_matrix(dN):
+    """Strain-displacement matrix (ne, 6, 30) from shape gradients (ne, 10, 3): engineering strain (xx yy zz yz xz
+    xy) = Bm u, dofs ordered node-major (u_x, u_y, u_z of node 0, then node 1, ...)."""
+    ne = len(dN)
+    Bm = np.zeros((ne, 6, 10, 3))
+    Bm[:, 0, :, 0] = dN[:, :, 0]
+    Bm[:, 1, :, 1] = dN[:, :, 1]
+    Bm[:, 2, :, 2] = dN[:, :, 2]
+    Bm[:, 3, :, 1], Bm[:, 3, :, 2] = dN[:, :, 2], dN[:, :, 1]
+    Bm[:, 4, :, 0], Bm[:, 4, :, 2] = dN[:, :, 2], dN[:, :, 0]
+    Bm[:, 5, :, 0], Bm[:, 5, :, 1] = dN[:, :, 1], dN[:, :, 0]
+    return Bm.reshape(ne, 6, 30)
+
+
+def body_moduli(bp):
+    """(E, nu) used where an isotropic equivalent is needed (guards, the eigen-solver shift scale): the body's E and
+    nu, or the largest of E1 E2 E3 and nu12 for an orthotropic body that gives none."""
+    o = bp.get("orthotropic")
+    if o:
+        return float(bp.get("E") or max(o["E1"], o["E2"], o["E3"])), float(bp.get("nu") or o["nu12"])
+    return float(bp["E"]), float(bp["nu"])
+
+
+def element_stiffness(tv, body_props, lam_e, mu_e):
+    """Per-element 6x6 stiffness (M, 6, 6) when any body is orthotropic (every element then, isotropic bodies from
+    lam and mu), else None - the isotropic path is used then, which is faster."""
+    if not any(bp.get("orthotropic") for bp in body_props.values()):
+        return None
+    from ..materials import orthotropic_stiffness
+
+    Dm = np.zeros((len(tv), 6, 6))
+    Dm[:, :3, :3] = lam_e[:, None, None]
+    for k in range(3):
+        Dm[:, k, k] += 2 * mu_e
+    for k in range(3, 6):
+        Dm[:, k, k] = mu_e
+    for bid, bp in body_props.items():
+        if bp.get("orthotropic"):
+            Dm[tv == int(bid)] = orthotropic_stiffness(bp["orthotropic"])
+    return Dm
+
+
+def _assemble(p10, t10, B, V, lam_e, mu_e, rho_e, log, chunk=20000, Dm=None):
+    """Global stiffness and consistent mass of 10-node tetrahedra (B: corner barycentric gradients (M,4,3)).
+    Dm: per-element 6x6 stiffness (anisotropic material, see element_stiffness) or None (isotropic lam, mu)."""
+    if Dm is not None:
+        chunk = min(chunk, 4000)
     ndof = 3 * len(p10)
     K = sp.csr_matrix((ndof, ndof))
     M = sp.csr_matrix((ndof, ndof))
@@ -131,19 +186,21 @@ def _assemble(p10, t10, B, V, lam_e, mu_e, rho_e, log, chunk=20000):
         sl = slice(s, s + chunk)
         G, v, la, mu, rho = B[sl], V[sl], lam_e[sl], mu_e[sl], rho_e[sl]
         ne = len(G)
-        # X[(a,i),(b,j)] = sum_q w_q dNa_i dNb_j (exact for the quadratic integrand), one batched product
-        D = np.zeros((ne, len(QPTS), 10, 3))
-        for k, q in enumerate(QPTS):
-            D[:, k, :4] = (4 * q[:4] - 1)[None, :, None] * G
-            for a, (i, j) in enumerate(EDGES):
-                D[:, k, 4 + a] = 4 * (q[i] * G[:, j] + q[j] * G[:, i])
-        D = D.reshape(ne, len(QPTS), 30)
-        X = np.matmul(D.transpose(0, 2, 1), D) * (0.25 * v)[:, None, None]
-        X5 = X.reshape(ne, 10, 3, 10, 3)
-        S = np.einsum("eakbk->eab", X5)  # grad Na . grad Nb
-        # lambda dNa_i dNb_j + mu dNa_j dNb_i + mu delta_ij grad Na . grad Nb
-        Ke = la[:, None, None, None, None] * X5 + mu[:, None, None, None, None] * X5.transpose(0, 1, 4, 3, 2)
-        Ke += mu[:, None, None, None, None] * S[:, :, None, :, None] * I3[None, None, :, None, :]
+        if Dm is not None:  # anisotropic: Ke = sum_q (V/4) B_q^T D B_q (degree-2 rule, exact)
+            Ke = np.zeros((ne, 30, 30))
+            for q in QPTS:
+                Bq = strain_matrix(shape_gradients(G, q))
+                Ke += np.einsum("eia,eij,ejb->eab", Bq, Dm[sl], Bq, optimize=True) * (0.25 * v)[:, None, None]
+            Ke = 0.5 * (Ke + Ke.transpose(0, 2, 1))
+        else:
+            # X[(a,i),(b,j)] = sum_q w_q dNa_i dNb_j (exact for the quadratic integrand), one batched product
+            D = np.stack([shape_gradients(G, q) for q in QPTS], axis=1).reshape(ne, len(QPTS), 30)
+            X = np.matmul(D.transpose(0, 2, 1), D) * (0.25 * v)[:, None, None]
+            X5 = X.reshape(ne, 10, 3, 10, 3)
+            S = np.einsum("eakbk->eab", X5)  # grad Na . grad Nb
+            # lambda dNa_i dNb_j + mu dNa_j dNb_i + mu delta_ij grad Na . grad Nb
+            Ke = la[:, None, None, None, None] * X5 + mu[:, None, None, None, None] * X5.transpose(0, 1, 4, 3, 2)
+            Ke += mu[:, None, None, None, None] * S[:, :, None, :, None] * I3[None, None, :, None, :]
         d = dof[sl]
         R, C = np.repeat(d, 30, axis=1).ravel(), np.tile(d, (1, 30)).ravel()
         K = K + sp.coo_matrix((Ke.ravel(), (R, C)), shape=(ndof, ndof)).tocsr()
@@ -339,7 +396,8 @@ def solve(mesh: dict, body_props: dict, bcs: list, n_modes: int = 10, band_hz=No
     E_e, nu_e, rho_e = np.zeros(len(t)), np.zeros(len(t)), np.zeros(len(t))
     for bid, bp in body_props.items():
         m = tv == int(bid)
-        E_e[m], nu_e[m], rho_e[m] = float(bp["E"]), float(bp["nu"]), float(bp["rho"])
+        E_e[m], nu_e[m] = body_moduli(bp)
+        rho_e[m] = float(bp["rho"])
     if (E_e <= 0).any() or (rho_e <= 0).any():
         missing = sorted(set(int(x) for x in tv[(E_e <= 0) | (rho_e <= 0)]))
         raise ValueError(f"Bodies {missing} have no material (stiffness and density) assigned.")
@@ -355,7 +413,8 @@ def solve(mesh: dict, body_props: dict, bcs: list, n_modes: int = 10, band_hz=No
                          + "): use a coarser mesh preset - quadratic elements are accurate on coarser meshes.")
     log(f"Quadratic elements: {len(t10):,} tets, {len(p10):,} nodes, {ndof:,} unknowns")
     B, V = _grads(p, t)
-    K, M = _assemble(p10, t10, B, V, lam_e, mu_e, rho_e, log)
+    Dm = element_stiffness(tv, body_props, lam_e, mu_e)  # (orthotropic bodies only; None = isotropic fast path)
+    K, M = _assemble(p10, t10, B, V, lam_e, mu_e, rho_e, log, Dm=Dm)
     mass_structure = float((rho_e * V).sum())
 
     # ---- boundary conditions ---------------------------------------------------
@@ -512,7 +571,10 @@ def solve(mesh: dict, body_props: dict, bcs: list, n_modes: int = 10, band_hz=No
         if not rigid[i]:
             cum += frac
         based = bool(fixed_nodes) and not rigid[i]  # effective mass needs a base to shake: not for free parts
+        # the returned shape is u / umax (largest displacement 1); its generalised mass is 1 / umax^2 (mass-normalised
+        # eigenvector: phi^T M phi = 1), which the flutter study needs to rebuild the modal model
         modes.append({"mode": i + 1, "frequency_Hz": f_hz, "rigid_body": bool(rigid[i]),
+                      "generalized_mass_kg": float(1.0 / umax ** 2),
                       "effective_mass_fraction": {"x": float(frac[0]), "y": float(frac[1]), "z": float(frac[2])}
                       if based else None,
                       "dominant_direction": "xyz"[int(np.argmax(frac))] if based else None})
@@ -567,7 +629,9 @@ def solve(mesh: dict, body_props: dict, bcs: list, n_modes: int = 10, band_hz=No
     band_check(elastic, band_hz, f_top, report, warns)
     report["warnings"] = warns
     report["assumptions"] = [
-        "Linear elastic, isotropic materials; small vibrations; no damping (natural frequencies only)",
+        ("Linear elastic, isotropic and orthotropic (fibre direction per body) materials; small vibrations; no "
+         "damping (natural frequencies only)" if Dm is not None else
+         "Linear elastic, isotropic materials; small vibrations; no damping (natural frequencies only)"),
         "Touching parts are bonded (no sliding or gaps); fixed supports are perfectly rigid - real mounts and bolted "
         "joints are softer (a fully fixed bolt bore is stiffer than a washer clamp), so the real frequencies are "
         "usually somewhat lower",
@@ -596,7 +660,7 @@ def solve(mesh: dict, body_props: dict, bcs: list, n_modes: int = 10, band_hz=No
         for i in range(len(w2)):  # mass-normalised shapes and their stresses (averaged per body, as in a static run)
             phi = np.zeros(ndof)
             phi[free] = vec[:, i]
-            avg, key, key_node, key_body = average_stress(t, tv, _corner_stress(p10, t10, B, phi, lam_e, mu_e), n1)
+            avg, key, key_node, key_body = average_stress(t, tv, _corner_stress(p10, t10, B, phi, lam_e, mu_e, Dm=Dm), n1)
             Phi.append(phi.reshape(-1, 3)[:n1])
             S.append(avg)
         sw = sine_sweep(f_modes, gamma[:, ax], np.array(Phi), np.array(S), accel, d, zeta, f_lo, f_hi, log)

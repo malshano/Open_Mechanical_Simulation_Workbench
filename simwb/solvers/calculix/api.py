@@ -56,9 +56,12 @@ def run_ccx(workdir: Path, deck_text: str, log=print, on_proc=None, threads: int
     return text
 
 
-def solve_static(mesh: dict, body_props: dict, bcs: list, gravity=None, log=print, workdir=None, on_proc=None) -> dict:
+def solve_static(mesh: dict, body_props: dict, bcs: list, gravity=None, log=print, workdir=None, on_proc=None,
+                 thermal=None) -> dict:
+    """thermal: None, or {"T_C": corner-node temperatures [degC], "T_ref_C": stress-free temperature, "alpha":
+    {body id: 1/K}} for a one-way thermal stress analysis (see inputdeck)."""
     t0 = time.time()
-    deck = inputdeck.build(mesh, body_props, bcs, "static", gravity=gravity, log=log)
+    deck = inputdeck.build(mesh, body_props, bcs, "static", gravity=gravity, log=log, thermal=thermal)
     log(f"CalculiX deck: {deck.n_elements:,} quadratic tetrahedra, {deck.n_nodes:,} nodes")
     run_ccx(workdir, deck.text(), log, on_proc)
     wd = Path(workdir)
@@ -87,9 +90,15 @@ def solve_static(mesh: dict, body_props: dict, bcs: list, gravity=None, log=prin
     total_applied = deck.applied + deck.mass * g
     balance = None
     if reaction is not None:
-        balance = float(np.linalg.norm(np.asarray(reaction) + total_applied) / max(np.linalg.norm(total_applied), 1e-30))
-        if balance > 1e-3:
-            warns.append(f"Force balance error {balance * 100:.2g} % (reactions vs applied loads).")
+        resid = float(np.linalg.norm(np.asarray(reaction) + total_applied))
+        if thermal is not None and np.linalg.norm(total_applied) < 1e-9:
+            balance = None  # (a thermal load has no net force: the residual is reported as a force instead)
+            if resid > 1e-6 * float(np.abs(np.asarray(reaction)).max() + 1.0) and resid > 1e-3:
+                warns.append(f"Net support force {resid:.3g} N with no mechanical load (should be zero).")
+        else:
+            balance = resid / max(np.linalg.norm(total_applied), 1e-30)
+            if balance > 1e-3:
+                warns.append(f"Force balance error {balance * 100:.2g} % (reactions vs applied loads).")
     size = float(np.ptp(p, axis=0).max())
     if dmag.max() > 0.02 * size:
         warns.append(f"The largest deflection ({dmag.max() * 1e3:.3g} mm) is more than 2 % of the part size: "
@@ -111,6 +120,14 @@ def solve_static(mesh: dict, body_props: dict, bcs: list, gravity=None, log=prin
                         "Solved by CalculiX (separate program) with quadratic tetrahedra (C3D10), straight edges; "
                         "stresses are CalculiX's own nodal extrapolation"],
     }
+    if thermal is not None:
+        Tc = np.asarray(thermal["T_C"], float)
+        report["thermal"] = {"T_ref_C": float(thermal.get("T_ref_C", 20.0)), "T_min_C": float(Tc.min()),
+                             "T_max_C": float(Tc.max()),
+                             "max_abs_dT_K": float(np.abs(Tc - float(thermal.get("T_ref_C", 20.0))).max())}
+        report["assumptions"].append(
+            "Thermal stress: one-way (temperature from the built-in heat solver written as a nodal *TEMPERATURE "
+            "field, *STATIC step), stress-free at the reference temperature, constant material properties")
     return {"displacement": disp, "von_mises": vm_n, "report": report}
 
 

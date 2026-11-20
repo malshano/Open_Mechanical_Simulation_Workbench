@@ -1,5 +1,6 @@
 // Mechanical Simulation Workbench - GUI
 import { Viewer, turbo } from '/static/viewer.js';
+import { drawModalSeries, drawDampingVsSpeed, flutterCfdSummaryHtml, flutterCfdProgressHtml } from '/static/flutter_cfd.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -768,26 +769,51 @@ function welcomePanel() {
   <ol class="small"><li>Import STEP</li><li>Mark faces</li><li>Mesh</li><li>Solve</li><li>Results</li></ol>`;
 }
 
+// the "which engine for which problem" table of the Multiphysics tab (rows: GET /api/engine_guide)
+function guideHtml(rows, esc) {
+  const eng = e => `<span class="chip ${!e.offered ? 'bad' : e.installed === false ? 'warn' : e.installed ? 'ok' : ''}" title="${esc(e.reason || '')}">${esc(e.name)}</span>${e.role ? ` <span class="muted small">${esc(e.role)}</span>` : ''}`;
+  return `<h3>Which engine for which problem</h3><table class="grid"><thead><tr><th>Problem</th><th>Engine</th><th>Fidelity / cost</th><th>Needs</th><th></th></tr></thead><tbody>
+    ${rows.map(r => `<tr><td>${esc(r.problem)}${r.planned ? ' <span class="chip">planned</span>' : ''}</td>
+      <td>${r.engines.map(eng).join('<br>')}</td><td>${esc(r.fidelity)}<br><span class="muted small">${esc(r.cost)}</span></td><td>${esc(r.needs)}</td>
+      <td>${r.exists ? `<button class="small" data-new="${esc(r.study)}">Create</button>` : ''}</td></tr>`).join('')}</tbody></table>`;
+}
+
 function renderWelcome() {
   const st = S.meta.studies;
   const saveDir = localStorage.getItem('simwb.saveDir') || '';
-  const icons = { thermo: '🌡️', fan: '🌀', drone: '🚁', wave: '📳', beam: '🏗️' };
+  const icons = { thermo: '🌡️', fan: '🌀', drone: '🚁', wave: '📳', beam: '🏗️', flutter: '✈️' };
+  // tabs: the single-physics studies, and one tab "Multiphysics" for the studies that couple several physics
+  // (a study with category 'multiphysics')
+  const multi = Object.entries(st).filter(([, s]) => s.category === 'multiphysics');
+  const tabs = [{ id: 'studies', label: 'Studies' }, ...(multi.length ? [{ id: 'multiphysics', label: 'Multiphysics', multi: true }] : [])];
+  if (!tabs.some(t => t.id === S.welcomeTab)) S.welcomeTab = 'studies';
+  const card = ([k, s]) => `
+      <div class="card"><div class="ico">${icons[s.icon] || '◆'}</div><h3>${esc(s.label)}</h3><p>${esc(s.description)}</p>
+      <span class="badge" title="${s.solver === 'builtin_fem' ? 'Solved by the workbench itself: nothing else to install' : 'Flow simulation with OpenFOAM, set up by the workbench on the first run'}">${s.badge ? esc(s.badge) : s.solver === 'builtin_fem' ? 'Built-in solver · seconds to minutes' : 'OpenFOAM flow simulation · minutes to hours'}</span>
+      <div class="row"><button data-new="${k}">Use my STEP file</button>
+      ${s.examples.map(e => `<button class="ghost" data-new="${k}" data-ex="${esc(e)}">${s.examples.length > 1 ? 'Example: ' + esc(e.replace('.step', '').replace(/_/g, ' ')) : 'Try example'}</button>`).join('')}</div></div>`;
+  const tabBody = S.welcomeTab === 'studies'
+    ? `<div class="cards">${Object.entries(st).filter(([, s]) => s.category !== 'multiphysics').map(card).join('')}</div>`
+    : `<p class="muted small" style="margin:14px 0 0">Several kinds of physics solved together: the result of one changes the other.</p>
+      <div class="cards">${multi.map(([k, s]) => card([k, s]).replace('<p>', `<div class="coupled">${(s.physics || []).map(x => `<span class="chip">${esc(x)}</span>`).join('<span class="muted">⇄</span>')}</div><p>`)).join('')}</div>
+      ${S.guide ? guideHtml(S.guide, esc) : ''}`;
+  if (S.welcomeTab !== 'studies' && !S.guide && !S.guideLoading) {  // (the guide table is loaded once, when the tab is first shown)
+    S.guideLoading = true;
+    api('/api/engine_guide').then(d => { S.guide = d.rows; S.guideLoading = false; renderWelcome(); }).catch(() => { S.guideLoading = false; });
+  }
   $('#welcome').innerHTML = `<div class="welcomeInner">
     <h1>What do you want to simulate?</h1>
     <div class="saveIn"><label class="field" title="Every new study asks where to save it: the folder chooser opens at this folder. The study gets its own sub-folder there, with a CLAUDE.md so that Claude Code started in it knows the study"><span>Studies are saved where you choose (the chooser opens at)</span>
       <span style="display:flex;gap:6px"><input type="text" id="saveDir" value="${esc(saveDir)}" placeholder="${esc(S.meta.workspace || '')}" spellcheck="false">
       <button class="ghost small" id="pickDir">Browse…</button><button class="ghost small" id="openDir" title="Add a study you saved earlier (a folder with a project.json) to the list">Open a saved study…</button></span></label></div>
-    <div class="cards">${Object.entries(st).map(([k, s]) => `
-      <div class="card"><div class="ico">${icons[s.icon] || '◆'}</div><h3>${esc(s.label)}</h3><p>${esc(s.description)}</p>
-      <span class="badge" title="${s.solver === 'builtin_fem' ? 'Solved by the workbench itself: nothing else to install' : 'Flow simulation with OpenFOAM, set up by the workbench on the first run'}">${s.solver === 'builtin_fem' ? 'Built-in solver · seconds to minutes' : 'OpenFOAM flow simulation · minutes to hours'}</span>
-      <div class="row"><button data-new="${k}">Use my STEP file</button>
-      ${s.examples.map(e => `<button class="ghost" data-new="${k}" data-ex="${esc(e)}">Try example</button>`).join('')}</div></div>`).join('')}
-    </div>
+    <div class="wtabs" role="tablist">${tabs.map(t => `<button role="tab" class="${t.id === S.welcomeTab ? 'active' : ''}" data-wtab="${esc(t.id)}" title="${t.multi ? 'Multiphysics: several kinds of physics solved together' : 'Studies of one kind of physics'}">${t.multi ? '⚛ ' : ''}${esc(t.label)}</button>`).join('')}</div>
+    ${tabBody}
     ${S.projects.length ? `<h3 class="muted">Recent projects</h3><div class="recent">${S.projects.map(p => `
       <div class="item" data-open="${esc(p.id)}"><span><b>${esc(p.name)}</b> <span class="muted small">${esc(st[p.study]?.label || p.study)}</span><br><span class="muted small">${esc(p.path || '')}</span></span>
       <span class="row"><span class="muted small">${esc(p.updated || '')}</span>
       <button class="ghost small" data-del="${esc(p.id)}" title="Delete this study and all its files">🗑</button></span></div>`).join('')}</div>` : ''}
   </div>`;
+  $('#welcome').querySelectorAll('[data-wtab]').forEach(b => b.onclick = () => { S.welcomeTab = b.dataset.wtab; renderWelcome(); });
   $('#welcome').querySelectorAll('[data-new]').forEach(b => b.onclick = async () => {
     const study = b.dataset.new, ex = b.dataset.ex;
     const name = ex ? ex.replace('.step', '').replace(/_/g, ' ') : st[study].label.split(' ')[0] + ' study';
@@ -1087,7 +1113,7 @@ function panelSetup() {
   }
   if (p.study === 'external_aero' || p.study === 'cht_enclosure') h += movingZonesHtml();
   if (spec.settings.length) {
-    h += `<h3>${p.study === 'external_aero' ? 'Flow condition' : p.study === 'vibration_modal' ? 'Modes and vibration source' : p.study === 'static_structural' ? 'Loads' : 'Flow & solver settings'}</h3>
+    h += `<h3>${p.study === 'external_aero' ? 'Flow condition' : p.study === 'vibration_modal' ? 'Modes and vibration source' : (p.study === 'aeroelastic_flutter' || p.study === 'aeroelastic_flutter_cfd') ? 'Air flow and modes' : p.study === 'static_structural' ? 'Loads' : 'Flow & solver settings'}</h3>
       <div class="grid2">${paramInputs(spec.settings.filter(q => q.key !== 'n_procs'), p.settings, 'data-setting')}</div>`;  // (cores: Solve step)
     if (p.study === 'external_aero') h += endTimeAdviceHtml(p) + aeroInfo();
   }
@@ -1581,7 +1607,7 @@ function meshVerdict(s) {
     warn.push(`~${fmt(s.sizes.cells_across_gap, 2)} cells across the air gaps: use at least 6 for final numbers.`);
   if (st === 'external_aero' && across < 2) warn.push('Thin parts have < 2 cells across: use a finer preset.');
   if (st === 'heat_conduction' && across < 1.5) warn.push('Thin parts are ~1 cell thick: Medium or Fine is more accurate.');
-  if ((st === 'vibration_modal' || st === 'static_structural') && across < 1.5) warn.push('Thin walls are ~1 element thick: check with Fine.');
+  if ((st === 'vibration_modal' || st === 'static_structural' || st === 'aeroelastic_flutter' || st === 'aeroelastic_flutter_cfd' || st === 'thermal_stress') && across < 1.5) warn.push('Thin walls are ~1 element thick: check with Fine.');
   if (st === 'external_aero') {
     // flat-plate estimate of y+ of the first cell centre (tets: ~0.2 h from the wall)
     const set = S.p.settings, V = Math.max(set.speed, 1), L = S.p.geometry.info.ref_length;
@@ -1622,7 +1648,7 @@ function panelSolve() {
   const errs = (p.checks || []).filter(c => c.level === 'error');
   if (errs.length) h += `<div class="note warn" style="margin-top:6px">Fix before solving:<br>${errs.map(e => '• ' + esc(e.message)).join('<br>')}</div>`;
   const of = spec.solver.startsWith('openfoam');
-  const ccx = ['vibration_modal', 'static_structural'].includes(p.study) && String(p.settings.structural_solver || '').startsWith('calculix');
+  const ccx = ['vibration_modal', 'static_structural', 'thermal_stress'].includes(p.study) && String(p.settings.structural_solver || '').startsWith('calculix');
   h += `<h3>Solver</h3><div class="item-card"><b>${esc(ccx ? 'CalculiX (separate open-source program), quadratic tetrahedra' : spec.solver_label)}</b><div id="foamStatus" class="small muted">${of ? 'Checking for OpenFOAM…' : ''}</div><div id="ccxStatus" class="small muted"></div></div>
     <details id="softwareBox" class="expert" style="margin-top:6px"><summary class="small">Software used for each step</summary><div id="softwareTable" class="small muted">Loading…</div></details>`;
   setTimeout(() => { loadSoftware(); if (ccx) checkCcx(); }, 0);
@@ -1737,7 +1763,7 @@ function coresFor(p, n = p.settings.n_procs) {
   return n || Math.max(1, Math.min(cores, Math.floor((p.mesh.stats?.cells || 0) / 20000)));
 }
 
-const SOLID_STUDIES = ['heat_conduction', 'vibration_modal', 'static_structural'];
+const SOLID_STUDIES = ['heat_conduction', 'vibration_modal', 'static_structural', 'aeroelastic_flutter', 'aeroelastic_flutter_cfd', 'thermal_stress'];
 // serial run time from the reference runs: seconds per cell per iteration and typical iterations to auto-stop
 const RUN_COST = { cht_enclosure: [5.1e-6, 1700], external_aero: [6.2e-6, 500] };
 function runTimeEstimate(p) {
@@ -1949,7 +1975,7 @@ async function loadResultsPanel() {
     try { S.results = await api(P('/results/fields')); S.timeIdx = null; renderTree(); } catch (e) { toast(e.message, true); return; }
   }
   const r = S.results;
-  if (!S.field || !r.fields.find(f => f.name === S.field)) S.field = r.fields[0]?.name;
+  if (!S.field || !r.fields.find(f => f.name === S.field)) S.field = r.fields.find(f => f.name === 'Flutter mode' || f.name === 'Divergence shape')?.name || r.fields[0]?.name;
   const ib = $('#isoBox'); if (ib) { ib.innerHTML = isoHtml(); bindIso(); }
   const cb = $('#contourBox'); if (cb) { cb.innerHTML = contourHtml(); bindContours(); }
   // (volume cloud, arrows and particles are views of a flow: not offered for studies of solid parts)
@@ -1996,6 +2022,17 @@ async function loadResultsPanel() {
   if (anim) anim.onchange = () => { S.animate = anim.checked; showResults(); };
   if (sm?.history) drawHistory($('#histChart'), sm.history);
   if (sm?.sine) drawSweep($('#sineChart'), sm.sine.frequency_Hz, sm.sine.max_stress_MPa, 'MPa');
+  if (sm?.kind === 'flutter_cfd') {
+    drawDampingVsSpeed($('#cfdDamp'), sm.damping_curve, sm.strip?.sweep, sm.flutter);
+    const sp = (sm.speeds || []).filter(x => x.series?.t?.length).slice(-1)[0];
+    if (sp) drawModalSeries($('#cfdSeries'), sp.series, { tRelease: sp.t_release });
+  }
+  if (sm?.sweep) { drawFlutter($('#flutterF'), sm.sweep, 'f', sm.critical?.speed_m_s); drawFlutter($('#flutterD'), sm.sweep, 'd', sm.critical?.speed_m_s); }
+  $('#resSummary').querySelectorAll('[data-field]').forEach(tr => tr.onclick = () => {
+    S.field = tr.dataset.field; S.range = null; S.autoRange = true; sel.value = S.field;
+    $('#resSummary').querySelectorAll('[data-mode],[data-field]').forEach(x => x.classList.toggle('sel', x === tr));
+    showResults();
+  });
   showResults();
 }
 
@@ -2018,6 +2055,33 @@ function drawSweep(c, f, y, unit) {
   g.strokeStyle = '#ff9f1c'; g.lineWidth = 1.5 * dp; g.beginPath();
   f.forEach((v, i) => i ? g.lineTo(X(v), Y(y[i])) : g.moveTo(X(v), Y(y[i]))); g.stroke();
 }
+
+// flutter diagrams: one line per mode against the air speed (frequency in Hz, damping ratio in %); a dashed line
+// marks the critical speed and the damping chart has its zero line
+function drawFlutter(c, sw, what, vf) {
+  if (!c || !sw?.speed_m_s?.length) return;
+  const dp = devicePixelRatio, W = c.width = c.clientWidth * dp, H = c.height = c.clientHeight * dp, g = c.getContext('2d');
+  const V = sw.speed_m_s, key = what === 'f' ? 'frequency_Hz' : 'damping_percent';
+  const vals = sw.roots.flatMap(r => r[key]);
+  let lo = what === 'f' ? 0 : Math.max(-30, Math.min(...vals, -1)), hi = what === 'f' ? Math.max(...vals) * 1.05 : Math.min(30, Math.max(...vals, 1));
+  if (!(hi > lo)) hi = lo + 1;
+  const padL = 40 * dp, padB = 14 * dp, x0 = V[0], x1 = V[V.length - 1];
+  const X = v => padL + (W - padL - 6) * (v - x0) / Math.max(x1 - x0, 1e-9), Y = v => 6 + (H - padB - 6) * (hi - v) / (hi - lo);
+  g.strokeStyle = 'rgba(127,127,127,.25)'; g.fillStyle = 'rgba(127,127,127,.9)'; g.font = `${9 * dp}px sans-serif`; g.lineWidth = dp;
+  const ticks = 4;
+  for (let i = 0; i <= ticks; i++) { const v = lo + (hi - lo) * i / ticks, yy = Y(v); g.beginPath(); g.moveTo(padL, yy); g.lineTo(W, yy); g.stroke(); g.fillText(fmtS(v), 2, yy + 3); }
+  g.fillText(`${fmtS(x0)}`, padL, H - 2); const end = `${fmtS(x1)} m/s`; g.fillText(end, W - g.measureText(end).width - 2, H - 2);
+  if (what === 'd') { g.strokeStyle = 'rgba(127,127,127,.9)'; g.beginPath(); g.moveTo(padL, Y(0)); g.lineTo(W, Y(0)); g.stroke(); }
+  if (vf) { g.strokeStyle = '#e4572e'; g.setLineDash([4 * dp, 3 * dp]); g.beginPath(); g.moveTo(X(vf), 0); g.lineTo(X(vf), H - padB); g.stroke(); g.setLineDash([]); g.fillStyle = '#e4572e'; g.fillText(`${fmtS(vf)} m/s`, Math.min(X(vf) + 3, W - 60 * dp), 12 * dp); }
+  const colors = ['#2563eb', '#e4572e', '#2a9d8f', '#8338ec', '#ff9f1c', '#06aed5', '#d62828', '#6a994e'];
+  g.lineWidth = 1.6 * dp;
+  sw.roots.forEach((r, i) => {
+    g.strokeStyle = colors[i % colors.length]; g.beginPath();
+    r[key].forEach((v, k) => { const yy = Y(Math.min(Math.max(v, lo), hi)); k ? g.lineTo(X(V[k]), yy) : g.moveTo(X(V[k]), yy); });
+    g.stroke();
+  });
+}
+
 
 // transient results: time slider + play
 function fmtTime(t) { return t >= 3600 ? `${fmt(t / 3600, 3)} h` : t >= 120 ? `${fmt(t / 60, 3)} min` : `${fmt(t, 3)} s`; }
@@ -2391,9 +2455,36 @@ function summaryHtml(s) {
         ${q.peaks.length ? `<table class="summary"><tr><td><b>Mode</b></td><td><b>Frequency</b></td><td><b>Stress</b></td><td><b>Movement</b></td><td><b>Acceleration</b></td></tr>
         ${q.peaks.map(k => `<tr style="white-space:nowrap"><td>${k.mode}</td><td>${fmt(k.frequency_Hz)} Hz</td><td><b>${fmt(k.max_stress_MPa)}</b> MPa</td><td>${fmtS(k.max_displacement_mm)} mm</td><td>${fmt(k.max_acceleration_g)} g</td></tr>`).join('')}</table>` : ''}`;
     }
-  } else if (st === 'static_structural') {
+  } else if (st === 'aeroelastic_flutter_cfd') {
+    h += flutterCfdSummaryHtml(s, esc, fmt)
+      + `<h3>Damping against air speed</h3><canvas class="chart" id="cfdDamp" style="height:150px"></canvas>
+         <h3>Modal motion after the release</h3><canvas class="chart" id="cfdSeries" style="height:130px"></canvas>`;
+  } else if (st === 'aeroelastic_flutter') {
+    const fl = s.flutter, dv = s.divergence, cr = s.critical, mg = s.margin;
+    const el = (s.modes || []).filter(m => !m.rigid_body);
+    h += cr
+      ? `<div class="kpis">${kpi(cr.type === 'flutter' ? 'Flutter speed' : 'Divergence speed', fmt(cr.speed_m_s), 'm/s')}
+          ${fl && cr.type === 'flutter' ? kpi('Flutter frequency', fmt(fl.frequency_Hz), 'Hz') : ''}
+          ${kpi('Mach', fmt(cr.mach, 3))}${mg ? kpi('Margin on design speed', fmt(mg.ratio, 3), `(needs ≥ ${fmt(mg.required, 3)})`) : ''}</div>
+        ${mg && mg.ratio < mg.required ? `<div class="note warn small">△ Flutter margin ${fmt(mg.ratio, 3)} is below the ${fmt(mg.required, 3)} usually required.</div>` : mg ? `<div class="note small">✓ Margin ${fmt(mg.ratio, 3)} on the design speed ${fmt(mg.design_speed_m_s)} m/s.</div>` : ''}`
+      : `<div class="kpis">${kpi('First natural frequency', fmt(s.first_frequency_Hz), 'Hz')}${kpi('Highest speed examined', fmt(s.speed_range_m_s[1]), 'm/s')}</div>
+        <div class="note small">✓ No flutter or divergence up to ${fmt(s.speed_range_m_s[1])} m/s.</div>`;
+    if (fl) h += `<p class="small">Flutter motion: ${fl.mode_content.map(c => `mode ${c.mode} (${fmt(c.share_percent, 3)} %)`).join(' with ')} - the modes merge at ${fmt(fl.frequency_Hz)} Hz. Equivalent airspeed ${fmt(fl.equivalent_airspeed_m_s)} m/s.</p>`;
+    if (dv) h += `<p class="small">Divergence (static instability): ${fmt(dv.speed_m_s)} m/s (Mach ${fmt(dv.mach, 3)}).</p>`;
+    else if (s.divergence_speed_any_m_s) h += `<p class="small muted">Divergence would occur at ${fmt(s.divergence_speed_any_m_s)} m/s, above the speeds examined.</p>`;
+    h += `<h3>Frequency against air speed</h3><canvas class="chart" id="flutterF" style="height:140px"></canvas>
+      <h3>Damping against air speed</h3><canvas class="chart" id="flutterD" style="height:120px"></canvas>
+      <p class="small muted">Each line follows one mode as the air speed rises. The motion grows where a damping line crosses zero (flutter); the modes approach each other in frequency just before.</p>
+      <h3>Shapes</h3><p class="small muted">Click a row to show it${fl ? ' (the flutter motion is shown at the phase of its largest movement)' : ''}.</p>
+      <table class="summary modes"><tr><td><b>Shape</b></td><td><b>Frequency</b></td></tr>
+      ${fl ? `<tr data-field="Flutter mode" class="${S.field === 'Flutter mode' ? 'sel' : ''}" style="cursor:pointer"><td><b>Flutter mode</b></td><td>${fmt(fl.frequency_Hz)} Hz at ${fmt(fl.speed_m_s)} m/s</td></tr>` : ''}
+      ${dv ? `<tr data-field="Divergence shape" class="${S.field === 'Divergence shape' ? 'sel' : ''}" style="cursor:pointer"><td><b>Divergence shape</b></td><td>at ${fmt(dv.speed_m_s)} m/s</td></tr>` : ''}
+      ${el.map(m => `<tr data-mode="${m.elastic_index}" class="${S.field === 'Mode ' + m.elastic_index ? 'sel' : ''}" style="cursor:pointer"><td>Mode ${m.elastic_index}</td><td>${fmt(m.frequency_Hz)} Hz</td></tr>`).join('')}</table>
+      <label class="row small" style="margin-top:6px"><input type="checkbox" id="animModes" ${S.deform.mode === 'animate' ? 'checked' : ''}> Animate</label>
+      <p class="small muted">Air ${fmt(s.air.density_kg_m3, 3)} kg/m³ at ${fmt(s.air.altitude_m)} m · ${s.strips.count} strips · span ${fmt(s.strips.span_m * 1000)} mm · aspect ratio ${fmt(s.strips.aspect_ratio, 3)} · structure ${fmt(s.structure_mass_kg * 1000)} g · ${fmt(s.seconds)} s</p>`;
+  } else if (st === 'static_structural' || st === 'thermal_stress') {
     const sf = s.min_safety_factor;
-    h += `<div class="kpis">${kpi('Max von Mises stress', fmt(s.max_von_mises_MPa), 'MPa')}${kpi('Max deformation', fmt(s.max_displacement_mm), 'mm')}
+    h += `<div class="kpis">${s.thermal ? kpi('Temperature range', `${fmt1(s.thermal.T_min)} to ${fmt1(s.thermal.T_max)}`, '°C') + kpi('Stress-free at', fmt1(s.thermal.T_ref), '°C') : ''}${kpi('Max von Mises stress', fmt(s.max_von_mises_MPa), 'MPa')}${kpi('Max deformation', fmt(s.max_displacement_mm), 'mm')}
       ${sf != null ? kpi('Safety factor (yield)', fmt(sf, 2), '') : ''}</div>
       <h3>Parts</h3><table class="summary">${s.bodies.map(b => `<tr><td>${esc(b.name)}</td><td>max ${fmt(b.max_von_mises_MPa)} MPa${b.yield_MPa ? ` · yield ${fmt(b.yield_MPa)} MPa · <b>SF ${fmt(b.safety_factor, 2)}</b>` : ' · no yield strength (brittle/composite)'} · ${fmt(b.max_displacement_mm)} mm</td></tr>`).join('')}</table>
       <p class="small">Load ${fmtVec(s.applied_force_N)} N · reaction ${fmtVec(s.reaction_force_N, s.applied_force_N)} N (x / y / z)</p>
@@ -2485,7 +2576,11 @@ async function showResults() {
   await showContours(ti);
   await showVis(ti);
   const mode = S.p.study === 'vibration_modal' && (S.results.summary || S.p.solve.summary)?.modes?.find(m => 'Mode ' + m.elastic_index === S.field);
-  legend(mode ? `${S.field} – ${fmt(mode.frequency_Hz)} Hz` : S.field, d.unit, range);
+  const fs = S.p.study === 'aeroelastic_flutter' ? (S.results.summary || S.p.solve.summary) : null;
+  const fmode = fs?.modes?.find(m => 'Mode ' + m.elastic_index === S.field);
+  const flabel = fs && (S.field === 'Flutter mode' && fs.flutter ? `Flutter mode – ${fmt(fs.flutter.frequency_Hz)} Hz at ${fmt(fs.flutter.speed_m_s)} m/s`
+    : S.field === 'Divergence shape' && fs.divergence ? `Divergence shape – at ${fmt(fs.divergence.speed_m_s)} m/s` : fmode ? `${S.field} – ${fmt(fmode.frequency_Hz)} Hz` : null);
+  legend(flabel || (mode ? `${S.field} – ${fmt(mode.frequency_Hz)} Hz` : S.field), d.unit, range);
 }
 
 // the parts inside a rotating zone (the propeller), from their own force monitor: thrust, torque, coefficients
@@ -3430,7 +3525,10 @@ function chatSuggestions() {
     heat_conduction: ['Help me set up heat sources and cooling for this part', 'Which faces lose the most heat?', 'Explain the results'],
     cht_enclosure: ['Help me set up the air flow and heat loads for this part', 'Is laminar or turbulent flow right here?', 'How can I lower the chip temperature?'],
     external_aero: ['Help me set up the flow for this body', 'What are the drag and lift coefficients?', 'Is the mesh fine enough?'],
+    aeroelastic_flutter: ['Which faces are the aerodynamic surface of this wing?', 'Is the flutter margin enough?', 'How can I raise the flutter speed?'],
     vibration_modal: ['Which faces should be fixed supports for this part?', 'Will it resonate with a motor at 6000-24000 rpm?', 'How can I raise the first frequency?'],
+    aeroelastic_flutter_cfd: ['Is the root face the right one?', 'Which air speeds should I run?', 'Is the damping estimate reliable?'],
+    thermal_stress: ['Which faces should be supports so the part can expand without locking?', 'Where is the thermal stress highest?', 'What stress-free temperature should I use?'],
     static_structural: ['Help me set up the supports and loads for this part', 'Is the safety factor acceptable?', 'Where is the stress highest and how can I lower it?'],
   }[st] || [];
   if (step === 'results') sug.unshift('Summarise these results for me');

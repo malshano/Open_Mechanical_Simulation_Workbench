@@ -273,3 +273,46 @@ body.simple .expert { display: none !important; }
 /* orientation gizmo: the angle while a ring is dragged */
 #rotInfo { position: absolute; left: 50%; top: 40px; transform: translateX(-50%); background: rgba(20,24,32,.88); color: #fff;
   padding: 4px 12px; border-radius: var(--radius); font-size: 13px; font-variant-numeric: tabular-nums; z-index: 4; pointer-events: none; }
+
+/* start page tabs: single-physics studies, then one tab per multiphysics study */
+.wtabs { display: flex; gap: 4px; margin: 18px 0 0; border-bottom: 1px solid var(--line); }
+.wtabs button { background: none; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; padding: 8px 14px; font-size: 13px; color: var(--muted); cursor: pointer; margin-bottom: -1px; }
+.wtabs button:hover { color: var(--fg, inherit); }
+.wtabs button.active { background: var(--panel); border-color: var(--line); color: var(--fg, inherit); font-weight: 600; }
+.multiBox .coupled { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 14px 0 0; }
+.multiBox .chip { background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; font-size: 12px; }
+
+/* ---- results step: tabs, number tiles with a verdict, bars, charts */
+.rtabs { display: flex; margin: 0 -10px 4px; border-bottom: 1px solid #000; background: #23272d; position: sticky; top: 0; z-index: 2; }
+.rtabs button { flex: 1; background: transparent; color: var(--muted); border-radius: 0; border: 0; border-bottom: 2px solid transparent;
+  padding: 6px 4px; font-size: 12px; }
+.rtabs button.on { color: #fff; border-bottom-color: var(--accent); background: #2a2e35; }
+.rpane { display: none; }
+.rpane.on { display: block; }
+.kpi { border-left: 3px solid transparent; }
+.kpi.ok { border-left-color: var(--ok); } .kpi.warn { border-left-color: var(--warn); } .kpi.bad { border-left-color: var(--err); }
+.kpi .hint { font-size: 11px; color: var(--muted); }
+.kpi.bad .hint { color: var(--err); } .kpi.warn .hint { color: var(--warn); }
+.kpis.mini { margin: 4px 0; } .kpis.mini .kpi .val { font-size: 13px; }
+.lnk { color: var(--accent); cursor: pointer; } .lnk:hover { text-decoration: underline; }
+.chip { display: inline-block; font-size: 10.5px; padding: 0 6px; border-radius: 9px; border: 1px solid var(--line); }
+.chip.ok { color: var(--ok); border-color: var(--ok); } .chip.warn { color: var(--warn); border-color: var(--warn); } .chip.bad { color: var(--err); border-color: var(--err); }
+.hbars { display: flex; flex-direction: column; gap: 5px; margin: 4px 0; }
+.hb-h { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
+.hb-l { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.hb-v { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--muted); }
+.hb-v b { color: var(--ink); } .hb-v .bad { color: var(--err); }
+.hb-t { position: relative; height: 8px; background: #1c1f24; border-radius: 4px; }
+.hb-t i { position: absolute; top: 0; bottom: 0; background: var(--accent); border-radius: 4px; }
+.hb-t i.ok { background: var(--ok); } .hb-t i.warn { background: var(--warn); } .hb-t i.bad { background: var(--err); } .hb-t i.neg { background: #c47fd5; }
+.hb-t u { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--muted); }
+.hb-t b { position: absolute; top: -2px; bottom: -2px; width: 2px; margin-left: -1px; background: #fff; opacity: .85; }
+.hb-t b.lim { background: var(--err); opacity: 1; width: 2px; }
+.stack { display: flex; height: 12px; border-radius: 6px; overflow: hidden; background: #1c1f24; margin: 4px 0; }
+.stack i { display: block; height: 100%; }
+.sb-r { display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 1px 0; }
+.sb-r .sw { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+.sb-l { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-v { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tlimit { margin: 2px 0 6px; }
+.cmapPrev { height: 12px; border-radius: 2px; border: 1px solid var(--line); }

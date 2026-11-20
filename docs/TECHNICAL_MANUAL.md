@@ -582,6 +582,66 @@ GUI: Solve step, "Continue the run to ...", shown for a finished transient OpenF
   `test_static_stress_is_not_averaged_across_materials` (two bars side by side, nu = 0: E x strain in each).
 
 
+## Multiphysics engines and studies (modules)
+
+All studies below are `category: "multiphysics"` entries of `studies.STUDIES` (the "Multiphysics" tab, `guide` key = row of the
+engine table, see `simwb/guide.py`, `GET /api/engine_guide`). A study that needs another mesh than its own name says so in
+`Project.mesh_study`.
+
+- **Flutter, CFD-coupled** (`aeroelastic_flutter_cfd`): `simwb/flutter_cfd_study.py` (`FlutterCfdStudy`: `auto_tag`, `twin` and
+  `prepare_twin` = hidden `external_aero` project of the half wing, `structure`, `plan`, `prepare_run`, `solve` + `_monitor`,
+  `collect`, `status`), the pure planning code `simwb/flutter_plan.py` (speeds, cost, flutter-speed fit, the frozen
+  `solve.summary` schema in `build_summary`), the estimator `solvers/openfoam/flutter_damping.py` (damping with uncertainty,
+  `ok` gates), the structure side `flutter_cfd.py`, the run folder and detached controller `flutter_run.py` (manifest, status.json,
+  heartbeat, cancel.flag), per-speed case preparation, checkpoint/resume and the stall watchdog `flutter_case.py`, heavy-job
+  slots `foam_slot.py`, and the OpenFOAM coupling `lumped.py` (measured facts in its docstring). Hooks in `project.py`:
+  `generate_mesh` -> `_flutter_cfd_mesh_work`, `solve` -> `_solve_flutter_cfd`, `check()`. Server: `GET /api/projects/{pid}/flutter_cfd`
+  (status + partial summary) and `/flutter_cfd/plan`. Tools: `suggest_flutter_faces`, `get_flutter_cfd_status`. GUI: `web/flutter_cfd.js`
+  (pure functions) + the `aeroelastic_flutter_cfd` branch of `summaryHtml`. The CFD twin is found by the root face position (its
+  normals point out of the air). A run folder: `<project>/flutter_cfd/run_<hash>/`.
+- **Thermal stress** (`thermal_stress`): `solvers/thermal_stress.py` (`solve`, `split_bcs`), `static_fem.solve(..., thermal=...)`,
+  `materials.SOLIDS[..]["alpha"]`, CalculiX `*EXPANSION`/`*TEMPERATURE` in `calculix/inputdeck.py`; `Project._solve_thermal_stress`.
+- **Orthotropy**: `materials.orthotropic_stiffness` and helpers, `static_fem` / `modal_fem` generic element path for bodies with an
+  `orthotropic` block, CalculiX engineering constants + `*ORIENTATION`.
+- **Vibro-acoustics** (`vibro_acoustics`): `solvers/opencfs/` (`installer` pinned release + sha256, `api.run_cfs`, `xmlwriter`,
+  `meshio` Gmsh 2.2 with physical groups, `results`, `solve.solve_vibroacoustics`); meshed as `cht_enclosure` (solid + automatic air
+  box) through `Project.mesh_study`; loads and supports may sit on wet faces (the wet surface is split into groups).
+  `Project._solve_vibroacoustics`; routes `/api/opencfs`, `/api/opencfs/install`. `SIMWB_OPENCFS` / `SIMWB_OPENCFS_DIR`.
+- **MOOSE** (`solvers/moose/`): registry only (Linux/macOS install via conda, `supported()` false on Windows, hidden there);
+  `docs/MOOSE_WINDOWS.md` is the investigation of a native Windows build.
+- Environment for development in a worktree: the git-ignored `mpi/`, `openfoam/` folders live next to the main checkout: set
+  `SIMWB_MPI_DIR` (and `SIMWB_OPENFOAM_DIR`) to them.
+- Tests: `test_flutter_cfd_study.py`, `test_flutter_plan.py`, `test_flutter_damping.py`, `test_flutter_run.py`, `test_foam_slot.py`,
+  `test_flutter_cfd.py`, `test_lumped.py`, `test_thermal_stress.py`, `test_thermal_stress_study.py`, `test_orthotropic.py`,
+  `test_opencfs.py`, `test_vibro_acoustics_study.py` (real openCFS when installed), `test_moose.py`, `test_guide.py`,
+  `test_flutter_cfd_js.py`.
+
+## Flutter study (multiphysics, `flutter.py`, `flutter_study.py`)
+
+Study key `aeroelastic_flutter` (`studies.STUDIES[...]` has `category: "multiphysics"`: such a study is listed on the
+"Multiphysics" tab of the start page in `renderWelcome` (the others on "Studies"); `physics` lists the coupled solvers shown as chips).
+Add the next multiphysics study the same way (`category`, `physics`, its own `solve_*` in `project.py`).
+
+- `solvers/flutter.py`: pure numpy. `isa`, `theodorsen`, `build_strips` (cuts the aerodynamic nodes into span strips, fits
+  each mode to heave + pitch per strip, lift direction = chord x span), class `Flutter` (modal M, K, Cs; `aero(V, C)` gives
+  A2, A1, A0 of Theodorsen strips; `qep` solves the quadratic eigenproblem; `follow` = p-k iteration for one root, matched to
+  the previous root by modal assurance; `sweep`; `divergence` from the static problem K q = V^2 A0 q; `instabilities`
+  = first flutter crossing refined by bisection). The result does not depend on the reference point (tested).
+- `solvers/flutter_study.py`: `solve_study(mesh, props, bcs, settings, log)`: modal FEM via `modal_fem.solve` (modes now carry
+  `generalized_mass_kg` = 1 / umax^2), strips from the `aero_surface` faces, sweep, report (`flutter`, `divergence`,
+  `critical`, `margin`, `sweep` curves, `warnings`, `assumptions`) and the fields `Flutter mode`, `Divergence shape`
+  (unit "relative", drawn like mode shapes).
+- `Project._solve_flutter`, readiness in `check()`, `software.STUDY_SOLVERS`, GUI: summary branch in `summaryHtml`,
+  `drawFlutter` (V-f, V-damping).
+- Tests: `tests/test_flutter.py` (apparent mass, analytic divergence, reference-point invariance, p-k against a Jones lag-state
+  system, trends), `tests/test_flutter_study.py` (Goland wing, whole pipeline on `examples/flutter_plate.step`).
+- CFD-coupled flutter (in preparation): `solvers/openfoam/lumped.py` couples OpenFOAM to an external structure solver through
+  OpenFOAM's own `lumpedPointDisplacement` boundary condition (no compiler needed). Measured protocol, angle convention (z-x-z
+  Euler), force content (pressure only, N) and the 1 s cost per exchange are in the module text; `tests/test_lumped.py`.
+- Open-source alternatives considered for a CFD-coupled (high fidelity) study: preCICE (adapters for OpenFOAM, CalculiX,
+  SU2; Windows build is not first-class), Kratos Multiphysics (FSI and CoSimulation wheels on PyPI), SU2 (own FSI),
+  solids4foam (OpenFOAM-only). Not built yet.
+
 ## Shake test (`modal_fem.py`)
 
 `modal_fem.solve(..., sine={"axis", "accel_g", "damping_percent"})`: after the eigen-solution the mass-normalised

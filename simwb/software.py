@@ -26,6 +26,11 @@ SOLVERS = {
                  "kind": "program"},
     "openfoam": {"name": "OpenFOAM", "software": "OpenFOAM v2606 + MS-MPI (separate programs)",
                  "licence": "GPL-3.0 (OpenFOAM), MIT (MS-MPI)", "kind": "program"},
+    # optional engines for some multiphysics studies (see docs/ROADMAP.md); never needed by the studies above
+    "opencfs": {"name": "openCFS", "software": "openCFS (separate program, coupled-field FEM)", "licence": "MIT",
+                "kind": "program"},
+    "moose": {"name": "MOOSE", "software": "MOOSE multiphysics framework (separate program, Linux and macOS only)",
+              "licence": "LGPL-2.1", "kind": "program"},
 }
 
 # study -> engines that can solve it, first = default. A study's setting "structural_solver" picks among them.
@@ -33,6 +38,10 @@ STUDY_SOLVERS = {
     "heat_conduction": ["builtin"],
     "vibration_modal": ["builtin", "calculix"],
     "static_structural": ["builtin", "calculix"],
+    "thermal_stress": ["builtin", "calculix"],
+    "vibro_acoustics": ["opencfs"],
+    "aeroelastic_flutter_cfd": ["openfoam"],
+    "aeroelastic_flutter": ["builtin"],
     "cht_enclosure": ["openfoam"],
     "external_aero": ["openfoam"],
 }
@@ -68,6 +77,18 @@ def _status(engine: str) -> dict:
         i = runner.detect()
         return {"installed": bool(i.get("available")), "version": None, "installable": bool(i.get("installable")),
                 "detail": i.get("detail") or i.get("help") or ""}
+    if engine == "opencfs":
+        from .solvers.opencfs import installer
+
+        i = installer.detect()
+        return {"installed": i["available"], "version": i.get("version"), "installable": i["installable"],
+                "detail": "" if i["available"] else i["help"]}
+    if engine == "moose":
+        from .solvers import moose
+
+        i = moose.detect()
+        return {"installed": bool(i["installed"]), "version": i.get("version"), "installable": bool(i["installable"]),
+                "detail": "" if i["installed"] else (i.get("reason") or i.get("help") or "")}
     return {"installed": True, "version": None, "installable": False, "detail": ""}
 
 

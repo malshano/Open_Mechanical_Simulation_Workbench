@@ -25,7 +25,7 @@ def _write(name):
     gmsh.write(str(path))
     text = path.read_text()
     text = re.sub(r"'Open CASCADE STEP translator [\d.]+ \d+\.(\d+)'",
-                  lambda m: "'" + names[int(m.group(1)) - 1] + "'", text)
+                  lambda m: "'" + (names[int(m.group(1)) - 1] if int(m.group(1)) <= len(names) else m.group(0)[1:-1]) + "'", text)
     if len(names) == 1:  # a single solid is the root product itself (no ".N" suffix)
         text = re.sub(r"'Open CASCADE STEP translator [\d.]+ \d+'", "'" + names[0] + "'", text)
     path.write_text(text)
@@ -103,6 +103,61 @@ def camera_mount():
     _write("camera_mount")
 
 
+def flutter_plate():
+    """Aluminium plate wing for the flutter study: a wind-tunnel style flutter model, clamped at its root (y = 0),
+    chord 80 mm along the flow (x), span 300 mm (y), 1.2 mm thick."""
+    _start("flutter_plate")
+    occ = gmsh.model.occ
+    plate = occ.addBox(0, 0, -0.6, 80, 300, 1.2)
+    occ.synchronize()
+    gmsh.model.setEntityName(3, plate, "Plate wing")
+    _write("flutter_plate")
+
+
+def _naca4(code, chord, n=40):
+    """Points (x, z) of a NACA 4-digit airfoil with a sharp trailing edge, upper side from the trailing edge to the
+    leading edge, then the lower side back (cosine spacing)."""
+    m, p, t = int(code[0]) / 100, int(code[1]) / 10, int(code[2:]) / 100
+    xs = [0.5 * (1 - math.cos(math.pi * i / n)) for i in range(n + 1)]
+    up, lo = [], []
+    for x in xs:
+        yt = 5 * t * (0.2969 * math.sqrt(x) - 0.126 * x - 0.3516 * x ** 2 + 0.2843 * x ** 3 - 0.1036 * x ** 4)
+        if p > 0:
+            yc = m / p ** 2 * (2 * p * x - x * x) if x < p else m / (1 - p) ** 2 * ((1 - 2 * p) + 2 * p * x - x * x)
+            dy = 2 * m / p ** 2 * (p - x) if x < p else 2 * m / (1 - p) ** 2 * (p - x)
+        else:
+            yc, dy = 0.0, 0.0
+        th = math.atan(dy)
+        up.append((x - yt * math.sin(th), yc + yt * math.cos(th)))
+        lo.append((x + yt * math.sin(th), yc - yt * math.cos(th)))
+    return [(x * chord, z * chord) for x, z in up], [(x * chord, z * chord) for x, z in lo]
+
+
+def airplane_wing(span=800.0, c_root=160.0, c_tip=100.0, code="2406"):
+    """Half wing of a small aircraft (a UAV or model aeroplane), 3D-printed solid in PLA for the flutter study:
+    semi-span 800 mm, NACA 2406 section (6 % thick), chord 160 mm at the root tapering to 100 mm at the tip, leading edge swept
+    15 degrees. The root (y = 0) is the face bolted to the fuselage. Air flows along +x, the span runs along +y."""
+    _start("airplane_wing")
+    occ = gmsh.model.occ
+    sweep = span * math.tan(math.radians(15))
+
+    def wire(chord, y, x0):
+        """Closed wire of the section at span position y, leading edge at x0: upper and lower spline, both running
+        from the leading edge to the sharp trailing edge."""
+        up, lo = _naca4(code, chord)
+        up_pts = [occ.addPoint(x + x0, y, z) for x, z in up]
+        lo_pts = [occ.addPoint(x + x0, y, z) for x, z in lo]
+        lo_pts[0], lo_pts[-1] = up_pts[0], up_pts[-1]  # shared leading and trailing edge points
+        return occ.addWire([occ.addSpline(up_pts), occ.addSpline(lo_pts)])
+
+    w0 = wire(c_root, 0.0, 0.0)
+    w1 = wire(c_tip, span, sweep)
+    loft = occ.addThruSections([w0, w1], makeSolid=True, makeRuled=True)
+    occ.synchronize()
+    gmsh.model.setEntityName(3, loft[0][1], "Wing")
+    _write("airplane_wing")
+
+
 if __name__ == "__main__":
     gmsh.initialize()
     gmsh.option.setNumber("General.Terminal", 0)
@@ -110,4 +165,6 @@ if __name__ == "__main__":
     heatsink_in_duct()
     quadcopter()
     camera_mount()
+    flutter_plate()
+    airplane_wing()
     gmsh.finalize()

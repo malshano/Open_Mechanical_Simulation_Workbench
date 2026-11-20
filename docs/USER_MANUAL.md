@@ -543,6 +543,100 @@ Stress is averaged at the nodes within each part only. Where two parts of differ
 shows its own stress (the stress jumps there in reality).
 
 
+## Multiphysics: which engine for which problem
+
+The start page has a **Multiphysics** tab for studies that couple several kinds of physics. A table under the cards says which
+engine suits which problem, what it costs and what it needs (the same table is in `docs/ROADMAP.md`).
+
+| Problem | Study | Engine | Cost |
+|---|---|---|---|
+| Flutter or divergence of a wing, blade or fin, screening and design sweeps | Flutter (structure + air) | built-in modal FEM + strip theory | seconds |
+| Flutter with 3D flow and stall | Flutter (CFD-coupled) | built-in modal FEM + OpenFOAM | hours per air speed |
+| Stress and warping from heating | Thermal stress | built-in heat and static FEM, or CalculiX | seconds to minutes |
+| A panel or housing radiating sound | Vibro-acoustics (harmonic) | openCFS (optional download) | minutes |
+| Nonlinear thermo-mechanics, contact (planned, optional) | - | MOOSE: Linux and macOS only, hidden on Windows | - |
+
+Every engine installs without administrator rights and without WSL, or it is not offered where it cannot run.
+
+## Flutter (CFD-coupled)
+
+The fast flutter study uses a simple air model. This study replaces it by a real 3D transient flow simulation (OpenFOAM) coupled
+to the same modal structure, so it captures 3D flow and stall (shock waves come with a later compressible step). It takes
+**hours per air speed**: choose the speeds with the fast study first.
+
+1. Create the study from the Multiphysics tab with your STEP file (or the example `airplane_wing.step`). Mark the clamped root
+   as **Fixed support**; the faces the air flows over are the **Aerodynamic surface**. Set neither and the larger flat end face
+   across the span becomes the root and every other face aerodynamic when you mesh (check it in the results of **suggest faces**
+   through the assistant, or in the Setup step).
+2. Settings: flow direction and span axis, the number of modes (include the first torsion mode), altitude, the range and the
+   number of air speeds (blank = automatic: around the flutter speed of the fast study), the flow model, the CFD mesh, and how
+   long to follow the motion (periods of the critical mode; 8 or more for a reliable damping).
+3. **Mesh** makes two meshes: the structure (solid parts) and the air around the **half** wing (the root face lies on a symmetry
+   plane). **Solve** prints the plan (speeds, run lengths, an estimate of the hours) and starts the run.
+4. The run is a separate program that keeps going if you close the workbench; open the study again and it reconnects. Each
+   speed saves checkpoints, a hung solver is restarted from the last checkpoint, and every finished speed appears at once in
+   the results. Cancel stops cleanly and keeps what is finished.
+5. Results: for every air speed the damping ratio of the critical mode with its uncertainty, a verdict (decaying, neutral,
+   growing, unreliable), the modal motion against time, the damping against speed with the fast study's curve for comparison,
+   and the flutter speed where the damping crosses zero, with its uncertainty and whether it was interpolated or extrapolated.
+
+How a speed is run: the flow develops with the wing held (uncoupled, fast), then the wing is held for a few milliseconds to
+measure the steady load, then released from rest with a small disturbance of the critical modes. The damping is read from the
+decay or growth of the motion. **A speed marked unreliable needs a longer run**: damping can only be read from several periods.
+
+Limits: incompressible flow (valid to about Mach 0.3), linear modal structure, small motion, explicit coupling (fine for air).
+The wing surface moves with a stick model of lumped nodes along the span; each time step costs about a second of waiting for the
+exchange, which is why a run takes hours.
+
+## Thermal stress
+
+Heat first, then stress (one-way coupling). Mark the cooling and heating (fixed temperature, convection, heat sources, as in the
+heat study) and the supports (as in the static study; **frictionless supports** let a part expand freely, fixed supports hold
+it back). Set the **stress-free temperature** (the temperature at which the part carries no thermal stress) and the study solves
+the heat conduction, steady or over time, then the stress caused by the temperature differences and the expansion of the
+materials. For a part that simply sits at one temperature, leave the heat conditions out and enter a **uniform part temperature**.
+Solver: the built-in FEM, or CalculiX for the structure (**Solver** setting, expert). Materials carry a thermal expansion
+coefficient. Checked against the textbook: a bar held at both ends (stress = E x alpha x dT), free expansion (no stress),
+a bimetal strip, and a bent plate.
+
+## Vibro-acoustics (harmonic)
+
+A part or panel is shaken by a harmonic force or pressure over a range of frequencies; its surface pushes the air and the sound
+spreads into an air box with an absorbing outer boundary. Both are solved together by **openCFS** (a separate, optional program
+of about 141 MB, installed from the Solve step without administrator rights). The part is meshed inside an automatic air box.
+Put the **force** or **pressure** on a face of the part (the faces of the part touch the air: that is fine) and a support on
+another; do not select the faces of the air box. Results: the sound pressure and the displacement at the frequency of the
+strongest response. Checked against analytic cases: plane waves in a duct (0.5 %), the modes of a rigid cavity (0.7 %).
+Needs about a sixth of a wavelength per element in the air at the highest frequency: keep the sweep range modest on a coarse mesh.
+
+## Orthotropic materials
+
+A body can have orthotropic properties (wood, fibre composites): `E1, E2, E3, G12, G23, G13, nu12, nu23, nu13` and the
+direction of axis 1 (and 2). The structural solvers (static, modal, flutter) and CalculiX use them; the isotropic path is
+unchanged. Checked with the first bending frequency of a cantilever along the stiff direction (0.4 %).
+
+## Flutter (multiphysics: structure + air)
+
+Start page, tab **Multiphysics** (it holds the studies that couple several kinds of physics; the *Studies* tab holds the single-physics ones).
+The structure and the air are solved together: the natural modes of the part (built-in FEM) are put in a stream of air
+whose forces follow the motion. The air speed is raised until the motion stops decaying and grows.
+
+1. Import the wing, blade, fin or plate. Examples: `airplane_wing.step` (half wing of a small aircraft: 800 mm semi-span, NACA 2406 section, tapered 160 to 100 mm chord, leading edge swept 15 degrees, 3D-printed in PLA; flutters at about 75 m/s) and `flutter_plate.step` (80 x 300 x 1.2 mm aluminium plate). Model the wing as one solid half (root at the fuselage): the root is treated as a mirror, so the finite-wing correction uses the aspect ratio of the whole wing.
+2. Mark the clamped root as **Fixed support** and the upper and lower skin as **Aerodynamic surface**. Added masses
+   (pods, tip tanks) can be put on faces.
+3. Setup: the direction the air flows towards (along the chord), the **span direction**, altitude, highest air speed
+   (0 = up to Mach 0.6), the design speed (for the margin: flutter speed / design speed, aircraft rules ask for 1.15),
+   damping (0 = lowest, conservative speed).
+4. Mesh, Solve (seconds). Results: flutter speed, frequency, Mach, margin, divergence speed, frequency and damping
+   against air speed (flutter where a damping line crosses zero), and the shapes: *Flutter mode*, *Divergence shape*
+   and every natural mode, animated in the 3D view.
+
+Limits: incompressible attached flow (indicative above Mach 0.6; transonic flutter is lower), strips across the span
+without induction between them (a finite-wing factor AR/(AR+2) of the whole wing is applied by default), no sweep effect on the air forces (a swept wing is cut into strips along the flow), thin slender surfaces (aspect
+ratio below about 2: estimate only), no sweep effect, no stall, linear small motion, no pre-stress. The method
+reproduces the Goland wing (published 2-D strip value about 137 m/s) within 1 %. A CFD-coupled check (OpenFOAM with
+preCICE) is the next multiphysics step.
+
 ## Shake test (sine sweep) in a vibration study
 
 Simulates a vibration-table test. Set in **Setup**, Settings:
