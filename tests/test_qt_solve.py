@@ -19,7 +19,7 @@ def test_before_there_is_a_mesh_the_step_says_what_to_do(ctl):
     assert ctl._index()["solve.log"].placeholderText()                                    # an empty log explains itself, not a black box
     assert ctl.widget_do("solve.case")["visible"] is False                                # (a flow-study button)
     assert ctl.widgets("solve.software")["count"] == 1                                    # the "software used" fold
-    assert [w["id"] for w in ctl.widgets("log.")["widgets"] if w["id"].startswith("log.")] == ["log.messages", "log.solver"]
+    assert [w["id"] for w in ctl.widgets("log.")["widgets"] if w["id"].startswith("log.")] == ["log.messages", "log.solver", "log.tab.messages", "log.tab.solver"]
 
 
 def test_the_log_dock_lists_what_is_missing(ctl):
