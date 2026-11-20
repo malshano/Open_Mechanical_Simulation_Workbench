@@ -56,6 +56,8 @@ def main(paths):
     rows = load(paths)
     groups = defaultdict(lambda: defaultdict(list))
     for r in rows:
+        if str(r.get("edge_field", "")).endswith("superseded"):      # made by code that no longer exists (see results/README.md)
+            continue
         if r.get("error"):
             print(f"ERROR  {r.get('spec', r.get('method'))}: {r['error'][:120]}")
         elif not usable(r):
