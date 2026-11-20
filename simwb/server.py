@@ -435,7 +435,7 @@ def mesh_settings(pid: str, body: dict = Body(...)):
     pr = P.open_project(pid)
     pr.set_mesh(preset=body.get("preset"), size_max_mm=body.get("size_max_mm"), size_min_mm=body.get("size_min_mm"),
                 refinements=body.get("refinements"), regions=body.get("regions"), layers=body.get("layers"),
-                defeature_mm=body["defeature_mm"] if "defeature_mm" in body else False)
+                defeature_mm=body["defeature_mm"] if "defeature_mm" in body else False, method=body.get("method"))
     return pr.state()
 
 
