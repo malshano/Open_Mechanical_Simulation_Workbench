@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDockWidget, QFileDialog, Q
 from .. import project as P
 from .. import studies
 from .assistant import AssistantPanel, ChatBridge
-from . import theme
+from . import chrome, theme
 from .engine import Engine
 from .home import HomePage
 from .logdock import LogDock
@@ -75,13 +75,13 @@ class MainWindow(QMainWindow):
         self.logdock = LogDock()
         self.logdock.setObjectName("dock.log")
         self.logdock.toggleViewAction().setObjectName("dock.log.toggle")
-        self.logdock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
+        self.logdock.setFeatures(QDockWidget.DockWidgetMovable)
         self.addDockWidget(Qt.BottomDockWidgetArea, self.logdock)
         self.setCorner(Qt.BottomLeftCorner, Qt.LeftDockWidgetArea)       # (the side panels keep their full height)
         self.setCorner(Qt.BottomRightCorner, Qt.RightDockWidgetArea)
         self.dock_log = self.logdock
         self.resizeDocks([self.logdock], [150], Qt.Vertical)
-        self.resizeDocks([self.dock_tree, self.dock_panel], [220, 480], Qt.Vertical)
+        self.resizeDocks([self.dock_tree, self.dock_panel], [300, 420], Qt.Vertical)
         self.resizeDocks([self.dock_tree, self.dock_chat], [440, 360], Qt.Horizontal)
 
         # ---- step bar, status bar
@@ -110,6 +110,7 @@ class MainWindow(QMainWindow):
         self.act_air.setObjectName("view.air_box.item")
         self.act_air.setVisible(False)
         self._air_pref: dict = {}
+        chrome.install(self, tb)
         sb = QStatusBar()
         self.setStatusBar(sb)
         self.lbl_saved = wid(QLabel(""), "status.saved")
@@ -148,7 +149,7 @@ class MainWindow(QMainWindow):
         d.setObjectName(f"dock.{name}" if name else title)
         d.toggleViewAction().setObjectName(f"dock.{name}.toggle" if name else f"{title}.toggle")
         d.setWidget(widget)
-        d.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
+        d.setFeatures(QDockWidget.DockWidgetMovable)
         self.addDockWidget(area, d)
         return d
 
@@ -423,8 +424,31 @@ class MainWindow(QMainWindow):
         self.view.set_air_visible(on)
         self.view.fit()          # (the box is far bigger than the part: fit the view to what is shown now)
 
+    def _step_marks(self, st):
+        """A mark on each step of the bar - done, needs attention, not yet - with the same thing in words as its tooltip."""
+        if not st:
+            marks = {k: ("", f"{label}") for k, label in STEPS}
+        else:
+            errs = [c for c in (st.get("checks") or []) if c.get("level") == "error"]
+            geo, mesh, solved = st["geometry"].get("status") == "ready", st["mesh"].get("status") == "ready", st["solve"].get("status") == "done"
+            setup_errs = [c for c in errs if c.get("step") in ("setup",)]
+            marks = {
+                "geometry": ("✓", "Geometry: done") if geo else ("○", "Geometry: import a CAD file"),
+                "setup": (("✓", "Setup: ready") if geo and not setup_errs else ("⚠", f"Setup: {len(setup_errs)} thing(s) missing") if geo else ("○", "Setup: needs the geometry")),
+                "mesh": ("✓", "Mesh: done") if mesh else ("○", "Mesh: not generated yet"),
+                "solve": ("✓", "Solve: done") if solved else ("○", "Solve: not run yet"),
+                "results": ("✓", "Results: ready") if solved else ("○", "Results: run the simulation first"),
+            }
+        for i, (k, label) in enumerate(STEPS, 1):
+            mark, tip = marks[k]
+            a = self.step_actions[k]
+            a.setText(f"{i}  {label}" + (f"  {mark}" if mark else ""))
+            a.setToolTip(tip or label)
+            a.setStatusTip(tip or label)
+
     def _refresh_all(self):
         st = self.engine.state() if self.engine.pid else None
+        self._step_marks(st)
         self.act_air.setVisible(bool(st) and st["study"] in AIR_KINDS)
         self._title(st)
         self.logdock.show_checks(st.get("checks") if st else [])
@@ -453,7 +477,10 @@ class MainWindow(QMainWindow):
         if self.engine.pid:
             st = st or self.engine.state()
             self.setWindowTitle(f"{st['name']} — Simulation Workbench")
-            self.lbl_path.setText(str(st.get("path", "")))
+            m, sv = st["mesh"], st["solve"].get("status", "none")
+            cells = (m.get("stats") or {}).get("cells")
+            self.lbl_path.setText(f"{st['name']}  ·  {st['study_spec']['label']}  ·  Mesh: {f'{cells:,} cells' if cells else m.get('status', 'none')}  ·  Solution: {sv}")
+            self.lbl_path.setToolTip(str(st.get("path", "")))
         else:
             self.setWindowTitle("Simulation Workbench")
             self.lbl_path.setText("No study open: File > New study, or Open")
@@ -478,10 +505,13 @@ class MainWindow(QMainWindow):
             node(m, f"{b['name']} — {b.get('material_label') or b.get('material') or 'default'}", "setup")
         s = node(root, "Supports & loads", "setup")
         for b in st.get("bcs") or []:
-            node(s, f"{b['name']} — {b['type'].replace('_', ' ')}", "setup")
+            n = len(b.get("faces") or [])
+            node(s, f"{b['name']} — {b['type'].replace('_', ' ')}" + (f" · {n} face{'s' if n != 1 else ''}" if n else " · no faces yet"), "setup")
         ms = st["mesh"]
-        node(root, f"Mesh — {ms['stats']['cells']:,} cells" if ms.get("stats") and ms.get("status") in ("ready", "stale") else "Mesh — none", "mesh")
-        node(root, f"Solution — {st['solve'].get('status', 'none')}", "solve")
+        node(root, (f"✓ Mesh — {ms['stats']['cells']:,} cells" if ms.get("stats") and ms.get("status") == "ready"
+                    else f"⚠ Mesh — {ms['stats']['cells']:,} cells (out of date)" if ms.get("stats") and ms.get("status") == "stale" else "○ Mesh — none"), "mesh")
+        sv = st["solve"].get("status", "none")
+        node(root, f"{'✓' if sv == 'done' else '⚠' if sv in ('stale', 'failed') else '○'} Solution — {sv}", "solve")
         r = node(root, "Results", "results")
         if st["solve"].get("status") == "done":
             try:
@@ -505,9 +535,15 @@ class MainWindow(QMainWindow):
         st = self.engine.state()
         try:
             if self.step == "mesh" and st["mesh"].get("status") in ("ready", "stale"):
-                axis, frac, color = self.panels["mesh"].request()
-                p = self.engine.mesh_payload(axis, frac, color)
+                axis, frac, color, poor = self.panels["mesh"].request()
+                p = self.engine.mesh_payload(axis, frac, color, poor)
                 self.view.show_geometry(False)
+                if poor is not None:                # only the cells below the threshold, on the model
+                    self.view.show_surface(p, name="Cell quality (poorest cells)", unit="-", edges=True, fixed_quality=True, vrange=(0, poor), deform=0)
+                    n = p.get("n_poor", 0)
+                    self.panels["mesh"].poor_info.setText(f"{n:,} cells below {poor:g}" + (f", the worst {p['worst']['quality']:.2f}" if p.get("worst") else " (none)"))
+                    self._fit_once((self.engine.pid, "mesh", "poor", poor))
+                    return
                 self.view.show_surface(p, name={"quality": "Cell quality", "size": "Cell size", "region": "Region"}[color],
                                        unit="mm" if color == "size" else "-", edges=True, fixed_quality=color == "quality",
                                        vrange=(0, 1) if color == "quality" else None, deform=0)
@@ -520,8 +556,9 @@ class MainWindow(QMainWindow):
                     info = next((f for f in self.panels["results"].fields if f["name"] == r["field"]), {})
                     self.view.show_geometry(False)
                     self.view.show_surface(p, name=r["field"], unit=info.get("unit", ""), cmap=r["cmap"], reverse=r["reverse"],
-                                           bands=r["bands"], edges=r["edges"], deform=r["deform"])
+                                           bands=r["bands"], edges=r["edges"], deform=r["deform"], animate=r["animate"], vrange=r["range"])
                     self._fit_once((self.engine.pid, "results"))
+                    self.panels["results"].draw_marks()
                     return
             self.view.clear_overlay()
             key = (self.engine.pid, st["geometry"].get("status"), st["geometry"].get("updated"))

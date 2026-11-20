@@ -16,7 +16,9 @@ from vtkmodules.util.numpy_support import numpy_to_vtk, numpy_to_vtkIdTypeArray
 from vtkmodules.vtkCommonCore import vtkLookupTable, vtkPoints
 from vtkmodules.vtkCommonDataModel import vtkCellArray, vtkPolyData
 from vtkmodules.vtkFiltersCore import vtkFeatureEdges, vtkPolyDataNormals
-from vtkmodules.vtkFiltersSources import vtkCubeSource
+from vtkmodules.vtkFiltersSources import vtkArrowSource, vtkCubeSource
+from vtkmodules.vtkCommonTransforms import vtkTransform
+from vtkmodules.vtkFiltersGeneral import vtkTransformPolyDataFilter
 from vtkmodules.vtkIOImage import vtkPNGWriter
 from vtkmodules.vtkInteractionStyle import vtkInteractorStyleTrackballCamera
 from vtkmodules.vtkInteractionWidgets import vtkOrientationMarkerWidget
@@ -113,6 +115,7 @@ class Viewport(QWidget):
         self.edge_actors: list = []
         self.mark_actors: list = []         # selection, hover and tint highlights
         self.label_actors: list = []        # text hung on the model (what a boundary condition carries)
+        self.arrow_actors: list = []        # loads and gravity as arrows
         self._label_items: list = []
         self.edges_on = True
         self.geo_keys: list = []             # the volume of each drawn group (parallel to geo_actors and edge_actors)
@@ -120,6 +123,8 @@ class Viewport(QWidget):
         self._solid_parts: list = []
         self._air_parts: list = []
         self.hover_id = -1
+        self.last_hit = None
+        self._ov = None
         self.hover_highlight = True
         self._press = None
         self._hover_t = 0.0
@@ -185,6 +190,7 @@ class Viewport(QWidget):
         self._anim = None
         self._clear(self.overlay_actors)
         self._overlay_index = None
+        self._ov = None
         self.legend.clear()
         self.overlay_info = {"kind": "none"}
 
@@ -268,6 +274,105 @@ class Viewport(QWidget):
             if a is not None:
                 self.ren.AddActor(a)
                 self.mark_actors.append(a)
+
+    # ------------------------------------------------------------------ values on the drawn result
+    def extrema(self):
+        """Where the drawn field is lowest and highest: {'min': {'value', 'point'}, 'max': {...}} (points on the surface as drawn), or None."""
+        o = getattr(self, "_ov", None)
+        if not o or self.overlay_info.get("kind") != "scalar":
+            return None
+        v = o["val"]
+        ok = np.isfinite(v)
+        if not ok.any():
+            return None
+        out = {}
+        for key, fn in (("min", np.nanargmin), ("max", np.nanargmax)):
+            i = int(fn(np.where(ok, v, np.nan)))
+            if o["per"] == "face":
+                pt, bp = o["pos"][o["idx"][i]].mean(axis=0), o["base"][o["idx"][i]].mean(axis=0)
+            else:
+                pt, bp = o["pos"][i], o["base"][i]
+            out[key] = {"value": float(v[i]), "point": [float(x) for x in pt], "base": [float(x) for x in bp]}
+        return out
+
+    def base_point(self, cell: int, point):
+        """The point of the undeformed part that a point of the drawn (deformed) surface came from."""
+        o = getattr(self, "_ov", None)
+        if not o or not (0 <= cell < len(o["idx"])):
+            return list(point)
+        tri = o["idx"][cell]
+        a, b, c = (o["pos"][i] for i in tri)
+        p = np.asarray(point, float)
+        v0, v1, v2 = b - a, c - a, p - a
+        d00, d01, d11, d20, d21 = v0 @ v0, v0 @ v1, v1 @ v1, v2 @ v0, v2 @ v1
+        den = d00 * d11 - d01 * d01
+        if abs(den) < 1e-30:
+            return [float(x) for x in o["base"][tri].mean(axis=0)]
+        w1, w2 = (d11 * d20 - d01 * d21) / den, (d00 * d21 - d01 * d20) / den
+        w = np.array([1 - w1 - w2, w1, w2])
+        return [float(x) for x in w @ o["base"][tri]]
+
+    def value_at(self, cell: int, point):
+        """The field's value at a point of the drawn surface (a face's value, or the corners' values weighted by where in the triangle)."""
+        o = getattr(self, "_ov", None)
+        if not o or not (0 <= cell < len(o["idx"])):
+            return None
+        tri = o["idx"][cell]
+        if o["per"] == "face":
+            return float(o["val"][cell])
+        a, b, c = (o["pos"][i] for i in tri)
+        p = np.asarray(point, float)
+        v0, v1, v2 = b - a, c - a, p - a
+        d00, d01, d11, d20, d21 = v0 @ v0, v0 @ v1, v1 @ v1, v2 @ v0, v2 @ v1
+        den = d00 * d11 - d01 * d01
+        if abs(den) < 1e-30:
+            return float(o["val"][tri].mean())
+        w1 = (d11 * d20 - d01 * d21) / den
+        w2 = (d00 * d21 - d01 * d20) / den
+        w = np.array([1 - w1 - w2, w1, w2])
+        return float(o["val"][tri] @ w)
+
+    def set_arrows(self, items: list):
+        """Arrows hung on the model: [{'point': [x,y,z] (the tip), 'dir': [dx,dy,dz], 'color': '#rrggbb', 'length': m}]. Loads point INTO the part."""
+        self._clear(self.arrow_actors)
+        rgb = lambda h: tuple(int(h[i:i + 2], 16) / 255.0 for i in (1, 3, 5))  # noqa: E731
+        for it in items:
+            d = np.asarray(it["dir"], float)
+            n = float(np.linalg.norm(d))
+            if n < 1e-12:
+                continue
+            d = d / n
+            L = float(it.get("length") or 0.05)
+            tip = np.asarray(it["point"], float)
+            start = tip - d * L
+            axis = np.cross([1.0, 0.0, 0.0], d)
+            ang = float(np.degrees(np.arccos(np.clip(d[0], -1, 1))))
+            tr = vtkTransform()
+            tr.Translate(*start)
+            if np.linalg.norm(axis) > 1e-9:
+                tr.RotateWXYZ(ang, *axis)
+            elif d[0] < 0:
+                tr.RotateWXYZ(180, 0, 0, 1)
+            tr.Scale(L, L, L)
+            src = vtkArrowSource()
+            src.SetTipResolution(16)
+            src.SetShaftResolution(16)
+            f = vtkTransformPolyDataFilter()
+            f.SetInputConnection(src.GetOutputPort())
+            f.SetTransform(tr)
+            f.Update()
+            m = vtkPolyDataMapper()
+            m.SetInputConnection(f.GetOutputPort())
+            a = vtkActor()
+            a.SetMapper(m)
+            a.GetProperty().SetColor(*rgb(it.get("color") or "#f59e0b"))
+            a.GetProperty().SetAmbient(0.6)
+            a.GetProperty().SetDiffuse(0.5)
+            a.PickableOff()
+            a.SetVisibility(self._geo_shown)
+            self.ren.AddActor(a)
+            self.arrow_actors.append(a)
+        self.render()
 
     def face_center(self, ids):
         """The middle of some CAD faces (mean of their vertices), where a label for them goes; None if none are known."""
@@ -361,6 +466,7 @@ class Viewport(QWidget):
             return None
         if h["kind"] == "face":
             self.click_face(h["face"], add)
+        self.last_hit = h
         if self.pick_mode == "point":
             self.pointPicked.emit(*h["point"])
         return h
@@ -421,7 +527,7 @@ class Viewport(QWidget):
     def show_geometry(self, on: bool):
         self._geo_shown = bool(on)
         self._apply_visibility()
-        for a in self.mark_actors + self.label_actors:
+        for a in self.mark_actors + self.label_actors + self.arrow_actors:
             a.SetVisibility(bool(on))
         for a in self.air_actors:
             a.SetVisibility(bool(on) and self.air_on)
@@ -576,7 +682,8 @@ class Viewport(QWidget):
 
     # ------------------------------------------------------------------ a field on a surface
     def show_surface(self, p: dict, *, name: str = "", unit: str = "", cmap: str = "turbo", reverse: bool = False,
-                     bands: int = 0, vrange=None, edges: bool = False, deform: float | None = None, fixed_quality: bool = False):
+                     bands: int = 0, vrange=None, edges: bool = False, deform: float | None = None, fixed_quality: bool = False,
+                     animate: bool = False):
         """A surface payload {positions, indices, values, per, [categories, present, scale, disp, disp_kind]} coloured by
         its values. vrange: (lo, hi) or None for the payload's own; fixed_quality: the red-is-bad scale of cell quality."""
         self.clear_overlay()
@@ -599,8 +706,11 @@ class Viewport(QWidget):
             if p.get("disp_kind") == "static":
                 auto = 0.08 * size / umax
                 amp = auto if deform is None else deform
-                pos = base + amp * disp
-                info["deform"] = {"scale": amp, "auto": auto}
+                info["deform"] = {"scale": amp, "auto": auto, "animated": bool(animate)}
+                if animate:      # the load applied and released again, smoothly
+                    self._anim = {"base": base, "disp": disp, "amp": amp, "t": 0.0, "kind": "static"}
+                else:
+                    pos = base + amp * disp
                 disp = None
             else:       # a mode shape: swings by 8 % of the model size
                 self._anim = {"base": base, "disp": disp, "amp": 0.08 * size, "t": 0.0}
@@ -626,6 +736,7 @@ class Viewport(QWidget):
             lut.SetNanColor(0.6, 0.6, 0.6, 1.0)
             lut.Build()
         self._overlay_index = locator_for(pd)
+        self._ov = {"pos": pos, "base": base, "idx": idx, "val": val, "per": p.get("per"), "unit": unit, "name": name}
         self.overlay_info = {"kind": "categories" if cats else "scalar", "name": name, "unit": unit, "range": [float(lo), float(hi)],
                              "triangles": int(len(idx)), "per": p.get("per"), "scale": p.get("scale") or "linear",
                              "colormap": None if cats else ("quality (fixed)" if fixed_quality else cmap), "reverse": bool(reverse),
@@ -710,7 +821,11 @@ class Viewport(QWidget):
         if not a:
             return
         a["t"] += 0.03
-        pts = a["base"] + np.sin(a["t"] * 2 * np.pi * 0.8) * a["amp"] * a["disp"]
+        if a.get("kind") == "static":
+            k = 0.5 * (1 - np.cos(a["t"] * 2 * np.pi * 0.5))        # 0 -> 1 -> 0 over two seconds
+        else:
+            k = np.sin(a["t"] * 2 * np.pi * 0.8)
+        pts = a["base"] + k * a["amp"] * a["disp"]
         self._anim_poly.GetPoints().SetData(numpy_to_vtk(np.ascontiguousarray(pts), deep=True))
         self._anim_poly.GetPoints().Modified()
         self.render()

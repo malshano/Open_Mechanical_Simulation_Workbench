@@ -167,8 +167,12 @@ class HomePage(QWidget):
         r = QHBoxLayout(row)
         r.setContentsMargins(0, 0, 0, 0)
         r.setSpacing(8)
-        for i, rec in enumerate(recent[:5]):
-            b = wid(QPushButton(rec["name"]), f"home.recent.{i}")
+        from pathlib import Path
+        shown = recent[:5]
+        names = [r["name"] for r in shown]
+        for i, rec in enumerate(shown):
+            label = rec["name"] if names.count(rec["name"]) == 1 else f"{rec['name']}  ({Path(rec['path']).name})"
+            b = wid(QPushButton(label), f"home.recent.{i}")
             b.setObjectName("chip")
             b.setToolTip(rec["path"])
             b.clicked.connect(lambda _=False, p=rec["path"]: self.openRecent.emit(p))

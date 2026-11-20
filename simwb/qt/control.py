@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (QAbstractButton, QAbstractItemView, QAbstractSpin
 
 from .. import project as P
 from .. import studies, ui_bridge
+from . import mode as app_mode
 from . import theme
 from .ids import of as wid_of
 
@@ -45,6 +46,7 @@ MODAL = {
     "file.open_folder": "study.open_folder", "file.save_as": "study.save_as", "file.export": "study.export",
     "file.import": "study.import", "geometry.import": "geometry.import", "help.about": None,
     "home.open_folder": "study.open_folder", "home.import": "study.import", "viewbar.picture": "view.picture",
+    "chrome.close": None, "results.export.report": "results.export", "results.export.csv": "results.export", "results.export.vtk": "results.export",
 }
 
 
@@ -436,6 +438,7 @@ class Control(QObject):
             if i < 0 or i >= o.count():
                 raise ValueError(f"'{id}' has no item '{value}'. Items: {[o.itemText(k) for k in range(o.count())]}")
             o.setCurrentIndex(i)
+            o.activated.emit(i)              # (a choice, as the user's click on the list would be)
         elif isinstance(o, QAbstractButton):
             if not o.isCheckable():
                 raise ValueError(f"'{id}' is a push button: use click")
@@ -488,7 +491,7 @@ class Control(QObject):
         self.log.pull_vtk()
         return {
             "window": {"title": win.windowTitle(), "size": [win.width(), win.height()], "step": win.step,
-                       "theme": {"mode": theme.mode(), "effective": theme.effective()},
+                       "theme": {"mode": theme.mode(), "effective": theme.effective()}, "expert": not app_mode.simple(),
                        "screen": "home" if win.center.currentWidget() is win.home else "study",
                        "status_message": win.statusBar().currentMessage(), "visible": win.isVisible()},
             "study": st,
@@ -599,12 +602,41 @@ class Control(QObject):
           {"color": (S, "quality|size|region", False), "cut": (S, "x|y|z|off", False), "position": (N, "cut position 0..1", False)},
           lambda color=None, cut=None, position=None: self._mesh_view(color, cut, position))
         # ---- solve and results
+        def mesh_poor(on=True, threshold=None):
+            if threshold is not None:
+                self._set(self._w("mesh.poor.threshold"), "mesh.poor.threshold", str(threshold))
+            self._set(self._w("mesh.poor.on"), "mesh.poor.on", bool(on))
+            return {"poor": win.panels["mesh"].poor_on, "threshold": win.panels["mesh"].poor_thr, "info": win.panels["mesh"].poor_info.text()}
+        R("mesh.poor", "Show only the cells below a quality threshold on the model (the mesher's weak spots), or switch that off.",
+          {"on": (B, "default true", False), "threshold": (N, "quality 0.01-0.9 (default 0.1)", False)}, mesh_poor)
+        R("mesh.zoom_worst", "Turn the 3D view to the poorest cell.", {}, lambda: {"worst": win.panels["mesh"].zoom_worst()})
         R("solve.run", "Run the simulation; a job (use wait).", {}, lambda: (self._click("solve.run"), {"started": True})[1])
         R("results.show", "Choose what the results step shows. Omitted arguments stay as they are.",
           {"field": (S, "field name (see state.panels.results)", False), "colormap": (S, "turbo|viridis|plasma|inferno|cool-warm|rainbow|grayscale", False),
            "reverse": (B, "reverse the colours", False), "bands": (N, "colour bands, 0 = smooth", False),
-           "deform": (B, "show the deformation", False), "edges": (B, "show the mesh edges", False)},
+           "deform": (B, "show the deformation", False), "edges": (B, "show the mesh edges", False),
+           "animate": (B, "animate the deformation (the load applied and released)", False),
+           "scale": (N, "deformation exaggeration (0 or omitted: automatic; 1 = true size)", False),
+           "range": ("array", "[lo, hi] colour range; [] for automatic", False), "minmax": (B, "label the highest and lowest values", False)},
           lambda **kw: self._results(**kw))
+
+        def rp():
+            if not eng.pid:
+                raise ValueError("No study is open")
+            return win.panels["results"]
+        R("results.tab", "Show a tab of the results step: summary, display, probe or checks.", {"name": (S, "tab", True)},
+          lambda name: (self._click(f"results.tab.{name}"), {"tab": name})[1])
+        R("results.pin", "Pin the value of the drawn result at a point (world coordinates, m): what a Probe click does.",
+          {"x": (N, "x", True), "y": (N, "y", True), "z": (N, "z", True)}, lambda x, y, z: {"pin": rp().pin_at([x, y, z])})
+        R("results.line", "Plot the field along the straight line between two points of the undeformed part (m).",
+          {"p0": ("array", "[x,y,z]", True), "p1": ("array", "[x,y,z]", True)},
+          lambda p0, p1: (setattr(rp(), "line_ends", [list(p0), list(p1)]), {"line": {k: v for k, v in (rp().fetch_line() or {}).items() if k != "values" and k != "s"}})[1])
+        R("results.line_minmax", "Plot the field along the line from its lowest to its highest value.", {},
+          lambda: (rp().line_min_max(), {"line": {k: v for k, v in (rp().line_data or {}).items() if k not in ("values", "s")}})[1])
+        R("results.clear_probes", "Remove the pinned values and the line plot.", {}, lambda: (rp().clear_probes(), {"cleared": True})[1])
+        R("results.export", "Write the results to a file: format report (HTML) | csv | vtk.",
+          {"format": (S, "report|csv|vtk", True), "path": (S, "full path of the file", True)},
+          lambda format, path: {"file": rp().export(format, path)})
         # ---- view
         R("view.set", "Turn the 3D view: iso, +x, -x, +y, -y, +z, -z.", {"name": (S, "direction", True)},
           lambda name: (win.view.set_view(name), {"camera": win.view.camera()})[1])
@@ -647,6 +679,8 @@ class Control(QObject):
             win.set_theme(mode)
             self._settle()
             return {"mode": theme.mode(), "effective": theme.effective()}
+        R("app.mode", "Simple (only the essential settings) or expert (every setting and tool).", {"mode": (S, "simple|expert", True)},
+          lambda mode: self._set_mode(mode))
         R("theme.set", "Switch the look of the window: system, dark or light.", {"mode": (S, "system|dark|light", True)}, set_theme)
         def setup_panel():
             if not eng.pid:
@@ -713,6 +747,13 @@ class Control(QObject):
         self.win.new_from_card(study, ex)
         return {"study": self.engine.pid, "example": ex}
 
+    def _set_mode(self, mode):
+        if mode not in ("simple", "expert"):
+            raise ValueError("mode must be simple or expert")
+        app_mode.set_simple(mode == "simple")
+        self._settle()
+        return {"expert": not app_mode.simple()}
+
     def _bc_id(self, ref):
         """A boundary condition's id from its id or its name."""
         for b in self.engine.state().get("bcs") or []:
@@ -736,12 +777,25 @@ class Control(QObject):
             self._set(self._w("mesh.cut_position"), "mesh.cut_position", int(float(position) * 1000))
         return {"color": self.win.panels["mesh"].color, "cut": self.win.panels["mesh"].axis or "off", "position": self.win.panels["mesh"].frac}
 
-    def _results(self, field=None, colormap=None, reverse=None, bands=None, deform=None, edges=None):
+    def _results(self, field=None, colormap=None, reverse=None, bands=None, deform=None, edges=None, animate=None, scale=None, range=None,
+                 minmax=None):
+        panel = self.win.panels["results"]
         for id, v in (("results.field", field), ("results.colormap", colormap), ("results.reverse", reverse), ("results.bands", bands),
-                      ("results.deform", deform), ("results.edges", edges)):
+                      ("results.deform", deform), ("results.edges", edges), ("results.minmax", minmax)):
             if v is not None:
                 self._set(self._w(id), id, v)
-        return {k: self._value(self._w(f"results.{k}")) for k in ("field", "colormap", "reverse", "bands", "deform", "edges")}
+        if animate is not None:
+            self._set(self._w("results.deform_mode"), "results.deform_mode", "Animated" if animate else "End state")
+        if scale is not None:
+            self._set(self._w("results.deform_scale"), "results.deform_scale", "" if not scale else str(scale))
+        if range is not None:
+            if range:
+                self._set(self._w("results.range.auto"), "results.range.auto", False)
+                self._set(self._w("results.range.min"), "results.range.min", str(range[0]))
+                self._set(self._w("results.range.max"), "results.range.max", str(range[1]))
+            else:
+                self._set(self._w("results.range.auto"), "results.range.auto", True)
+        return {k: self._value(self._w(f"results.{k}")) for k in ("field", "colormap", "reverse", "bands", "deform", "edges", "minmax")}
 
     def _dock(self, name, visible):
         d = self.win.findChild(QDockWidget, f"dock.{name}")

@@ -1,10 +1,11 @@
 """The bottom dock: what the study says about itself (Messages: what is missing, what finished) and the solver's own output (Solver log).
-Both are always one glance away, in every step, as in the web version."""
+Both are always one glance away, in every step, as in the web version. The two pages are chosen with a row of buttons (ids log.tab.*)."""
 from __future__ import annotations
 
 import time
 
-from PySide6.QtWidgets import QDockWidget, QPlainTextEdit, QTabWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QDockWidget, QHBoxLayout, QPlainTextEdit, QPushButton, QStackedWidget, QVBoxLayout, QWidget
 
 from .. import project as P
 from .ids import wid
@@ -14,8 +15,18 @@ KINDS = {"prepare": "Geometry", "mesh": "Mesh", "solve": "Solver", "check": "Che
 
 class LogDock(QDockWidget):
     def __init__(self, parent=None):
-        super().__init__("Messages", parent)
-        self.tabs = QTabWidget()
+        super().__init__("Output", parent)
+        body = QWidget()
+        v = QVBoxLayout(body)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(0)
+        self.head = QWidget()
+        self.head.setObjectName("tabhead")
+        self.head.setAttribute(Qt.WA_StyledBackground, True)
+        hl = QHBoxLayout(self.head)
+        hl.setContentsMargins(6, 4, 6, 0)
+        hl.setSpacing(2)
+        self.stack = QStackedWidget()
         self.messages = wid(QPlainTextEdit(), "log.messages")
         self.messages.setReadOnly(True)
         self.messages.setPlaceholderText("Messages about the study appear here: what is missing, what has finished.")
@@ -25,11 +36,28 @@ class LogDock(QDockWidget):
         self.solver.setMaximumBlockCount(5000)
         self.solver.setPlaceholderText("The solver's output appears here while it runs.")
         self.solver.setToolTip("The solver's own output")
-        self.tabs.addTab(self.messages, "Messages")
-        self.tabs.addTab(self.solver, "Solver log")
-        self.setWidget(self.tabs)
+        self.tab_btns = {}
+        for i, (key, label, page) in enumerate((("messages", "Messages", self.messages), ("solver", "Solver log", self.solver))):
+            b = wid(QPushButton(label), f"log.tab.{key}")
+            b.setObjectName("dtab")
+            b.setCheckable(True)
+            b.setChecked(i == 0)
+            b.setToolTip(f"Show the {label.lower()}")
+            b.clicked.connect(lambda _=False, i=i: self.show_tab(i))
+            hl.addWidget(b)
+            self.tab_btns[key] = b
+            self.stack.addWidget(page)
+        hl.addStretch(1)
+        v.addWidget(self.head)
+        v.addWidget(self.stack, 1)
+        self.setWidget(body)
         self.checks: list = []
         self.events: list = []
+
+    def show_tab(self, i: int):
+        self.stack.setCurrentIndex(i)
+        for j, b in enumerate(self.tab_btns.values()):
+            b.setChecked(j == i)
 
     def show_checks(self, checks):
         self.checks = list(checks or [])
@@ -38,7 +66,7 @@ class LogDock(QDockWidget):
     def _render(self):
         lines = []
         for c in self.checks:
-            mark = {"error": "✖ Missing", "warning": "⚠ Check"}.get(c.get("level"), "ℹ Note")
+            mark = {"error": "✖ Missing", "warning": "⚠ Check"}.get(c.get("level"), "ℹ")
             lines.append(f"{mark}  [{str(c.get('step', '')).capitalize()}] {c.get('message', '')}")
         lines += self.events[-40:]
         text = "\n".join(lines)

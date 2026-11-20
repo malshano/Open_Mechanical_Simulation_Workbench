@@ -100,11 +100,11 @@ QMenu::item {{ padding: 6px 26px 6px 14px; border-radius: 5px; }}
 QMenu::item:selected {{ background: {t['accent_soft']}; }}
 QMenu::item:disabled {{ color: {t['disabled']}; }}
 QMenu::separator {{ height: 1px; background: {t['line']}; margin: 5px 8px; }}
-QToolBar {{ background: {t['panel2']}; border: 0; border-bottom: 1px solid {t['line']}; padding: 5px 8px; spacing: 4px; }}
-QToolButton {{ background: transparent; border: 1px solid transparent; border-radius: {t['radius']}; padding: 6px 14px; }}
+QToolBar {{ background: {t['panel2']}; border: 0; border-bottom: 1px solid {t['line']}; padding: 3px 8px; spacing: 4px; }}
+QToolButton {{ background: transparent; border: 1px solid {t['line']}; border-radius: {t['radius']}; padding: 4px 14px; }}
 QToolButton:hover {{ background: {t['raised']}; border-color: {t['line_strong']}; }}
 QToolButton:pressed {{ background: {t['accent_soft']}; }}
-QToolButton:focus {{ border: 2px solid {t['focus']}; padding: 5px 13px; }}
+QToolButton:focus {{ border: 2px solid {t['focus']}; padding: 3px 13px; }}
 QToolButton:checked {{ background: {t['accent']}; color: {t['on_accent']}; font-weight: 600; border-color: {t['accent']}; }}
 QToolButton:checked:hover {{ background: {t['accent_hi']}; }}
 
@@ -157,7 +157,7 @@ QComboBox::drop-down {{ subcontrol-origin: padding; subcontrol-position: center 
 QComboBox::down-arrow {{ image: url({ic['down']}); width: 12px; height: 12px; }}
 QComboBox::down-arrow:disabled {{ image: url({ic['down_dis']}); }}
 QComboBox QAbstractItemView {{ background: {t['panel2']}; border: 1px solid {t['line_strong']}; selection-background-color: {t['accent_soft']}; selection-color: {t['ink']}; outline: 0; }}
-QAbstractSpinBox {{ padding-right: 22px; }}
+QAbstractSpinBox {{ padding-right: 22px; padding-left: 10px; }}
 QAbstractSpinBox::up-button {{ subcontrol-origin: border; subcontrol-position: top right; width: 20px; border-left: 1px solid {t['line']}; }}
 QAbstractSpinBox::down-button {{ subcontrol-origin: border; subcontrol-position: bottom right; width: 20px; border-left: 1px solid {t['line']}; }}
 QAbstractSpinBox::up-button:hover, QAbstractSpinBox::down-button:hover {{ background: {t['raised']}; }}
@@ -175,11 +175,11 @@ QStatusBar {{ background: {t['panel2']}; border-top: 1px solid {t['line']}; }}
 QStatusBar QLabel {{ color: {t['muted']}; }}
 QProgressBar {{ background: {t['panel']}; border: 1px solid {t['line_strong']}; border-radius: 5px; text-align: center; height: 14px; }}
 QProgressBar::chunk {{ background: {t['accent']}; border-radius: 4px; }}
-QScrollBar:vertical {{ background: transparent; width: 11px; margin: 0; }}
-QScrollBar::handle:vertical {{ background: {t['line_strong']}; border-radius: 5px; min-height: 28px; }}
+QScrollBar:vertical {{ background: transparent; width: 9px; margin: 0; }}
+QScrollBar::handle:vertical {{ background: {t['line_strong']}; border-radius: 4px; min-height: 28px; }}
 QScrollBar::handle:vertical:hover {{ background: {t['muted']}; }}
-QScrollBar:horizontal {{ background: transparent; height: 11px; }}
-QScrollBar::handle:horizontal {{ background: {t['line_strong']}; border-radius: 5px; min-width: 28px; }}
+QScrollBar:horizontal {{ background: transparent; height: 9px; }}
+QScrollBar::handle:horizontal {{ background: {t['line_strong']}; border-radius: 4px; min-width: 28px; }}
 QScrollBar::handle:horizontal:hover {{ background: {t['muted']}; }}
 QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; }}
 QSlider::groove:horizontal {{ height: 4px; background: {t['line_strong']}; border-radius: 2px; }}
@@ -190,8 +190,14 @@ QSlider:focus {{ border: 1px solid {t['focus']}; }}
 QSlider::handle:horizontal:disabled {{ background: {t['disabled']}; }}
 QToolTip {{ background: {t['panel2']}; color: {t['ink']}; border: 1px solid {t['line_strong']}; padding: 5px; }}
 
+QWidget#tabhead {{ background: {t['panel2']}; border-bottom: 1px solid {t['line']}; }}
+QPushButton#dtab {{ background: transparent; border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 6px 16px; color: {t['muted']}; }}
+QPushButton#dtab:hover {{ color: {t['ink']}; background: {t['raised']}; }}
+QPushButton#dtab:checked {{ color: {t['ink']}; font-weight: 600; border-bottom: 2px solid {t['accent']}; background: {t['panel']}; }}
+QPushButton#dtab:focus {{ border-bottom: 2px solid {t['focus']}; padding: 6px 16px; }}
 QTabWidget::pane {{ border: 0; border-top: 1px solid {t['line']}; background: {t['panel']}; }}
-QTabBar {{ background: {t['panel2']}; }}
+QTabBar {{ background: {t['panel2']}; qproperty-drawBase: 0; }}
+QTabWidget {{ background: {t['panel2']}; }}
 QTabBar::tab {{ background: {t['panel2']}; color: {t['muted']}; padding: 6px 16px; border: 0; border-bottom: 2px solid transparent; }}
 QTabBar::tab:hover {{ color: {t['ink']}; background: {t['raised']}; }}
 QTabBar::tab:selected {{ color: {t['ink']}; font-weight: 600; border-bottom: 2px solid {t['accent']}; background: {t['panel']}; }}
@@ -217,6 +223,8 @@ def _palette(t: dict) -> QPalette:
                       (QPalette.ToolTipBase, "panel2"), (QPalette.ToolTipText, "ink"), (QPalette.Link, "accent_text"),
                       (QPalette.PlaceholderText, "muted")):
         pal.setColor(role, QColor(t[key]))
+    for role, key in ((QPalette.Shadow, "line_strong"), (QPalette.Dark, "line_strong"), (QPalette.Mid, "line"), (QPalette.Light, "panel2")):
+        pal.setColor(role, QColor(t[key]))                    # (Fusion draws frames and bases with these: never black)
     for role in (QPalette.Text, QPalette.WindowText, QPalette.ButtonText):
         pal.setColor(QPalette.Disabled, role, QColor(t["disabled"]))
     return pal

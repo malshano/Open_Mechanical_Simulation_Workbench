@@ -33,6 +33,8 @@ def main(argv=None) -> int:
     app.setApplicationName("Simulation Workbench")
     engine, bridge = Engine(), ChatBridge()
     theme.apply(app, engine.settings.value("theme", "dark", type=str))    # (what the user chose last time)
+    from . import mode
+    mode.set_simple(engine.settings.value("mode", "expert", type=str) == "simple")
     win = MainWindow(engine, bridge)
     win.resize(1500, 920)
     win.show()

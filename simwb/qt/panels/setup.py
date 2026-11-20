@@ -10,7 +10,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout
 
 from ... import materials
-from .. import theme
+from .. import mode, theme
 from ..forms import ParamForm, fmt_num
 from ..ids import wid
 from .common import ClickLabel, Section, _h, _muted, _Panel, clear_layout
@@ -66,6 +66,7 @@ class SetupPanel(_Panel):
         self.view.set_selection([])
         self.view.set_face_tints({})
         self.view.set_labels([])
+        self.view.set_arrows([])
         self.active = None
 
     def _selection_changed(self, ids):
@@ -83,7 +84,11 @@ class SetupPanel(_Panel):
             return
         st = self.engine.state()
         types = st["study_spec"]["face_bc_types"]
-        tints, labels = {}, []
+        tints, labels, arrows = {}, [], []
+        info = (st["geometry"].get("info") or {})
+        bb = info.get("parts_bbox") or info.get("bbox")
+        size = max((bb[k + 3] - bb[k]) for k in range(3)) if bb else 0.1
+        fmap = {f["id"]: f for f in self.engine.project().faces()}
         for b in st.get("bcs") or []:
             bt = types.get(b["type"], {})
             if b["id"] != self.active:
@@ -93,8 +98,28 @@ class SetupPanel(_Panel):
             if c is not None:
                 val = bc_summary(bt, b.get("params") or {})
                 labels.append({"point": c, "text": f"{b['name']}: {val}" if val else b["name"], "color": bt.get("color")})
+                p = b.get("params") or {}
+                comps = [p.get(f"f{a}_N") for a in "xyz"]
+                if all(v is not None for v in comps) and any(abs(v) > 0 for v in comps):          # a force: an arrow along it, its tip on the faces
+                    arrows.append({"point": c, "dir": comps, "color": bt.get("color"), "length": 0.18 * size})
+                elif b["type"] == "pressure" and b.get("faces"):                                    # a pressure pushes on the faces: inward
+                    for fid in b["faces"][:6]:
+                        f = fmap.get(fid)
+                        fc = self.view.face_center([fid])
+                        if f and fc is not None:
+                            arrows.append({"point": fc, "dir": [-x for x in f["normal"]], "color": bt.get("color"), "length": 0.1 * size})
+        g = (st.get("settings") or {}).get("gravity")
+        if g and g != "off" and bb:                                                                 # gravity: an arrow from above the part
+            ax = "xyz".index(g[1])
+            sgn = 1.0 if g[0] == "+" else -1.0
+            d = [0.0, 0.0, 0.0]
+            d[ax] = sgn
+            ctr = [(bb[k] + bb[k + 3]) / 2 for k in range(3)]
+            arrows.append({"point": [ctr[0], ctr[1], ctr[2]], "dir": d, "color": theme.tokens()["muted"], "length": 0.3 * size})
+            labels.append({"point": [ctr[0], ctr[1], ctr[2] + (0.12 * size if ax != 2 else 0.0)], "text": "Gravity 9.81 m/s²", "color": theme.tokens()["muted"]})
         self.view.set_face_tints(tints)
         self.view.set_labels(labels)
+        self.view.set_arrows(arrows)
         if self.active:
             bc = next((b for b in st.get("bcs") or [] if b["id"] == self.active), None)
             self.view.set_selection(bc.get("faces", []) if bc else [])
@@ -106,7 +131,7 @@ class SetupPanel(_Panel):
         hidden = sorted(self.win.hidden_bodies) if self.win is not None else []
         sig = json.dumps([st["study"], st.get("bcs"), [(b["id"], b["name"], b.get("material"), b.get("material_is_default"), b.get("heat_W"))
                           for b in st["body_list"]], st.get("settings"), st.get("checks"), self.active, theme.effective(), hidden],
-                         default=str, sort_keys=True)
+                         default=str, sort_keys=True) + str(mode.simple())
         if sig == self._sig:
             self.draw_marks()
             return
@@ -125,7 +150,7 @@ class SetupPanel(_Panel):
         self.draw_marks()
 
     def _about(self, spec):
-        s = Section("About this simulation", "setup.about", expanded=False)
+        s = Section("About this simulation", "setup.about", expanded=True)
         s.body.addWidget(_muted(spec.get("explain", "")))
         needs = spec.get("needs") or []
         if needs:
@@ -341,10 +366,10 @@ class SetupPanel(_Panel):
         adv = [p for p in params if p.get("adv")]
         vals = st.get("settings") or {}
         if main:
-            f = ParamForm(main, vals, "setup.setting")
+            f = ParamForm(main, vals, "setup.setting", simple=mode.simple())
             f.changed.connect(self._setting)
             self.holder.addWidget(f)
-        if adv:
+        if adv and not mode.simple():          # (Simple mode: the essentials only)
             s = Section("Advanced settings", "setup.advanced", expanded=False)
             f = ParamForm(adv, vals, "setup.setting")
             f.changed.connect(self._setting)

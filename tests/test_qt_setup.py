@@ -168,3 +168,20 @@ def test_the_filled_in_setup_panel_is_legible(bracket, name):
     assert seen > 15 and not weak, weak[:6]
     cov = c.coverage()
     assert cov["complete"], (cov["unnamed_widgets"][:3], cov["unlabelled"][:3], cov["no_pointer_cursor"][:3])
+
+
+def test_loads_and_gravity_are_drawn_as_arrows(bracket):
+    c = bracket
+    v = c.win.view
+    c.do("setup.bc_add", {"type": "fixed_support", "faces": c.holes, "name": "Bolts"})
+    assert len(v.arrow_actors) == 0                                                  # (a support carries no arrow: its faces are tinted)
+    c.do("setup.bc_add", {"type": "force", "faces": c.front, "name": "Camera"})
+    assert len(v.arrow_actors) == 1                                                  # the load, along its direction
+    b = v.arrow_actors[0].GetBounds()
+    assert b[1] - b[0] > b[3] - b[2]                                                 # the force is along x: the arrow is longest in x
+    c.widget_do("setup.setting.gravity", "set", "-z")
+    assert len(v.arrow_actors) == 2 and any("Gravity" in la.GetInput() for la in v.label_actors)
+    c.widget_do("setup.setting.gravity", "set", "off")
+    assert len(v.arrow_actors) == 1
+    c.do("step.go", {"step": "mesh"})
+    assert len(v.arrow_actors) == 0                                                  # (gone with the step)

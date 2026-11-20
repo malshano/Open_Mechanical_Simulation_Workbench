@@ -132,8 +132,10 @@ class Engine(QObject):
         self.changed.emit()
 
     # ------------------------------------------------------------------ what the views draw
-    def mesh_payload(self, axis: str | None, frac: float, color: str):
+    def mesh_payload(self, axis: str | None, frac: float, color: str, poor: float | None = None):
         pr = self.project()
+        if poor is not None:                  # only the cells below this quality, on the CAD model
+            return pr.mesh_view(None, None, False, float(poor), color)
         if axis:
             m = pr.load_mesh()
             ax = "xyz".index(axis)
