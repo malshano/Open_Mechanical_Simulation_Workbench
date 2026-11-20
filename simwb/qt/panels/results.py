@@ -9,7 +9,7 @@ import numpy as np
 from PySide6.QtCore import QBuffer, QByteArray, QIODevice, Qt
 from PySide6.QtGui import QDoubleValidator, QGuiApplication
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-                               QSpinBox, QStackedWidget, QVBoxLayout, QWidget)
+                               QSlider, QSpinBox, QStackedWidget, QVBoxLayout, QWidget)
 
 from ... import resample
 from .. import colormaps, theme
@@ -158,6 +158,20 @@ class ResultsPanel(_Panel):
         row.addWidget(auto)
         row.addWidget(true)
         v.addLayout(row)
+        v.addWidget(_h("Section"))
+        v.addWidget(_muted("Cut the part to see the inside: the field on the cut faces, for the side below the plane."))
+        w, self.section_grp, self.section_btns = _seg([("", "Off"), ("x", "X"), ("y", "Y"), ("z", "Z")], "", prefix="results.section")
+        for k, b in self.section_btns.items():
+            b.clicked.connect(lambda _=False, k=k: self._section_changed())
+            b.setToolTip("No section" if not k else f"Cut at a plane across {k.upper()}")
+        v.addWidget(w)
+        self.section_pos = wid(QSlider(Qt.Horizontal), "results.section.pos")
+        self.section_pos.setRange(0, 1000)
+        self.section_pos.setValue(500)
+        self.section_pos.setEnabled(False)
+        self.section_pos.setToolTip("Where the plane cuts the part (from one end to the other)")
+        self.section_pos.valueChanged.connect(lambda _=0: self._display_changed())
+        v.addWidget(self.section_pos)
         v.addWidget(_h("Model"))
         self.edges = wid(QCheckBox("Show the mesh edges"), "results.edges")
         self.edges.setToolTip("Draw the edges of the mesh cells on the surface")
@@ -182,6 +196,10 @@ class ResultsPanel(_Panel):
     def _display_changed(self):
         self.changed.emit()
 
+    def _section_changed(self):
+        self.section_pos.setEnabled(any(k and b.isChecked() for k, b in self.section_btns.items()))
+        self._display_changed()
+
     def request(self):
         scale = None
         try:
@@ -198,7 +216,8 @@ class ResultsPanel(_Panel):
         on = self.deform.isChecked()
         return {"field": self.field.currentText(), "cmap": self.cmap.currentText(), "reverse": self.rev.isChecked(),
                 "bands": self.bands.value(), "deform": (scale if on else 0), "animate": on and self.deform_mode.currentText() == "Animated",
-                "edges": self.edges.isChecked(), "range": rng, "minmax": self.minmax.isChecked()}
+                "edges": self.edges.isChecked(), "range": rng, "minmax": self.minmax.isChecked(),
+                "section": next(((k, self.section_pos.value() / 1000) for k, b in self.section_btns.items() if k and b.isChecked()), None)}
 
     # ------------------------------------------------------------------ the Probe tab
     def _build_probe(self):

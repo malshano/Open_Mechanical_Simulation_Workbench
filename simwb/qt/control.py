@@ -617,7 +617,9 @@ class Control(QObject):
            "deform": (B, "show the deformation", False), "edges": (B, "show the mesh edges", False),
            "animate": (B, "animate the deformation (the load applied and released)", False),
            "scale": (N, "deformation exaggeration (0 or omitted: automatic; 1 = true size)", False),
-           "range": ("array", "[lo, hi] colour range; [] for automatic", False), "minmax": (B, "label the highest and lowest values", False)},
+           "range": ("array", "[lo, hi] colour range; [] for automatic", False), "minmax": (B, "label the highest and lowest values", False),
+           "section": (S, "x|y|z: cut the part across that axis; '' (or off) for no section", False),
+           "section_pos": (N, "0..1: where the plane cuts (from one end of the part to the other)", False)},
           lambda **kw: self._results(**kw))
 
         def rp():
@@ -778,8 +780,15 @@ class Control(QObject):
         return {"color": self.win.panels["mesh"].color, "cut": self.win.panels["mesh"].axis or "off", "position": self.win.panels["mesh"].frac}
 
     def _results(self, field=None, colormap=None, reverse=None, bands=None, deform=None, edges=None, animate=None, scale=None, range=None,
-                 minmax=None):
+                 minmax=None, section=None, section_pos=None):
         panel = self.win.panels["results"]
+        if section_pos is not None:
+            self._set(self._w("results.section.pos"), "results.section.pos", int(round(float(section_pos) * 1000)))
+        if section is not None:
+            key = "" if str(section).lower() in ("", "off", "none") else str(section).lower()
+            if key not in ("", "x", "y", "z"):
+                raise ValueError("section must be x, y, z or off")
+            self._click(f"results.section.{key or 'off'}")
         for id, v in (("results.field", field), ("results.colormap", colormap), ("results.reverse", reverse), ("results.bands", bands),
                       ("results.deform", deform), ("results.edges", edges), ("results.minmax", minmax)):
             if v is not None:

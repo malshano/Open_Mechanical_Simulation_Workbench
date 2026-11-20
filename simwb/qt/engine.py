@@ -146,8 +146,16 @@ class Engine(QObject):
     def result_fields(self) -> list:
         return self.project().results().field_info()
 
-    def result_surface(self, field: str, time_index: int = -1):
-        return self.project().results().at(time_index).surface(field)
+    def result_surface(self, field: str, time_index: int = -1, section=None):
+        """The result field on the part's surface; with section=(axis 'x'|'y'|'z', fraction 0..1 of the part's extent) the part is cut there
+        and the cells on the low side are shown with the cut faces open (the inside of the part)."""
+        rs = self.project().results().at(time_index)
+        if not section:
+            return rs.surface(field)
+        axis, frac = section
+        ax = "xyz".index(axis)
+        lo, hi = float(rs.nodes[:, ax].min()), float(rs.nodes[:, ax].max())
+        return rs.clip(field, ax, lo + min(max(float(frac), 0.0), 1.0) * (hi - lo))
 
     def summary_text(self) -> str:
         return self.project().summary_text()

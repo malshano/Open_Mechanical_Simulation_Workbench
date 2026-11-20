@@ -635,7 +635,7 @@ class MainWindow(QMainWindow):
             if self.step == "results" and st["solve"].get("status") in ("done", "stale"):
                 r = self.panels["results"].request()
                 if r["field"]:
-                    p = self.engine.result_surface(r["field"])
+                    p = self.engine.result_surface(r["field"], section=r.get("section"))
                     info = next((f for f in self.panels["results"].fields if f["name"] == r["field"]), {})
                     self.view.show_geometry(False)
                     self.view.show_surface(p, name=r["field"], unit=info.get("unit", ""), cmap=r["cmap"], reverse=r["reverse"],

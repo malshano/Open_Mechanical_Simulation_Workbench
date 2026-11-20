@@ -241,3 +241,23 @@ def test_labels_on_a_result_show_four_significant_digits(ctl, solved):
     for t in texts:
         num = t.split()[1]
         assert len(num.replace(".", "").replace("-", "").replace("e", "").lstrip("0")) <= 6, t          # (not 0.00190857)
+
+
+def test_a_section_cuts_the_result_open(ctl, solved):
+    ctl.do("study.import", {"path": solved["static"]})
+    ctl.do("step.go", {"step": "results"})
+    ctl.do("results.tab", {"name": "display"})
+    eng = ctl.engine
+    full = eng.result_surface("Von Mises stress")["n_tris"]
+    cut = eng.result_surface("Von Mises stress", section=("x", 0.5))["n_tris"]
+    assert cut != full and cut > 0                                                      # the cut faces are open, the far half is gone
+    assert ctl.widget_do("results.section.pos")["enabled"] is False                     # (no section: the slider waits)
+    ctl.do("results.show", {"section": "x", "section_pos": 0.5})
+    assert ctl.widget_do("results.section.x")["value"] == {"checked": True} and ctl.widget_do("results.section.pos")["enabled"] is True
+    assert ctl.win.panels["results"].request()["section"] == ("x", 0.5)
+    ctl.do("results.show", {"section_pos": 0.2})
+    assert ctl.win.panels["results"].request()["section"] == ("x", 0.2)
+    ctl.do("results.show", {"section": "off"})
+    assert ctl.win.panels["results"].request()["section"] is None and ctl.widget_do("results.section.pos")["enabled"] is False
+    with pytest.raises(ValueError, match="section must be"):
+        ctl.do("results.show", {"section": "w"})
