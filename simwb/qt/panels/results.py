@@ -17,6 +17,7 @@ from ..charts import HBar, LineChart
 from ..forms import fmt_num
 from ..ids import wid
 from .common import KPI, ClickLabel, _h, _muted, _Panel, _seg, clear_layout
+from .flowtools import FlowTools
 
 
 def _item() -> QFrame:
@@ -31,7 +32,7 @@ def _tone_sf(sf: float):
 
 
 class ResultsPanel(_Panel):
-    TABS = [("summary", "Summary"), ("display", "Display"), ("probe", "Probe"), ("checks", "Checks")]
+    TABS = [("summary", "Summary"), ("display", "Display"), ("flow", "Flow"), ("probe", "Probe"), ("checks", "Checks")]
 
     def __init__(self, engine, parent=None):
         super().__init__(engine, parent)
@@ -57,6 +58,10 @@ class ResultsPanel(_Panel):
             self.pages[k] = lay
             self.tab_btns[k].clicked.connect(lambda _=False, i=i: self.stack.setCurrentIndex(i))
         self._build_display()
+        self.flow = FlowTools()
+        self.flow.changed.connect(self._display_changed)
+        self.pages["flow"].addWidget(self.flow)
+        self.tab_btns["flow"].setVisible(False)           # (flow and cooling studies only)
         self._build_probe()
         self.v.addStretch(1)
 
@@ -126,12 +131,16 @@ class ResultsPanel(_Panel):
         row.addWidget(QLabel("to"))
         row.addWidget(self.rmax)
         v.addLayout(row)
-        v.addWidget(_h("Deformation"))
+        self.deform_box = QWidget()          # (only for results that deform: a flow or a temperature field does not)
+        dv = QVBoxLayout(self.deform_box)
+        dv.setContentsMargins(0, 0, 0, 0)
+        dv.setSpacing(8)
+        dv.addWidget(_h("Deformation"))
         self.deform = wid(QCheckBox("Show the deformation"), "results.deform")
         self.deform.setChecked(True)
         self.deform.setToolTip("Draw the part as it deforms (exaggerated so that it can be seen)")
         self.deform.toggled.connect(lambda _=False: self._display_changed())
-        v.addWidget(self.deform)
+        dv.addWidget(self.deform)
         row = QHBoxLayout()
         self.deform_mode = wid(QComboBox(), "results.deform_mode")
         self.deform_mode.addItems(["End state", "Animated"])
@@ -139,7 +148,7 @@ class ResultsPanel(_Panel):
         self.deform_mode.currentIndexChanged.connect(lambda _=0: self._display_changed())
         row.addWidget(QLabel("As"))
         row.addWidget(self.deform_mode, 1)
-        v.addLayout(row)
+        dv.addLayout(row)
         row = QHBoxLayout()
         self.dscale = wid(QLineEdit(), "results.deform_scale")
         self.dscale.setPlaceholderText("auto")
@@ -158,7 +167,8 @@ class ResultsPanel(_Panel):
         row.addWidget(self.dscale, 1)
         row.addWidget(auto)
         row.addWidget(true)
-        v.addLayout(row)
+        dv.addLayout(row)
+        v.addWidget(self.deform_box)
         v.addWidget(_h("Section"))
         self.section_hint = _muted("Cut the part to see the inside: the field on the cut faces, for the side below the plane.")
         v.addWidget(self.section_hint)
@@ -219,6 +229,7 @@ class ResultsPanel(_Panel):
         return {"field": self.field.currentText(), "cmap": self.cmap.currentText(), "reverse": self.rev.isChecked(),
                 "bands": self.bands.value(), "deform": (scale if on else 0), "animate": on and self.deform_mode.currentText() == "Animated",
                 "edges": self.edges.isChecked(), "range": rng, "minmax": self.minmax.isChecked(),
+                "flow": self.flow.request() if self.tab_btns["flow"].isVisibleTo(self) else None,
                 "section": next(((k, self.section_pos.value() / 1000) for k, b in self.section_btns.items() if k and b.isChecked()), None)}
 
     # ------------------------------------------------------------------ the Probe tab
@@ -396,7 +407,7 @@ class ResultsPanel(_Panel):
             return
         items = []
         t = theme.tokens()
-        if self.minmax.isChecked():
+        if self.minmax.isChecked() and self.view.overlay_info.get("name") != "Object":      # (a grey object under flow tools has no values to label)
             ex = self.view.extrema()
             if ex:
                 u = self.view.overlay_info.get("unit", "")
@@ -428,6 +439,12 @@ class ResultsPanel(_Panel):
             self.field.blockSignals(False)
         self.fields = infos
         flow = st["study"] in ("external_aero", "cht_enclosure")
+        self.tab_btns["flow"].setVisible(flow and bool(infos))
+        if flow and infos:
+            self.flow.set_fields(infos, self.engine.flow_defaults())
+        elif self.stack.currentIndex() == 2:
+            self.tab_btns["summary"].click()
+        self.deform_box.setVisible(any(f["name"] == "Total deformation" or f["name"].startswith("Mode ") for f in infos))
         self.section_hint.setText("Cut through the air to see the flow: the field on the plane, with the half of the object below it. "
                                   "Off draws the object alone." if flow else
                                   "Cut the part to see the inside: the field on the cut faces, for the side below the plane.")

@@ -213,5 +213,69 @@ class Engine(QObject):
         plane = resample.plane_payload(rs, field, ax, pos, box, 0) if box else rs.slice(field, ax, pos)
         return merge_payloads(plane, obj)
 
+    # ------------------------------------------------------------------ flow tools: vortex surfaces, volume, arrows, particle paths
+    def flow_object(self, field: str, time_index: int = -1):
+        """The object (or the solid parts) of a flow result coloured by a field, whole."""
+        rs = self.project().results().at(time_index)
+        s = self._flow_summary()
+        return rs.surface(field, groups=s.get("default_groups") or None, hide_regions=tuple(s.get("default_hidden_regions") or ()))
+
+    def flow_defaults(self) -> dict:
+        """What the Flow tab starts from: the keep-clear-of-walls distance of the vortex surfaces (mm, 2 % of the reference length) and
+        the free-stream speed."""
+        s = self._flow_summary()
+        L = (s.get("coefficients") or {}).get("L_ref_m")
+        return {"gap_mm": float(f"{L * 20:.2g}") if L else 0.0, "free_stream": float(s.get("speed_m_s") or 0.0)}
+
+    def flow_layers(self, tools: dict, time_index: int = -1) -> dict:
+        """The payloads of the flow tools that are on. tools: {region 'object'|'all', res, iso {on, k, color, gap (mm), smooth}, volume {on, field},
+        vectors {on, axis, frac, n}, streams {on, n, seed 'upstream'|'everywhere', steps}}. A region is a box: around the object, or the
+        whole air. Results are kept for the same request."""
+        pr = self.project()
+        rs = pr.results().at(time_index)
+        s = self._flow_summary()
+        hide = ()          # (the regions hidden for the surface picture are the air of a cooling study: the samplers need it)
+        walls = list(s.get("default_groups") or [])
+        domain = np.concatenate([rs.nodes.min(0), rs.nodes.max(0)]).tolist()
+        box = (self._flow_box(rs, 5.0, 12.0) if tools.get("region", "object") == "object" else None) or domain
+        res = int(tools.get("res", 96))
+        base = (self.pid, id(rs), tuple(np.round(box, 6)), res)
+        cache = self.__dict__.setdefault("_flow_cache", {})
+
+        def memo(key, fn):
+            k = base + key
+            if k not in cache:
+                if len(cache) > 10:
+                    cache.clear()
+                cache[k] = fn()
+            return cache[k]
+        out = {"box": box, "free_stream": float(s.get("speed_m_s") or 0.0)}
+        iso = tools.get("iso") or {}
+        if iso.get("on") and "Q-criterion" in rs.fields:
+            qmax = memo(("qmax",), lambda: max(f["max"] for f in rs.field_info() if f["name"] == "Q-criterion"))
+            level = qmax * 10 ** (-float(iso.get("k", 48)) / 10.0)
+            cf = iso.get("color") if iso.get("color") in rs.fields else None
+            gap, sm = float(iso.get("gap", 0.0)), int(iso.get("smooth", 1))
+            out["iso"] = memo(("iso", round(level, 12), cf, gap, sm), lambda: rs.iso(
+                "Q-criterion", level, cf, hide_regions=hide, wall_groups=walls, wall_gap=max(0.0, gap) / 1000.0, smooth=min(max(sm, 0), 3)))
+            out["iso_level"] = level
+        vol = tools.get("volume") or {}
+        if vol.get("on") and vol.get("field") in rs.fields:
+            out["volume"] = memo(("vol", vol["field"]), lambda: resample.volume_payload(rs, vol["field"], box, res, hide))
+        vec = tools.get("vectors") or {}
+        if vec.get("on") and "Velocity" in rs.fields:
+            ax = "xyz".index(vec.get("axis", "y"))
+            pos = box[ax] + min(max(float(vec.get("frac", 0.5)), 0.0), 1.0) * (box[3 + ax] - box[ax])
+            n = int(vec.get("n", 24))
+            out["vectors"] = memo(("vec", ax, round(pos, 6), n), lambda: resample.vector_payload(rs, ax, pos, box, n, "Velocity", hide))
+        st = tools.get("streams") or {}
+        if st.get("on") and "Velocity" in rs.fields:
+            u = np.asarray(s.get("U_inf") or [1.0, 0.0, 0.0], float)
+            seed = "everywhere" if st.get("seed") == "everywhere" else "upstream"
+            out["paths"] = memo(("par", int(st.get("n", 800)), int(st.get("steps", 160)), seed, tuple(np.round(u, 6))),
+                                lambda: resample.particle_paths(rs, box, min(res, 96), int(st.get("n", 800)), int(st.get("steps", 160)), seed,
+                                                                (u / (np.linalg.norm(u) or 1.0)).tolist(), hide_regions=hide))
+        return out
+
     def summary_text(self) -> str:
         return self.project().summary_text()

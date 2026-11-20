@@ -626,7 +626,18 @@ class Control(QObject):
             if not eng.pid:
                 raise ValueError("No study is open")
             return win.panels["results"]
-        R("results.tab", "Show a tab of the results step: summary, display, probe or checks.", {"name": (S, "tab", True)},
+        R("results.flow", "Flow and cooling studies: switch on the flow tools (vortex surfaces, volume cloud, arrows, particle paths) and set them. Omitted arguments stay.",
+          {"region": (S, "object|all", False), "grid": (N, "48|64|96|128", False),
+           "iso": (B, "vortex surfaces (Q-criterion) on/off", False), "iso_k": (N, "2..60: weaker vortices shown", False), "iso_color": (S, "field the surfaces are coloured by", False),
+           "iso_gap": (N, "keep clear of walls, mm", False), "iso_smooth": (N, "0..3", False),
+           "volume": (B, "volume rendering on/off", False), "volume_field": (S, "field of the cloud", False), "volume_density": (N, "0.5..30", False),
+           "volume_style": (S, "map|smoke", False),
+           "vectors": (B, "arrows on a plane on/off", False), "vectors_axis": (S, "x|y|z", False), "vectors_pos": (N, "0..1 across the region", False),
+           "vectors_n": (N, "arrows across", False),
+           "streams": (B, "particle paths on/off", False), "streams_n": (N, "particles", False), "streams_seed": (S, "upstream|everywhere", False),
+           "streams_steps": (N, "steps along each path", False)},
+          lambda **kw: self._flow(**kw))
+        R("results.tab", "Show a tab of the results step: summary, display, flow (flow and cooling studies), probe or checks.", {"name": (S, "tab", True)},
           lambda name: (self._click(f"results.tab.{name}"), {"tab": name})[1])
         R("results.pin", "Pin the value of the drawn result at a point (world coordinates, m): what a Probe click does.",
           {"x": (N, "x", True), "y": (N, "y", True), "z": (N, "z", True)}, lambda x, y, z: {"pin": rp().pin_at([x, y, z])})
@@ -805,6 +816,66 @@ class Control(QObject):
             else:
                 self._set(self._w("results.range.auto"), "results.range.auto", True)
         return {k: self._value(self._w(f"results.{k}")) for k in ("field", "colormap", "reverse", "bands", "deform", "edges", "minmax")}
+
+    def _flow(self, **kw):
+        panel = self.win.panels["results"]
+        if not panel.tab_btns["flow"].isVisibleTo(panel):
+            raise ValueError("The flow tools are for the results of flow and cooling studies")
+        f = panel.flow
+        f._quiet = True
+        try:
+            def data(combo, key):
+                i = combo.findData(key)
+                if i < 0:
+                    raise ValueError(f"{key!r} is not one of " + ", ".join(str(combo.itemData(j)) for j in range(combo.count())))
+                combo.setCurrentIndex(i)
+            for k, v in kw.items():
+                if v is None:
+                    continue
+                if k == "region":
+                    data(f.region, v)
+                elif k == "grid":
+                    data(f.res, str(int(v)))
+                elif k == "iso":
+                    f.iso_on.setChecked(bool(v))
+                elif k == "iso_k":
+                    f.iso_k.setValue(int(v))
+                elif k == "iso_color":
+                    f.iso_color.setCurrentText(str(v))
+                elif k == "iso_gap":
+                    f.iso_gap.setValue(float(v))
+                elif k == "iso_smooth":
+                    f.iso_smooth.setValue(int(v))
+                elif k == "volume":
+                    f.vol_on.setChecked(bool(v))
+                elif k == "volume_field":
+                    f.vol_field.setCurrentText(str(v))
+                elif k == "volume_density":
+                    f.vol_density.setValue(int(round(float(v) * 10)))
+                elif k == "volume_style":
+                    data(f.vol_style, v)
+                elif k == "vectors":
+                    f.vec_on.setChecked(bool(v))
+                elif k == "vectors_axis":
+                    if v not in f.vec_axis:
+                        raise ValueError("vectors_axis must be x, y or z")
+                    f.vec_axis[v].setChecked(True)
+                elif k == "vectors_pos":
+                    f.vec_pos.setValue(int(round(float(v) * 1000)))
+                elif k == "vectors_n":
+                    f.vec_n.setValue(int(v))
+                elif k == "streams":
+                    f.par_on.setChecked(bool(v))
+                elif k == "streams_n":
+                    f.par_n.setValue(int(v))
+                elif k == "streams_seed":
+                    data(f.par_seed, v)
+                elif k == "streams_steps":
+                    f.par_steps.setValue(int(v))
+        finally:
+            f._quiet = False
+        f.changed.emit()
+        return {"flow": f.request()}
 
     def _dock(self, name, visible):
         d = self.win.findChild(QDockWidget, f"dock.{name}")

@@ -641,6 +641,9 @@ class MainWindow(QMainWindow):
                     p = self.engine.result_surface(r["field"], section=r.get("section"))
                     info = next((f for f in self.panels["results"].fields if f["name"] == r["field"]), {})
                     flow = st["study"] in AIR_KINDS
+                    if flow and r.get("flow") and any(r["flow"][k]["on"] for k in ("iso", "volume", "vectors", "streams")):
+                        self._draw_flow_tools(r, info)
+                        return
                     rng = r["range"]
                     if rng is None and flow and info.get("p99", 0) > info.get("p01", 0):   # (the extremes of a flow sit at one wall point: the colours use the range of nearly all of it)
                         rng = (info["p01"], info["p99"])
@@ -671,6 +674,51 @@ class MainWindow(QMainWindow):
             self.panels[self.step].draw_marks()
         except Exception as e:  # noqa: BLE001
             self.statusBar().showMessage(f"Cannot draw: {e}", 10000)
+
+    def _draw_flow_tools(self, r: dict, info: dict):
+        """The flow tools that are on (vortex surfaces, cloud, arrows, particle paths) over the object. With vortex surfaces the object takes the
+        colour field of the surfaces; otherwise it is grey and the first tool names the colour bar."""
+        from ..results import merge_payloads
+        from . import flowdraw
+        t = r["flow"]
+        L = self.engine.flow_layers(t)
+        fields = {f["name"]: f for f in self.panels["results"].fields}
+        tab = flowdraw.table(r["cmap"], r["reverse"], r["bands"])
+        legend = None
+        self.view.set_focus(None)
+        if "iso" in L:
+            cf = t["iso"]["color"] if t["iso"]["color"] in fields else r["field"]
+            f = fields.get(cf, {})
+            surf = merge_payloads(L["iso"], self.engine.flow_object(cf))
+            rng = (f["p01"], f["p99"]) if f.get("p99", 0) > f.get("p01", 0) else None
+            self.view.show_surface(surf, name=f"Vortex surfaces, coloured by {cf}", unit=f.get("unit", ""), cmap=r["cmap"], reverse=r["reverse"],
+                                   bands=r["bands"], vrange=rng)
+            legend = True
+        else:
+            self.view.show_surface(self.engine.flow_object(r["field"]), name="Object", unit="", edges=r["edges"], solid=(0.66, 0.70, 0.76))
+        if "volume" in L:
+            f = fields.get(t["volume"]["field"], {})
+            win = flowdraw.volume_window(L["volume"], t["volume"]["field"], L["free_stream"])
+            flowdraw.add_volume(self.view, L["volume"], tab, win, t["volume"]["density"], t["volume"]["style"])
+            if not legend:
+                self.view.legend.set_scalar(t["volume"]["field"], f.get("unit", ""), win[0], win[1], tab, log=bool(L["volume"].get("log")))
+                legend = True
+        if "vectors" in L and L["vectors"]["n"]:
+            v = L["vectors"]
+            flowdraw.add_arrows(self.view, v, tab, v["min"], v["max"], 1.2 * v["h"] / (v["p95"] or v["max"] or 1.0))
+            if not legend:
+                self.view.legend.set_scalar("Speed", v.get("unit", ""), v["min"], v["max"], tab)
+                legend = True
+        if "paths" in L:
+            pth = L["paths"]
+            flowdraw.add_paths(self.view, pth, tab, pth["min"], pth["max"])
+            if not legend:
+                self.view.legend.set_scalar("Speed", pth.get("unit", ""), pth["min"], pth["max"], tab)
+                legend = True
+        self.view.overlay_info["flow_tools"] = [k for k in ("iso", "volume", "vectors", "paths") if k in L]
+        self._fit_once((self.engine.pid, "results", "tools"), "iso")
+        self.view.render()
+        self.panels["results"].draw_marks()
 
     # ------------------------------------------------------------------ pictures (for checking the look)
     def screenshot(self, path: str):

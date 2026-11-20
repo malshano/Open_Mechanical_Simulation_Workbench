@@ -4,6 +4,7 @@ import base64
 
 import numpy as np
 from qt_support import ctl  # noqa: F401
+from test_qt_results import solved  # noqa: F401
 
 from simwb.results import ResultSet, boundary_from_tets, merge_payloads
 
@@ -95,3 +96,73 @@ def test_a_label_can_be_moved_and_keeps_its_place(ctl):
     v.reset_labels()
     assert tuple(v._label_state[0]["actor"].GetDisplayOffset()) != (120, 80)
     v.set_labels([])
+
+
+# ---------------------------------------------------------------- the flow tools (vortex surfaces, cloud, arrows, particle paths)
+def _grid_payloads():
+    """Payloads like the engine's, from a small synthetic flow: arrows on a plane, particle paths, a volume."""
+    from simwb.qt.engine import resample as _r  # noqa: F401  (the helpers the engine calls)
+    from simwb.resample import _b64 as b64
+    pts = np.array([[0, 0, 0], [0.1, 0, 0], [0, 0.1, 0]], np.float32)
+    vec = np.array([[1, 0, 0], [2, 0, 0], [3, 0, 0]], np.float32)
+    arrows = {"n": 3, "h": 0.1, "positions": b64(pts), "vectors": b64(vec), "min": 1.0, "max": 3.0, "p95": 2.9, "unit": "m/s"}
+    P = np.full((2, 5, 3), np.nan, np.float32)
+    P[0, :4] = [[0, 0, 0], [0.1, 0, 0], [0.2, 0, 0], [0.3, 0, 0]]
+    P[1, :2] = [[0, 0.1, 0], [0.1, 0.1, 0]]
+    S = np.full((2, 5), np.nan, np.float32)
+    S[0, :4], S[1, :2] = 5.0, 7.0
+    paths = {"n": 2, "steps": 5, "paths": b64(P), "speed": b64(S), "min": 5.0, "max": 7.0, "unit": "m/s"}
+    data = np.zeros((4, 5, 6), np.uint8)
+    data[1:3, 1:4, 1:5] = np.arange(1, 25, dtype=np.uint8).reshape(2, 3, 4) * 10
+    vol = {"dims": [6, 5, 4], "origin": [0, 0, 0], "h": 0.1, "log": False, "lo": 0.0, "hi": 10.0, "unit": "m/s", "data": b64(data),
+           "box": [0, 0, 0, 0.5, 0.4, 0.3]}
+    return arrows, paths, vol
+
+
+def test_the_flow_drawings_go_with_the_overlay(ctl):
+    from simwb.qt import flowdraw
+    v = ctl.win.view
+    arrows, paths, vol = _grid_payloads()
+    tab = flowdraw.table("turbo", False, 0)
+    n0 = len(v.overlay_actors)
+    assert flowdraw.add_arrows(v, arrows, tab, 1.0, 3.0, 0.02) is not None
+    assert flowdraw.add_paths(v, paths, tab, 5.0, 7.0) is not None            # (a path of one point is not drawn: both here have two or more)
+    assert flowdraw.add_volume(v, vol, tab, (2.0, 9.0), 5.0, "map") is not None
+    assert flowdraw.add_volume(v, vol, tab, (2.0, 9.0), 5.0, "smoke") is not None
+    assert len(v.overlay_actors) == n0 + 4
+    v.clear_overlay()
+    assert not v.overlay_actors
+
+
+def test_the_cloud_shows_the_strongest_decades_of_a_log_field_and_the_slipstream():
+    from simwb.qt.flowdraw import volume_window
+    assert volume_window({"lo": 1e-6, "hi": 1.0, "log": True}, "Q-criterion")[0] == 1e-3          # (the top three decades)
+    assert volume_window({"lo": 0.0, "hi": 30.0, "log": False}, "Velocity", free_stream=10.0) == (11.5, 30.0)   # (faster than the free stream)
+    assert volume_window({"lo": 0.0, "hi": 30.0, "log": False}, "Pressure") == (0.0, 30.0)
+
+
+def test_the_flow_tab_only_exists_for_flow_studies_and_deformation_only_for_results_that_deform(ctl, solved):
+    ctl.do("study.import", {"path": solved["static"]})
+    ctl.do("step.go", {"step": "results"})
+    p = ctl.win.panels["results"]
+    assert not p.tab_btns["flow"].isVisibleTo(p) and not p.deform_box.isHidden()                   # a bracket deforms
+    ctl.do("study.import", {"path": solved["heat"]})
+    ctl.do("step.go", {"step": "results"})
+    ctl._settle()
+    assert p.deform_box.isHidden()                                                                # a temperature field does not
+    import pytest
+    with pytest.raises(Exception, match="flow and cooling"):
+        ctl.do("results.flow", {"iso": True})
+
+
+def test_the_flow_tools_follow_the_fields_of_the_result(ctl):
+    from simwb.qt.panels.flowtools import FlowTools
+    f = FlowTools()
+    f.set_fields([{"name": "Velocity", "max": 12.0}, {"name": "Pressure", "max": 5.0}], {"gap_mm": 0.0, "free_stream": 10.0})
+    assert not f.iso_box.isVisibleTo(f)                                                            # no Q-criterion: no vortex surfaces
+    assert f.request()["volume"]["field"] == "Velocity" and not f.any_on()
+    f.set_fields([{"name": "Velocity", "max": 12.0}, {"name": "Q-criterion", "max": 1000.0}], {"gap_mm": 1.2, "free_stream": 10.0})
+    assert f.iso_box.isVisibleTo(f) and f.request()["iso"]["gap"] == 1.2 and f.request()["volume"]["field"] == "Q-criterion"
+    assert "Q = " in f.iso_note.text()
+    f.iso_on.setChecked(True)
+    assert f.any_on() and f.request()["iso"]["on"]

@@ -106,11 +106,11 @@ plus the toolbar and application bar. Status: ✅ done in the Qt app · 🟡 par
 | Colours: map, reverse, bands | ✅ | - |
 | Range: auto / manual, histogram with drag-to-set | 🟡 (auto / manual boxes; no histogram with drag-to-set) | results |
 | Model: surface opacity, edges, hide parts, hide air | 🟡 (edges) | results |
-| Deformation: animated / end state / off, scale, auto, true size ×1, outline of the undeformed part | 🟡 (animated / end state / off, scale, auto, true size; no outline of the undeformed part) | results |
-| Min / max labels on the model | ✅ | results |
+| Deformation: animated / end state / off, scale, auto, true size ×1, outline of the undeformed part | 🟡 (animated / end state / off, scale, auto, true size; no outline of the undeformed part; the controls are hidden when nothing deforms, as in flow and temperature results) | results |
+| Min / max labels on the model (they can be dragged with the mouse) | ✅ | results |
 | Probe: click points, pinned values list | ✅ (Probe tab: toggle, pinned values, labels) | results (+ viewtools) |
 | Line plot: pick two points / min → max, hover marker, copy data | ✅ (pick two points, Min to max, hover value, copy data) | results (+ viewtools) |
-| Contour planes (CFD); iso surfaces; vectors; streamlines; particles; volume rendering | ⬜ | results |
+| Flow tools (CFD): cut plane (Section), vortex surfaces (Q-criterion: level, colour, keep clear of walls, smoothing), volume rendering (field, density, colour map / smoke), vector arrows on a plane, particle paths | ✅ / 🟡 (paths are not animated as in the web version; no custom scale range per tool) | results |
 | Export: Report (HTML), CSV table, VTK (ParaView) | ✅ (report, CSV, VTK) | results |
 | Mesh sensitivity, three-level check, model assumptions | 🟡 (assumptions and the Checks tab; mesh check run) | results |
 | Section along x/y/z while looking at results | ✅ (Display tab: axis and position; a control action) | viewtools |

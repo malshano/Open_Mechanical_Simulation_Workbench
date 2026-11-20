@@ -1,0 +1,208 @@
+"""The Flow tab of the results step (flow and cooling studies): the ways of looking at a flow that the web version has - vortex surfaces
+(Q-criterion), volume rendering, vector arrows on a plane and particle paths. Every tool has its own switch and they can be combined; the
+object is drawn in grey under them. Plain widgets with ids (results.flow.*), so that the control API and the tests reach every one."""
+from __future__ import annotations
+
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QHBoxLayout, QLabel, QSlider, QSpinBox, QVBoxLayout, QWidget)
+
+from ..ids import wid
+from .common import _h, _muted, _seg
+
+
+class FlowTools(QWidget):
+    changed = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.infos: list = []
+        self.defaults = {"gap_mm": 0.0, "free_stream": 0.0}
+        self._names = None
+        self._names_before = None
+        self._quiet = False               # (set while several controls are set at once: one redraw at the end)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 6, 0, 0)
+        v.setSpacing(8)
+        v.addWidget(_muted("Ways of looking at the flow. Switch on one or several: they are drawn together over the object (grey)."))
+        # ---- the region
+        v.addWidget(_h("Region"))
+        row = QHBoxLayout()
+        self.region = self._combo("results.flow.region", [("object", "Around the object"), ("all", "Whole air box")],
+                                  "The box the tools look at: close around the object and its wake, or all the air")
+        self.res = self._combo("results.flow.grid", [(str(n), f"Grid {n}") for n in (48, 64, 96, 128)],
+                               "Grid points along the longest side of the region: more is finer and slower")
+        self.res.setCurrentIndex(2)
+        row.addWidget(self.region, 1)
+        row.addWidget(self.res)
+        v.addLayout(row)
+        # ---- vortex surfaces
+        self.iso_box = QWidget()
+        iv = QVBoxLayout(self.iso_box)
+        iv.setContentsMargins(0, 0, 0, 0)
+        iv.setSpacing(6)
+        iv.addWidget(_h("Vortex surfaces (turbulence)"))
+        iv.addWidget(_muted("Surfaces of equal Q-criterion wrap the vortex cores: rotation beats strain there."))
+        self.iso_on = self._check("results.flow.iso.on", "Show vortex surfaces", "Draw the surfaces of the Q-criterion")
+        iv.addWidget(self.iso_on)
+        self.iso_k = self._slider("results.flow.iso.k", 2, 60, 48, "Weaker vortices shown: to the right, weaker (smaller) vortices appear too")
+        iv.addLayout(self._row("Weaker vortices shown", self.iso_k))
+        self.iso_note = _muted("")
+        self.iso_note.setObjectName("muted")
+        iv.addWidget(self.iso_note)
+        self.iso_color = self._combo("results.flow.iso.color", [], "The field the surfaces are coloured by")
+        iv.addLayout(self._row("Coloured by", self.iso_color))
+        self.iso_gap = QDoubleSpinBox()
+        wid(self.iso_gap, "results.flow.iso.gap")
+        self.iso_gap.setRange(0.0, 500.0)
+        self.iso_gap.setDecimals(1)
+        self.iso_gap.setSingleStep(0.5)
+        self.iso_gap.setSuffix(" mm")
+        self.iso_gap.setToolTip("Leave out the surfaces this close to the walls: the shear of the boundary layer gives a large Q there too and would hide the vortices")
+        self.iso_gap.valueChanged.connect(lambda *_: self._emit())
+        iv.addLayout(self._row("Keep clear of walls", self.iso_gap))
+        self.iso_smooth = QSpinBox()
+        wid(self.iso_smooth, "results.flow.iso.smooth")
+        self.iso_smooth.setRange(0, 3)
+        self.iso_smooth.setValue(1)
+        self.iso_smooth.setToolTip("Smoothing passes of the surfaces (0 = as the mesh made them)")
+        self.iso_smooth.valueChanged.connect(lambda *_: self._emit())
+        iv.addLayout(self._row("Smoothing", self.iso_smooth))
+        v.addWidget(self.iso_box)
+        # ---- volume rendering
+        v.addWidget(_h("Volume rendering"))
+        v.addWidget(_muted("The whole flow as a see-through cloud: colour and opacity follow the value, so wakes and slipstreams show in 3D."))
+        self.vol_on = self._check("results.flow.volume.on", "Show the cloud", "Volume rendering of a field")
+        v.addWidget(self.vol_on)
+        self.vol_field = self._combo("results.flow.volume.field", [], "The field the cloud shows")
+        v.addLayout(self._row("Field", self.vol_field))
+        self.vol_density = self._slider("results.flow.volume.density", 5, 300, 50, "Density: higher is a thicker cloud")
+        v.addLayout(self._row("Density", self.vol_density))
+        self.vol_style = self._combo("results.flow.volume.style", [("map", "Colour map"), ("smoke", "Smoke")],
+                                     "Colour map: the colours of the scale. Smoke: one colour that thickens where the value is high")
+        v.addLayout(self._row("Look", self.vol_style))
+        # ---- vector arrows
+        v.addWidget(_h("Vector arrows"))
+        v.addWidget(_muted("Arrows of the flow on a plane, pointing the way the air moves, coloured by speed."))
+        self.vec_on = self._check("results.flow.vectors.on", "Show arrows", "Arrows of the velocity on a plane")
+        v.addWidget(self.vec_on)
+        w, self.vec_axis_grp, self.vec_axis = _seg([("x", "X"), ("y", "Y"), ("z", "Z")], "y", prefix="results.flow.vectors.axis")
+        for k, b in self.vec_axis.items():
+            b.setToolTip(f"The plane across {k.upper()}")
+            b.clicked.connect(lambda *_: self._emit())
+        v.addLayout(self._row("Plane across", w))
+        self.vec_pos = self._slider("results.flow.vectors.pos", 0, 1000, 500, "Where the plane cuts the region (from one side to the other)")
+        v.addLayout(self._row("Position", self.vec_pos))
+        self.vec_n = QSpinBox()
+        wid(self.vec_n, "results.flow.vectors.n")
+        self.vec_n.setRange(4, 80)
+        self.vec_n.setValue(24)
+        self.vec_n.setToolTip("Arrows across the region")
+        self.vec_n.valueChanged.connect(lambda *_: self._emit())
+        v.addLayout(self._row("Arrows across", self.vec_n))
+        # ---- particle paths
+        v.addWidget(_h("Particle paths"))
+        v.addWidget(_muted("Paths of particles carried by the flow (streamlines), coloured by speed."))
+        self.par_on = self._check("results.flow.streams.on", "Show paths", "Streamlines of the velocity")
+        v.addWidget(self.par_on)
+        self.par_n = QSpinBox()
+        wid(self.par_n, "results.flow.streams.n")
+        self.par_n.setRange(50, 6000)
+        self.par_n.setSingleStep(100)
+        self.par_n.setValue(800)
+        self.par_n.setToolTip("Number of particles")
+        self.par_n.valueChanged.connect(lambda *_: self._emit())
+        v.addLayout(self._row("Particles", self.par_n))
+        self.par_seed = self._combo("results.flow.streams.seed", [("upstream", "Upstream face"), ("everywhere", "Everywhere")],
+                                    "Where the particles start: across the upstream face of the region, or anywhere in the air")
+        v.addLayout(self._row("Start", self.par_seed))
+        self.par_steps = QSpinBox()
+        wid(self.par_steps, "results.flow.streams.steps")
+        self.par_steps.setRange(20, 400)
+        self.par_steps.setSingleStep(20)
+        self.par_steps.setValue(160)
+        self.par_steps.setToolTip("Steps along each path: more = longer paths")
+        self.par_steps.valueChanged.connect(lambda *_: self._emit())
+        v.addLayout(self._row("Length", self.par_steps))
+        v.addStretch(1)
+        self.iso_k.valueChanged.connect(lambda _=0: self._iso_note())
+
+    def _emit(self):
+        if not self._quiet:
+            self.changed.emit()
+
+    # ------------------------------------------------------------------ small builders
+    def _combo(self, id_: str, items: list, tip: str) -> QComboBox:
+        c = wid(QComboBox(), id_)
+        for key, text in items:
+            c.addItem(text, key)
+        c.setToolTip(tip)
+        c.currentIndexChanged.connect(lambda *_: self._emit())
+        return c
+
+    def _check(self, id_: str, text: str, tip: str) -> QCheckBox:
+        c = wid(QCheckBox(text), id_)
+        c.setToolTip(tip)
+        c.toggled.connect(lambda *_: self._emit())
+        return c
+
+    def _slider(self, id_: str, lo: int, hi: int, val: int, tip: str) -> QSlider:
+        s = wid(QSlider(Qt.Horizontal), id_)
+        s.setRange(lo, hi)
+        s.setValue(val)
+        s.setToolTip(tip)
+        s.setTracking(False)               # (one redraw when the handle is let go, not one per pixel: a volume takes a moment)
+        s.valueChanged.connect(lambda *_: self._emit())
+        return s
+
+    @staticmethod
+    def _row(label: str, w) -> QHBoxLayout:
+        r = QHBoxLayout()
+        lab = QLabel(label)
+        lab.setMinimumWidth(110)
+        r.addWidget(lab)
+        r.addWidget(w, 1)
+        return r
+
+    # ------------------------------------------------------------------ what the results offer
+    def set_fields(self, infos: list, defaults: dict):
+        """The fields of the result: the colour and cloud choices follow them; the vortex tools only exist with a Q-criterion field."""
+        names = [f["name"] for f in infos]
+        self.infos, self.defaults = infos, defaults
+        has_q = "Q-criterion" in names
+        self.iso_box.setVisible(has_q)
+        if names != self._names:
+            self._names_before, self._names = self._names, names
+            new_q = has_q and not (self._names_before is not None and "Q-criterion" in self._names_before)
+            for combo, pick in ((self.iso_color, "Velocity"), (self.vol_field, "Q-criterion" if has_q else "Velocity")):
+                cur = combo.currentText()
+                if combo is self.vol_field and new_q:          # (a result with turbulence quantities starts the cloud on them)
+                    cur = ""
+                combo.blockSignals(True)
+                combo.clear()
+                for n in names:
+                    combo.addItem(n, n)
+                combo.setCurrentText(cur if cur in names else (pick if pick in names else (names[0] if names else "")))
+                combo.blockSignals(False)
+            self.iso_gap.blockSignals(True)
+            self.iso_gap.setValue(float(defaults.get("gap_mm") or 0.0))
+            self.iso_gap.blockSignals(False)
+        self._iso_note()
+
+    def _iso_note(self):
+        q = next((f for f in self.infos if f["name"] == "Q-criterion"), None)
+        if q and q.get("max"):
+            self.iso_note.setText(f"Q = {q['max'] * 10 ** (-self.iso_k.value() / 10.0):.3g} 1/s²")
+
+    def request(self) -> dict:
+        axis = next((k for k, b in self.vec_axis.items() if b.isChecked()), "y")
+        return {"region": self.region.currentData(), "res": int(self.res.currentData()),
+                "iso": {"on": self.iso_on.isChecked() and self.iso_box.isVisibleTo(self), "k": self.iso_k.value(), "color": self.iso_color.currentText(),
+                        "gap": self.iso_gap.value(), "smooth": self.iso_smooth.value()},
+                "volume": {"on": self.vol_on.isChecked(), "field": self.vol_field.currentText(), "density": self.vol_density.value() / 10.0,
+                           "style": self.vol_style.currentData()},
+                "vectors": {"on": self.vec_on.isChecked(), "axis": axis, "frac": self.vec_pos.value() / 1000.0, "n": self.vec_n.value()},
+                "streams": {"on": self.par_on.isChecked(), "n": self.par_n.value(), "seed": self.par_seed.currentData(), "steps": self.par_steps.value()}}
+
+    def any_on(self) -> bool:
+        r = self.request()
+        return any(r[k]["on"] for k in ("iso", "volume", "vectors", "streams"))

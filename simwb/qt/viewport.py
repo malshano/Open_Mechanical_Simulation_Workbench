@@ -770,9 +770,10 @@ class Viewport(QWidget):
     # ------------------------------------------------------------------ a field on a surface
     def show_surface(self, p: dict, *, name: str = "", unit: str = "", cmap: str = "turbo", reverse: bool = False,
                      bands: int = 0, vrange=None, edges: bool = False, deform: float | None = None, fixed_quality: bool = False,
-                     animate: bool = False):
+                     animate: bool = False, solid=None):
         """A surface payload {positions, indices, values, per, [categories, present, scale, disp, disp_kind]} coloured by
-        its values. vrange: (lo, hi) or None for the payload's own; fixed_quality: the red-is-bad scale of cell quality."""
+        its values. vrange: (lo, hi) or None for the payload's own; fixed_quality: the red-is-bad scale of cell quality. solid: (r, g, b) draws it
+        in that colour instead (the object, when a flow tool shows its own field); no colour bar then."""
         self.clear_overlay()
         if name != self._shown_name:
             self._shown_name = name
@@ -847,7 +848,9 @@ class Viewport(QWidget):
             m.SetScalarModeToUseCellData()
         else:
             m.SetScalarModeToUsePointData()
-        act = self._actor(pd, mapper=m)
+        if solid is not None:
+            m.ScalarVisibilityOff()
+        act = self._actor(pd, mapper=m, color=solid)
         act.GetProperty().SetEdgeVisibility(1 if edges else 0)
         act.GetProperty().SetLineWidth(1.0)
         # (flat per-face shading on the CAD facets, so the shape reads as a model)
@@ -855,7 +858,9 @@ class Viewport(QWidget):
         self.ren.AddActor(act)
         self.overlay_actors.append(act)
         self._anim_poly = pd
-        if cats:
+        if solid is not None:
+            self.legend.clear()
+        elif cats:
             used = [cats[i] for i in (p.get("present") or range(len(cats))) if 0 <= i < len(cats)]
             self.legend.set_categories(name or "Region", used)
         else:

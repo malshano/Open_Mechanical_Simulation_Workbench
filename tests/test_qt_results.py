@@ -117,9 +117,10 @@ def test_the_tabs_show_their_pages(ctl, solved):
     c = open_results(ctl, solved, "static")
     stack = c.win.panels["results"].stack
     assert stack.currentIndex() == 0 and c.widget_do("results.tab.summary")["value"] == {"checked": True}
-    for i, name in enumerate(("summary", "display", "probe", "checks")):
+    for i, name in ((0, "summary"), (1, "display"), (3, "probe"), (4, "checks")):          # (the Flow tab, number 2, is for flow studies)
         c.do("results.tab", {"name": name})
         assert stack.currentIndex() == i
+    assert c.widget_do("results.tab.flow")["visible"] is False                          # (a bracket has no flow tools)
     assert c.widget_do("results.field")["visible"] is False                           # (on the Display tab, not shown now)
     c.do("results.tab", {"name": "display"})
     assert c.widget_do("results.field")["visible"] is True
