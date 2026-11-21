@@ -1,5 +1,5 @@
-"""The tools that drive the desktop window write files only inside the workspace or the temp folder (a model may have been steered
-by text in a study); a person or the REST window control is not limited."""
+"""The tools that drive the desktop window name files only inside the workspace or the temp folder, and only the kinds the workbench
+makes (a model may have been steered by text in a study); a person or the REST window control is not limited."""
 import tempfile
 from pathlib import Path
 
@@ -19,7 +19,10 @@ def test_writes_outside_the_workspace_are_refused(window):
     outside = Path.home() / "Startup" / "x.png"
     for action, args in [("view.picture", {"path": str(outside)}), ("study.export", {"path": str(outside.with_suffix('.zip'))}),
                          ("results.export", {"format": "csv", "path": str(outside.with_suffix('.csv'))}),
-                         ("study.save_as", {"location": str(outside.parent)})]:
+                         ("study.save_as", {"location": str(outside.parent)}),
+                         ("study.new", {"name": "x", "study": "static_structural", "location": str(outside.parent)}),
+                         ("study.open_folder", {"path": str(outside.parent)}),
+                         ("study.import", {"path": str(Path(P.WORKSPACE) / "a.zip"), "location": str(outside.parent)})]:
         with pytest.raises(ValueError, match="only inside the workspace"):
             tools.ui_do(None, {"action": action, "args": args})
     assert window == []                                           # (nothing reached the window)
@@ -50,3 +53,19 @@ def test_only_the_kinds_of_file_the_workbench_makes(window):
 def test_other_actions_are_untouched(window):
     tools.ui_do(None, {"action": "step.go", "args": {"step": "results"}})
     assert window and window[0][1]["action"] == "step.go"
+
+
+def test_reading_a_file_is_limited_to_the_kind_it_expects(window):
+    with pytest.raises(ValueError, match="files only"):
+        tools.ui_do(None, {"action": "geometry.import", "args": {"path": str(Path.home() / ".ssh" / "id_rsa")}})
+    with pytest.raises(ValueError, match="files only"):
+        tools.ui_do(None, {"action": "study.import", "args": {"path": str(Path(P.WORKSPACE) / "notes.txt")}})
+    tools.ui_do(None, {"action": "geometry.import", "args": {"path": str(Path.home() / "Downloads" / "wing.step")}})
+    assert window[-1][1]["action"] == "geometry.import"
+
+
+def test_an_action_not_listed_that_takes_a_path_is_refused(window):
+    with pytest.raises(ValueError, match="not allowed through the assistant"):
+        tools.ui_do(None, {"action": "some.future_action", "args": {"path": str(Path(P.WORKSPACE) / "a.txt")}})
+    with pytest.raises(ValueError, match="not allowed through the assistant"):
+        tools.ui_do(None, {"action": "view.picture", "args": {"path": str(Path(P.WORKSPACE) / "a.png"), "dest": "C:/x"}})
