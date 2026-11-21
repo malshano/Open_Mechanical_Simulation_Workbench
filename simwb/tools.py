@@ -176,8 +176,13 @@ def set_domain(pr, a):
 
 def set_mesh(pr, a):
     pr.set_mesh(preset=a.get("preset"), size_max_mm=a.get("size_max_mm"), size_min_mm=a.get("size_min_mm"),
-                refinements=a.get("refinements"), method=a.get("method"))
+                refinements=a.get("refinements"), method=a.get("method"), layers=a.get("layers"),
+                edge_refinement=a.get("edge_refinement"))
     return pr.data["mesh"]
+
+
+def mesh_metrics(pr, a):
+    return pr.mesh_metrics()
 
 
 def generate_mesh(pr, a):
@@ -520,10 +525,24 @@ TOOLS = [
                           "size_min_mm (near walls), refinements [{faces:[..], size_mm}]. method 'tet' (Gmsh "
                           "tetrahedra, the default) or 'hex' (hex-dominant snappyHexMesh: external aerodynamics round "
                           "bodies in the automatic box, no rotors, moving zones or symmetry planes; usually fewer, "
-                          "more orthogonal cells; needs OpenFOAM, takes about a minute per 100,000 cells).",
+                          "more orthogonal cells; needs OpenFOAM, takes about a minute per 100,000 cells). "
+                          "edge_refinement: true (or a factor 2-20, default 6; false = off) refines the mesh along "
+                          "sharp edges across the flow (leading / trailing edges, which carry much of the friction "
+                          "of a thin body) with a capped number of extra cells (see mesh.stats.edge_refine). layers: "
+                          "{n, growth, tolerant} wall layers; tolerant = looser limits so thin or sharp parts keep "
+                          "their layers.",
      {"type": "object", "properties": {"preset": STR, "size_max_mm": NUM, "size_min_mm": NUM, "method": STR,
+                                       "edge_refinement": {"description": "true | false | factor 2-20"},
+                                       "layers": {"type": "object"},
                                        "refinements": {"type": "array", "items": {"type": "object"}}}},
      set_mesh),
+    ("mesh_metrics", "Inspect the generated tetrahedral mesh: statistics and histograms of cell size, aspect ratio, "
+                     "growth (size jump to the neighbours), volume and quality, the cell budget (for each size band "
+                     "the share of cells and of the volume: where the cells - and the memory - are spent) and plain "
+                     "findings (abrupt size jumps, slivers, too many fine cells). Use it after generate_mesh to "
+                     "judge whether a mesh is accurate for its cell count. In the viewer the same metrics colour the "
+                     "mesh: GET /mesh/view?metric=size|aspect|growth|volume|quality.",
+     {"type": "object", "properties": {}}, mesh_metrics),
     ("generate_mesh", "Generate the mesh (waits until done). Returns cell count and quality.",
      {"type": "object", "properties": {"timeout_s": NUM}}, generate_mesh),
     ("check_setup", "Readiness checklist (errors must be fixed before solving).",
