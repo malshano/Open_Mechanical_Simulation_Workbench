@@ -371,7 +371,7 @@ $mins = [Math]::Round(((Get-Date) - $T0).TotalMinutes, 1)
 Line ''
 Line '   ╔══════════════════════════════════════════════════════════╗' Green
 C    '   ║  ' Green; C ("✓  All set in $mins minutes".PadRight(56)) White; Line '║' Green
-C    '   ║  ' Green; C 'Start it from the desktop icon (the beta desktop one is new).'.PadRight(56) Gray; Line '║' Green
+C    '   ║  ' Green; C 'Start it from a desktop icon (the beta desktop is new).'.PadRight(56) Gray; Line '║' Green
 C    '   ║  ' Green; C 'Your studies are saved where you choose.'.PadRight(56) Gray; Line '║' Green
 Line '   ╚══════════════════════════════════════════════════════════╝' Green
 Line ''
