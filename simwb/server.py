@@ -435,7 +435,8 @@ def mesh_settings(pid: str, body: dict = Body(...)):
     pr = P.open_project(pid)
     pr.set_mesh(preset=body.get("preset"), size_max_mm=body.get("size_max_mm"), size_min_mm=body.get("size_min_mm"),
                 refinements=body.get("refinements"), regions=body.get("regions"), layers=body.get("layers"),
-                defeature_mm=body["defeature_mm"] if "defeature_mm" in body else False, method=body.get("method"))
+                defeature_mm=body["defeature_mm"] if "defeature_mm" in body else False, method=body.get("method"),
+                edge_refinement=body.get("edge_refinement"))
     return pr.state()
 
 
@@ -446,8 +447,14 @@ def mesh(pid: str):
 
 @app.get("/api/projects/{pid}/mesh/view")
 def mesh_view(pid: str, clip_axis: str | None = None, clip_pos: float | None = None, hide_fluid: bool = False,
-              poor: float | None = None):
-    return P.open_project(pid).mesh_view(clip_axis, clip_pos, hide_fluid, poor)
+              poor: float | None = None, metric: str = "quality"):
+    return P.open_project(pid).mesh_view(clip_axis, clip_pos, hide_fluid, poor, metric)
+
+
+@app.get("/api/projects/{pid}/mesh/metrics")
+def mesh_metrics(pid: str):
+    """Statistics, histograms and the cell budget of the mesh (size, aspect ratio, growth, volume, quality)."""
+    return P.open_project(pid).mesh_metrics()
 
 
 @app.post("/api/projects/{pid}/solve")
