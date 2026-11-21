@@ -629,6 +629,30 @@ _PATHS = {  # action: {argument: (inside the workspace/temp required, allowed su
 _PATH_KEYS = {"path", "paths", "location", "folder", "file", "files", "dir", "directory", "target", "dest", "destination", "out"}
 
 
+def _local_path(action: str, raw) -> Path:
+    """The path as a local file or folder: not a network share (a UNC path, which makes Windows send the user's credentials to
+    that host), not a device path, not on a mapped network drive, and not an NTFS alternate data stream."""
+    import os
+    import sys
+
+    text = str(raw)
+    if "\0" in text or text.replace("/", "\\").startswith("\\\\"):
+        raise ValueError(f"{action}: a network or device path is not allowed through the assistant")
+    drive = os.path.splitdrive(text)[0]
+    if ":" in text[len(drive):]:
+        raise ValueError(f"{action}: a path with an alternate data stream is not allowed through the assistant")
+    target = Path(text).expanduser().resolve()                    # (resolve follows links: look again at where it led)
+    real = str(target)
+    if real.startswith("\\\\"):
+        raise ValueError(f"{action}: the path leads to a network location, which is not allowed through the assistant")
+    if sys.platform == "win32" and len(real) > 1 and real[1] == ":":
+        import ctypes
+
+        if ctypes.windll.kernel32.GetDriveTypeW(real[:3]) == 4:   # DRIVE_REMOTE: a mapped network drive
+            raise ValueError(f"{action}: a file on a network drive is not allowed through the assistant")
+    return target
+
+
 def _check_paths(action: str, args: dict) -> None:
     import tempfile
 
@@ -645,12 +669,14 @@ def _check_paths(action: str, args: dict) -> None:
     for key, (inside, kinds) in spec.items():
         if args.get(key) in (None, ""):
             continue                                              # (no place named: the application's own default)
-        target = Path(str(args[key])).expanduser().resolve()
+        target = _local_path(action, args[key])
         if inside and not any(target == r or r in target.parents for r in roots):
             raise ValueError(f"{action} through the assistant works only inside the workspace ({roots[0]}) or the temp folder: "
                              f"'{target}' is elsewhere. Use a place there and ask the user to move it, or let them do it from the menu.")
         if kinds is not None and target.suffix.lower() not in kinds:
             raise ValueError(f"{action} takes {', '.join(sorted(kinds))} files only (not '{target.suffix or 'no extension'}')")
+        if not inside and not target.is_file():                   # (a read: an existing ordinary file of this computer)
+            raise ValueError(f"{action}: '{target}' is not an existing file")
 
 
 def ui_do(pr, a):

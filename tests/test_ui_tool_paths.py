@@ -60,8 +60,6 @@ def test_reading_a_file_is_limited_to_the_kind_it_expects(window):
         tools.ui_do(None, {"action": "geometry.import", "args": {"path": str(Path.home() / ".ssh" / "id_rsa")}})
     with pytest.raises(ValueError, match="files only"):
         tools.ui_do(None, {"action": "study.import", "args": {"path": str(Path(P.WORKSPACE) / "notes.txt")}})
-    tools.ui_do(None, {"action": "geometry.import", "args": {"path": str(Path.home() / "Downloads" / "wing.step")}})
-    assert window[-1][1]["action"] == "geometry.import"
 
 
 def test_an_action_not_listed_that_takes_a_path_is_refused(window):
@@ -69,3 +67,27 @@ def test_an_action_not_listed_that_takes_a_path_is_refused(window):
         tools.ui_do(None, {"action": "some.future_action", "args": {"path": str(Path(P.WORKSPACE) / "a.txt")}})
     with pytest.raises(ValueError, match="not allowed through the assistant"):
         tools.ui_do(None, {"action": "view.picture", "args": {"path": str(Path(P.WORKSPACE) / "a.png"), "dest": "C:/x"}})
+
+
+def test_network_and_device_paths_are_refused(window):
+    bs = chr(92)
+    unc = bs * 2 + "attacker" + bs + "share" + bs + "wing.step"
+    dev = bs * 2 + "?" + bs + "C:" + bs + "x" + bs + "wing.step"
+    dot = bs * 2 + "." + bs + "pipe" + bs + "x.step"
+    for raw in [unc, "//attacker/share/wing.step", dev, dot]:
+        with pytest.raises(ValueError, match="network|device"):
+            tools.ui_do(None, {"action": "geometry.import", "args": {"path": raw}})
+    with pytest.raises(ValueError, match="network|device"):
+        tools.ui_do(None, {"action": "view.picture", "args": {"path": unc.replace("wing.step", "a.png")}})
+    with pytest.raises(ValueError, match="alternate data stream"):
+        tools.ui_do(None, {"action": "view.picture", "args": {"path": str(Path(P.WORKSPACE) / "a.png") + ":evil"}})
+    assert window == []
+
+
+def test_a_read_needs_an_existing_ordinary_file(window, tmp_path):
+    with pytest.raises(ValueError, match="not an existing file"):
+        tools.ui_do(None, {"action": "geometry.import", "args": {"path": str(tmp_path / "missing.step")}})
+    f = tmp_path / "wing.step"
+    f.write_text("ISO-10303-21;")
+    tools.ui_do(None, {"action": "geometry.import", "args": {"path": str(f)}})
+    assert window[-1][1]["action"] == "geometry.import"
