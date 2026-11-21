@@ -1,4 +1,5 @@
 """The Results step of the Qt window: Summary / Display / Probe / Checks, the parts bars, cautions, export, deformation, labels."""
+import re
 import importlib
 from pathlib import Path
 
@@ -72,7 +73,9 @@ def test_the_static_summary_has_the_numbers_the_bars_and_the_cautions(ctl, solve
     kp = {w["id"]: w["text"] for w in c.widgets("results.kpi.")["widgets"]}
     sm = c.engine.state()["solve"]["summary"]
     assert f"{sm['max_von_mises_MPa']:.1f} MPa" in kp["results.kpi.max_von_mises_stress"]
-    assert f"{sm['max_displacement_mm']:.4f}" in kp["results.kpi.max_deformation"]
+    # (the tile rounds to 4 decimals and drops trailing zeros - 0.069, not 0.0690 - so compare the number, not the text)
+    shown = float(re.search(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", kp["results.kpi.max_deformation"].split(":", 1)[-1]).group(0))
+    assert abs(shown - sm['max_displacement_mm']) <= 5e-5 + 1e-9 and "mm" in kp["results.kpi.max_deformation"]
     assert f"{sm['min_safety_factor']:.2f}" in kp["results.kpi.safety_factor__yield"] and "margin" in kp["results.kpi.safety_factor__yield"]   # a word, not only a colour
     assert f"{sm['mass_kg'] * 1000:.1f} g" in kp["results.kpi.mass"]
     bars = c.win.panels["results"].findChildren(__import__("simwb.qt.charts", fromlist=["HBar"]).HBar)
