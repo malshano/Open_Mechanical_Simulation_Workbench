@@ -610,8 +610,35 @@ def ui_actions(pr, a):
     return _ui("actions")
 
 
+# Operations that write a file or a folder where the caller says. Through these tools the caller is a language model, which text
+# inside a study (a part name, an imported file, a message) may have steered: so they write only inside the workspace or the
+# system temp folder, and only files of the kinds the workbench makes. (A person, or the REST window control, is not limited.)
+_WRITING = {"view.picture": ("path", {".png"}), "study.export": ("path", {".zip"}),
+            "results.export": ("path", {".csv", ".vtk", ".vtu", ".html", ".pdf", ".md", ".txt", ".json"}),
+            "study.save_as": ("location", None), "study.import": ("location", None)}
+
+
+def _check_writing(action: str, args: dict) -> None:
+    import tempfile
+
+    if action not in _WRITING:
+        return
+    key, kinds = _WRITING[action]
+    if args.get(key) in (None, ""):
+        return                                                    # (no place named: the application's own default)
+    target = Path(str(args[key])).expanduser().resolve()
+    roots = [Path(P.WORKSPACE).resolve(), Path(tempfile.gettempdir()).resolve()]
+    if not any(target == r or r in target.parents for r in roots):
+        raise ValueError(f"{action} through the assistant writes only inside the workspace ({roots[0]}) or the temp folder: "
+                         f"'{target}' is elsewhere. Write there and ask the user to move it, or let them do it from the menu.")
+    if kinds is not None and target.suffix.lower() not in kinds:
+        raise ValueError(f"{action} writes {', '.join(sorted(kinds))} files only (not '{target.suffix or 'no extension'}')")
+
+
 def ui_do(pr, a):
-    return _ui("do", {"action": a["action"], "args": a.get("args") or {}})
+    args = a.get("args") or {}
+    _check_writing(a["action"], args)
+    return _ui("do", {"action": a["action"], "args": args})
 
 
 def ui_widgets(pr, a):
