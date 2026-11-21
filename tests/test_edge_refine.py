@@ -59,6 +59,23 @@ def test_a_knife_edge_is_found_and_the_flat_transitions_are_not():
         gmsh.finalize()
 
 
+def test_edges_along_the_flow_are_left_out_and_the_cell_estimate_scales():
+    gmsh = _gmsh()
+    try:
+        gmsh.model.occ.addBox(0, 0, 0, 100, 60, 30)
+        gmsh.model.occ.synchronize()
+        ids = [t for _, t in gmsh.model.getEntities(2)]
+        assert len(gmsh_worker.sharp_edges(gmsh, ids, 1.0)) == 12
+        across = gmsh_worker.sharp_edges(gmsh, ids, 1.0, flow_axis=0)          # flow along x: the 4 edges along x go
+        assert len(across) == 8 and all(abs(x[2] - 100.0) > 1.0 for x in across)
+    finally:
+        gmsh.finalize()
+    est = gmsh_worker.edge_cells_estimate
+    assert est(0.0, 0.005, 0.03, 1.25) == 0.0 and est(1.0, 0.03, 0.03, 1.25) == 0.0
+    assert est(2.0, 0.005, 0.03, 1.25) == pytest.approx(2 * est(1.0, 0.005, 0.03, 1.25))       # linear in the length
+    assert est(1.0, 0.005, 0.03, 1.25) > est(1.0, 0.01, 0.03, 1.25) > est(1.0, 0.02, 0.03, 1.25) > 0   # finer costs more
+
+
 def test_short_edges_and_seams_are_left_out():
     gmsh = _gmsh()
     try:
@@ -70,6 +87,35 @@ def test_short_edges_and_seams_are_left_out():
         assert gmsh_worker.sharp_edges(gmsh, ids, min_length=1000.0) == []
     finally:
         gmsh.finalize()
+
+
+def test_an_l_shaped_face_does_not_confuse_the_side_of_the_face():
+    """The big face of an L-shaped prism has its centre in the notch, outside the face: a side chosen from the centre
+    gets the angles of the edges next to the notch wrong. Every edge of the prism is a 90 degree edge."""
+    gmsh = _gmsh()
+    try:
+        occ = gmsh.model.occ
+        pts = [occ.addPoint(x, y, 0) for x, y in [(0, 0), (100, 0), (100, 20), (20, 20), (20, 100), (0, 100)]]
+        lines = [occ.addLine(pts[i], pts[(i + 1) % 6]) for i in range(6)]
+        occ.extrude([(2, occ.addPlaneSurface([occ.addCurveLoop(lines)]))], 0, 0, 30)
+        occ.synchronize()
+        ids = [t for _, t in gmsh.model.getEntities(2)]
+        e = gmsh_worker.sharp_edges(gmsh, ids, min_length=1.0)
+        assert len(e) == 18                                               # 6 + 6 + 6 edges of the prism
+        assert all(abs(a - 90.0) < 1.0 for _, a, _ in e), [round(a) for _, a, _ in e]
+    finally:
+        gmsh.finalize()
+
+
+def test_only_the_edge_field_in_the_mesher_grows_back_to_the_wall_size():
+    """The size field along an edge must end at the wall size with the mesh growth ratio (not jump to the far field)."""
+    import inspect
+
+    src = inspect.getsource(gmsh_worker.task_mesh)
+    block = src[src.index('fte = fields.add("MathEval")'):][:300]
+    # a linear size with the growth ratio and NO Threshold ceiling (a SizeMax of the wall size made the whole air box
+    # wall-sized: 12 million cells)
+    assert "growth - 1.0" in block and "F{fe}" in block and "Threshold" not in block.split("use.append")[0]
 
 
 @pytest.fixture
@@ -110,6 +156,8 @@ def test_edge_refinement_setting_and_its_effect_on_the_mesh(workspace, tmp_path)
     st = pr.data["mesh"]["stats"]
     er = st["edge_refine"]
     assert er and er["edges"] >= 2 and er["min_face_angle"] < 10.0 and er["size"] < st["sizes"]["near_wall"] * 0.9
+    assert er["size_far_of_edge_field"] == pytest.approx(st["sizes"]["near_wall"])     # grows back to the wall size
+    assert er["dist_max"] > 12 * er["size"]                                           # with the growth ratio
     assert st["cells"] > base["cells"] * 1.05                                          # more cells along the edges
     assert st["cells"] < base["cells"] * 3.0                                           # (measured: about 2x on this plate)
     pr.set_mesh(edge_refinement=False)
@@ -130,3 +178,9 @@ def test_tolerant_layer_limits_reach_the_case_only_when_asked(workspace, tmp_pat
     assert re.search(r"maxFaceThicknessRatio 0\.5;", out[False]) and "nRelaxedIter" not in out[False]
     assert re.search(r"maxFaceThicknessRatio 0\.8;", out[True]) and re.search(r"nRelaxedIter\s+3;", out[True])
     assert "minDeterminant 1e-5" in out[True] and "minDeterminant 0.001" in out[False]
+    # changing only the number of layers keeps the tolerant limits
+    pr.set_mesh(layers={"n": 4, "growth": 1.2, "tolerant": True})
+    pr.set_mesh(layers={"n": 6, "growth": 1.2})
+    assert pr.data["mesh"]["layers"]["tolerant"] is True and pr.data["mesh"]["layers"]["n"] == 6
+    pr.set_mesh(layers={"n": 6, "growth": 1.2, "tolerant": False})
+    assert pr.data["mesh"]["layers"]["tolerant"] is False
