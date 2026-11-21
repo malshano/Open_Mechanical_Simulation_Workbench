@@ -629,39 +629,55 @@ _PATHS = {  # action: {argument: (inside the workspace/temp required, allowed su
 _PATH_KEYS = {"path", "paths", "location", "folder", "file", "files", "dir", "directory", "target", "dest", "destination", "out"}
 
 
+_DEVICE_NAMES = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
+
+
 def _local_path(action: str, raw) -> Path:
-    """The path as a local file or folder: not a network share (a UNC path, which makes Windows send the user's credentials to
-    that host), not a device path, not on a mapped network drive, and not an NTFS alternate data stream."""
+    """The path as a local file or folder, checked WITHOUT touching the disk until it is known to be local: it must be a full path
+    that begins with a drive letter (so not a UNC path, a device or NT object path, a path of the current drive, a relative or
+    '~' path), without alternate data streams or device names, on a drive that is not a network drive. Only then is it resolved
+    (links followed) and the result checked again, because a link may lead to a share. The caller uses the returned path, not the
+    text it was given, so what was checked is what is opened."""
     import os
+    import re
     import sys
 
     text = str(raw)
-    if "\0" in text or text.replace("/", "\\").startswith("\\\\"):
-        raise ValueError(f"{action}: a network or device path is not allowed through the assistant")
-    drive = os.path.splitdrive(text)[0]
-    if ":" in text[len(drive):]:
+    posix = sys.platform != "win32"
+    if "\0" in text or not (re.match(r"^[A-Za-z]:[\\/]", text) if not posix else text.startswith("/")):
+        raise ValueError(f"{action}: the path must be a full local path starting with a drive letter (not a network, device or "
+                         f"relative path) when it comes through the assistant")
+    lexical = os.path.normpath(text)                              # (text only: no file access yet)
+    tail = lexical[2:] if not posix else lexical
+    if ":" in tail:
         raise ValueError(f"{action}: a path with an alternate data stream is not allowed through the assistant")
-    target = Path(text).expanduser().resolve()                    # (resolve follows links: look again at where it led)
-    real = str(target)
-    if real.startswith("\\\\"):
-        raise ValueError(f"{action}: the path leads to a network location, which is not allowed through the assistant")
-    if sys.platform == "win32" and len(real) > 1 and real[1] == ":":
+    if any(part.split(".")[0].lower() in _DEVICE_NAMES for part in re.split(r"[\\/]", tail) if part):
+        raise ValueError(f"{action}: a device name in the path is not allowed through the assistant")
+    if not posix:
         import ctypes
 
-        if ctypes.windll.kernel32.GetDriveTypeW(real[:3]) == 4:   # DRIVE_REMOTE: a mapped network drive
+        if ctypes.windll.kernel32.GetDriveTypeW(lexical[:3]) == 4:   # DRIVE_REMOTE: a mapped network drive
             raise ValueError(f"{action}: a file on a network drive is not allowed through the assistant")
+    target = Path(lexical).resolve()
+    real = str(target)
+    if real.startswith(chr(92) * 2) or (not posix and (len(real) < 2 or real[1] != ":")):
+        raise ValueError(f"{action}: the path leads to a network or device location, which is not allowed through the assistant")
+    if not posix and ctypes.windll.kernel32.GetDriveTypeW(real[:3]) == 4:
+        raise ValueError(f"{action}: the path leads to a network drive, which is not allowed through the assistant")
     return target
 
 
-def _check_paths(action: str, args: dict) -> None:
+def _check_paths(action: str, args: dict) -> dict:
+    """The arguments to pass on: every path-like one replaced by the checked, resolved path (raises when one is not allowed)."""
     import tempfile
 
+    args = dict(args)
     spec = _PATHS.get(action)
     if spec is None:
         named = sorted(k for k in args if k.lower() in _PATH_KEYS)
         if named:
             raise ValueError(f"{action} takes a file or folder ({', '.join(named)}), which is not allowed through the assistant")
-        return
+        return args
     unknown = sorted(k for k in args if k.lower() in _PATH_KEYS and k not in spec)
     if unknown:
         raise ValueError(f"{action}: the argument(s) {', '.join(unknown)} are not allowed through the assistant")
@@ -677,11 +693,12 @@ def _check_paths(action: str, args: dict) -> None:
             raise ValueError(f"{action} takes {', '.join(sorted(kinds))} files only (not '{target.suffix or 'no extension'}')")
         if not inside and not target.is_file():                   # (a read: an existing ordinary file of this computer)
             raise ValueError(f"{action}: '{target}' is not an existing file")
+        args[key] = str(target)
+    return args
 
 
 def ui_do(pr, a):
-    args = a.get("args") or {}
-    _check_paths(a["action"], args)
+    args = _check_paths(a["action"], a.get("args") or {})
     return _ui("do", {"action": a["action"], "args": args})
 
 

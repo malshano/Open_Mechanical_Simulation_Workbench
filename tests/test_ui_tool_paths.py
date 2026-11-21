@@ -91,3 +91,27 @@ def test_a_read_needs_an_existing_ordinary_file(window, tmp_path):
     f.write_text("ISO-10303-21;")
     tools.ui_do(None, {"action": "geometry.import", "args": {"path": str(f)}})
     assert window[-1][1]["action"] == "geometry.import"
+
+
+def test_only_full_drive_paths_get_through(window):
+    bs = chr(92)
+    for raw in [bs + "??" + bs + "UNC" + bs + "attacker" + bs + "share" + bs + "w.step", bs + "attacker" + bs + "w.step", "w.step",
+                "~/w.step", ".." + bs + "w.step", "/attacker/share/w.step", "C:w.step"]:
+        with pytest.raises(ValueError, match="full local path"):
+            tools.ui_do(None, {"action": "geometry.import", "args": {"path": raw}})
+    assert window == []
+
+
+def test_device_names_are_refused(window):
+    for name in ["CON.png", "nul.png", "COM1.png", "aux.png"]:
+        with pytest.raises(ValueError, match="device name"):
+            tools.ui_do(None, {"action": "view.picture", "args": {"path": str(Path(P.WORKSPACE) / name)}})
+    assert window == []
+
+
+def test_the_window_gets_the_checked_path_not_the_text_given(window, tmp_path):
+    f = tmp_path / "sub" / ".." / "wing.step"
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "wing.step").write_text("ISO-10303-21;")
+    tools.ui_do(None, {"action": "geometry.import", "args": {"path": str(f)}})
+    assert window[-1][1]["args"]["path"] == str((tmp_path / "wing.step").resolve())
