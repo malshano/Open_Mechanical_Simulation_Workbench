@@ -61,17 +61,34 @@ def _via_gui(name, pid, args):
         return None
 
 
-def _content(text):
-    """The text of a tool result as MCP content; a 'SCREENSHOT: <file>' line (ui_screenshot) also attaches the picture, so that the
-    model sees it."""
-    import base64
+def _shot_file(text):
+    """The picture file named by the 'SCREENSHOT: <file>' line of a ui_screenshot result, if it is one this application made: a .png
+    inside <workspace>/.ui/shots, on a local drive. (Any other text can contain such a line, for example a part name with a line
+    break in it, so it must not be able to make this process open a file of its choosing, or reach a network path.)"""
+    import os
     import re
 
-    out = [types.TextContent(type="text", text=text)]
     m = re.search(r"^SCREENSHOT: (.+\.png)$", text, re.M)
-    if m:
+    if not m:
+        return None
+    path = m.group(1)
+    shots = os.path.normcase(os.path.normpath(str(P.WORKSPACE / ".ui" / "shots")))
+    full = os.path.normcase(os.path.normpath(path))
+    if not (os.path.isabs(path) and not path.replace("/", chr(92)).startswith(chr(92) * 2) and full.startswith(shots + os.sep)):
+        return None
+    return path
+
+
+def _content(text, name=None):
+    """The text of a tool result as MCP content; the 'SCREENSHOT: <file>' line of ui_screenshot (and only that tool) also attaches the
+    picture, so that the model sees it."""
+    import base64
+
+    out = [types.TextContent(type="text", text=text)]
+    path = _shot_file(text) if name == "ui_screenshot" else None
+    if path:
         try:
-            with open(m.group(1), "rb") as f:
+            with open(path, "rb") as f:
                 out.append(types.ImageContent(type="image", data=base64.b64encode(f.read()).decode(), mimeType="image/png"))
         except OSError:
             pass
@@ -103,7 +120,7 @@ async def call_tool(ctx, params):
     text = await asyncio.to_thread(_via_gui, name, pid, args) if T.REMOTE_GUI else None
     if text is not None:
         body = text.split("\n", 1)[1] if text.startswith("[project:") and "\n" in text else text
-        return types.CallToolResult(content=_content(text), is_error=body.startswith("ERROR"))
+        return types.CallToolResult(content=_content(text, name), is_error=body.startswith("ERROR"))
     # GUI not running: work on the local workspace in this process
     pr = None
     if name not in PROJECT_FREE or (name in PROJECT_OPTIONAL and pid):
@@ -123,7 +140,7 @@ async def call_tool(ctx, params):
     is_error = text.startswith("ERROR")
     if pr is not None:
         text = f"[project: {pr.data.get('name')} (id {pr.id})]\n" + text
-    return types.CallToolResult(content=_content(text), is_error=is_error)
+    return types.CallToolResult(content=_content(text, name), is_error=is_error)
 
 
 server = Server("simwb", version="0.1.0", instructions=SYSTEM_PROMPT, on_list_tools=list_tools,
