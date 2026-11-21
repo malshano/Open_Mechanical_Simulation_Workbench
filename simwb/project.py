@@ -3122,7 +3122,8 @@ class Project:
                     if hit.any():
                         fv[hit] = len(cats)
                         cats.append({"name": label, "color": col})
-        d = rs._tri_payload(tris, cells, "Cell size", face_vals=fv)
+        d = rs._tri_payload(tris, cells, "Quality", face_vals=fv)    # (the one field the result set carries; face_vals replaces its values:
+                                                                      # a category number per triangle)
         d["unit"] = "-"
         d["categories"] = cats
         d["present"] = [int(i) for i in np.unique(fv)] if len(fv) else []

@@ -38,13 +38,19 @@ def ctl(tmp_path, monkeypatch):
 
     app = QApplication.instance() or QApplication([])
     theme.apply(app)
+    from PySide6.QtWidgets import QMessageBox
+
+    dialogs = []                                   # (a modal box would wait for a click that never comes: record it, the test then fails instead of hanging)
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda parent, title, text, *a, **k: dialogs.append((title, str(text)))))
     eng = Engine(settings=QSettings(str(tmp_path / "s.ini"), QSettings.IniFormat))
     bridge = ChatBridge()
     win = MainWindow(eng, bridge)
     win.show()
     c = Control(win, eng, bridge, app, debug=True)
+    c.dialogs = dialogs
     win.control = c
     yield c
+    assert not dialogs, f"the window showed a warning box: {dialogs}"
     c.close()
     P.JOBS.listeners.remove(eng._on_event)
     bridge.shutdown()
