@@ -48,7 +48,16 @@ can debug the application while it runs. The window serves it on `127.0.0.1` (po
   was started with `--debug-api` (or `SIMWB_DEBUG_API=1`), and then every route to it - the REST endpoint, the tool endpoint, in-process
   calls - needs the secret of that run, checked inside the control layer itself (not only in one route). The secret is in
   `<workspace>/.ui/control.json`; the MCP server reads it from there and the model never sees it. Every use is logged. Do not enable
-  it on a shared machine.
+  it on a shared machine. Because the MCP server supplies the secret itself, **for a model connected through MCP `--debug-api` is the
+  only barrier**: do not start the window with it while an MCP client you do not trust is connected.
+* **Files named by a model.** The tools the assistant and MCP clients use (`ui_do` and the MCP tools `create_project`, `import_step`)
+  check every path before anything is touched (`simwb/tools.py`, `_check_paths`): a full local path starting with a drive letter (no
+  network, device, relative or `~` path, no links, no alternate streams), written only inside the workspace or the temp folder, in the
+  kinds of file the workbench makes, never replacing a file or one of the workbench's own files (`project.json`, `locations.json`,
+  `CLAUDE.md` ...); a file that is read must exist and be of the expected kind (CAD, `.zip`). An action not listed that takes a
+  path-like argument is refused. A person at the menus and the REST window control (`/api/ui/do`) are not limited. A saved study
+  (`.zip`) is unpacked with its entry names judged as text, an agent's settings (`.claude/`, `CLAUDE.md`, `.mcp.json`) left out and a
+  size cap; the MCP server attaches a picture only for `ui_screenshot`, from the workspace's screenshot folder.
 * Every new control must get an id (`simwb/qt/ids.py`: the `wid` property, or an object name for menu entries): `tests/test_qt_control.py`
   fails if any control is out of the API's reach.
 

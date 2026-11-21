@@ -489,3 +489,22 @@ def test_the_picking_contract_can_be_driven_and_observed(ctl):
     assert s["pick_mode"] == "face" and s["selection"] == [3, 4] and s["face_tints"] == {5: "#e4572e"}
     with pytest.raises(ValueError, match="pick mode"):
         v.set_pick_mode("edge")
+
+
+def test_every_action_parameter_that_could_name_a_file_is_covered_by_the_assistant_path_check(ctl):
+    """A new action with a path in it must be added to tools._PATHS (the check through which a model reaches the window)."""
+    import re
+
+    from simwb import tools as T
+
+    hint = re.compile(r"\bpath\b|folder|\bfiles?\b|director|\.zip|\.png|\.step|\burl\b", re.I)
+    not_a_path = {("study.example", "example")}            # (accepted only when it is in the study type's fixed list of examples)
+    for name, action in ctl.actions.items():
+        for pname, (kind, doc, _) in action.params.items():
+            if (name, pname) in not_a_path or kind in ("number", "boolean"):      # (a number or a switch cannot name a file)
+                continue
+            if pname.lower() in T._PATH_KEYS or hint.search(str(doc)) or hint.search(pname):
+                assert pname in T._PATHS.get(name, {}), f"{name}.{pname} may name a file or folder but is not in tools._PATHS"
+    for name, spec in T._PATHS.items():
+        if name in ctl.actions:
+            assert set(spec) <= set(ctl.actions[name].params), f"tools._PATHS lists arguments {name} does not have"
