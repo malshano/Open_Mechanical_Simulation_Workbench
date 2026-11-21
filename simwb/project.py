@@ -141,7 +141,7 @@ def write_claude_files(d: Path, port: int | None = None) -> None:
         port = port or int(os.environ.get("SIMWB_PORT", "8765"))
         label = studies.study(data.get("study", "")).get("label", data.get("study", ""))
         (d / "CLAUDE.md").write_text(
-            f"# Simulation study: {data.get('name', d.name)}\n\n{CLAUDE_MARK}\n\n"
+            f"# Simulation study: {_one_line(data.get('name', d.name))}\n\n{CLAUDE_MARK}\n\n"
             f"- Type: {label} (`{data.get('study')}`)\n- Folder (this one): `{d}`\n"
             f"- Made with the Mechanical Simulation Workbench (repository `{ROOT}`), a local web app at "
             f"http://127.0.0.1:{port}\n\n"
@@ -293,6 +293,55 @@ def export_project(pid: str, zip_path: str, keep_results: bool = True) -> Path:
     return out
 
 
+IMPORT_MAX_BYTES = 100 * 2 ** 30          # a saved study with its results can be tens of GB: more than this is not one
+IMPORT_MAX_ENTRIES = 200_000
+_AGENT_FILES = {".mcp.json", "claude.md", "claude.local.md"}   # (export leaves them out too: the importer writes its own)
+
+
+def _one_line(text, limit: int = 120) -> str:
+    """A name as one line of plain text: no line breaks or control characters (it is written into CLAUDE.md and the lists)."""
+    return " ".join("".join(c if c.isprintable() else " " for c in str(text)).split())[:limit]
+
+
+def _member_parts(label: str, name: str) -> list[str]:
+    """The path of a zip entry inside the study folder, judged as TEXT: nothing is looked up on the disk, so a name that is a
+    network path (a UNC name) is refused without Windows ever contacting that host."""
+    n = str(name).replace("\\", "/")
+    parts = [x for x in n.split("/") if x not in ("", ".")]
+    if n.startswith("/") or ":" in n or ".." in parts or not parts:
+        raise ValueError(f"{label} holds an entry outside the study folder: {name}")
+    return parts
+
+
+def _unpack_study(z, d: Path, label: str) -> None:
+    """Unpack a saved study into the new folder d: entry names checked as text, files of an AI agent's settings (.claude/, CLAUDE.md,
+    .mcp.json) left out (they would be loaded by a Claude Code started in the folder), and the bytes counted while they are written
+    (the sizes a zip declares can lie)."""
+    infos = z.infolist()
+    if len(infos) > IMPORT_MAX_ENTRIES or sum(i.file_size for i in infos) > IMPORT_MAX_BYTES:
+        raise ValueError(f"{label} is too large to be a saved study")
+    root = d.resolve()
+    written = 0
+    for info in infos:
+        parts = _member_parts(label, info.filename)
+        if parts[0].lower() == ".claude" or parts[-1].lower() in _AGENT_FILES:
+            continue
+        target = d.joinpath(*parts)
+        real = target.resolve()                                   # (the name is plain text now: this stays inside d)
+        if root != real and root not in real.parents:
+            raise ValueError(f"{label} holds an entry outside the study folder: {info.filename}")
+        if info.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with z.open(info) as src, open(target, "wb") as dst:
+            while chunk := src.read(1 << 20):
+                written += len(chunk)
+                if written > IMPORT_MAX_BYTES:
+                    raise ValueError(f"{label} is too large to be a saved study")
+                dst.write(chunk)
+
+
 def import_project(zip_path: str, location: str | None = None, name: str | None = None) -> "Project":
     """Open a study saved with export_project: unpacked into a new folder (in location, or the workspace), as a study of its
     own. Refuses anything that is not such a file, or whose entries would land outside the new folder."""
@@ -314,17 +363,12 @@ def import_project(zip_path: str, location: str | None = None, name: str | None 
             raise ValueError(f"{zp.name} is not a saved study (project.json is unreadable)") from None
         WORKSPACE.mkdir(parents=True, exist_ok=True)
         folder = check_folder(location) if location and Path(location).resolve() != WORKSPACE.resolve() else None
-        title = (name or data.get("name") or zp.stem).strip()[:120]
+        title = _one_line(name or data.get("name") or zp.stem) or "Study"
         pid = _unique_id(slug(title), folder)
         d = (folder or WORKSPACE) / pid
         d.mkdir(parents=True)
         try:
-            root = d.resolve()
-            for info in z.infolist():
-                target = (d / info.filename).resolve()
-                if root != target and root not in target.parents:  # '..' or an absolute path in the file
-                    raise ValueError(f"{zp.name} holds an entry outside the study folder: {info.filename}")
-                z.extract(info, d)
+            _unpack_study(z, d, zp.name)
         except Exception:
             shutil.rmtree(d, ignore_errors=True)
             raise
