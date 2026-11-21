@@ -139,15 +139,27 @@ class SolvePanel(_Panel):
             self.state.setText({"interrupted": "The last run was interrupted.", "failed": "The last run failed: see the output below.",
                                 "stale": "The setup changed since the last run: run it again."}.get(s, ""))
         self.mesh_ready = st["mesh"].get("status") in ("ready",)
+        self.blockers = [c["message"] for c in (st.get("checks") or []) if c.get("level") == "error"]
         self.done = s == "done"
         self.flow = str(spec.get("solver", "")).startswith("openfoam")
         self._buttons()
 
     def _buttons(self):
-        can = (getattr(self, "mesh_ready", False) or getattr(self, "done", False)) and not self.running
+        blockers = getattr(self, "blockers", [])
+        meshed = getattr(self, "mesh_ready", False) or getattr(self, "done", False)
+        can = meshed and not self.running and not blockers
         self.btn.setEnabled(can)
-        self.btn.setToolTip("Run the simulation" if can else
-                            ("A run is in progress" if self.running else "Not yet: generate the mesh first (step 3, Mesh)"))
+        if can:
+            why = "Run the simulation"
+        elif self.running:
+            why = "A run is in progress"
+        elif not meshed:
+            why = "Not yet: generate the mesh first (step 3, Mesh)"
+        else:
+            why = "Not yet - the setup is not complete: " + "; ".join(blockers[:3]) + (" ..." if len(blockers) > 3 else "")
+        self.btn.setToolTip(why)
+        if blockers and meshed and not self.running and not getattr(self, "done", False):
+            self.state.setText("Before it can run: " + blockers[0] + (f" (and {len(blockers) - 1} more: see Messages)" if len(blockers) > 1 else ""))
         again = getattr(self, "done", False) and not self.running
         self.btn.setText("↻  Run the simulation again" if again else "▶  Run the simulation")
         self.btn.setObjectName("ghostBorder" if again else "primary")              # (View results is then the one main button)

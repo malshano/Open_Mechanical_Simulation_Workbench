@@ -411,7 +411,13 @@ class MainWindow(QMainWindow):
             self.progress.setValue(int(float(j.get("progress", 0)) * 1000))
             self.statusBar().showMessage(f"{j.get('kind', '')}: {j.get('message', '')}")
         elif j.get("status") in ("failed",):
-            QMessageBox.warning(self, "The job failed", str(j.get("error") or j.get("message")))
+            import logging
+
+            msg = str(j.get("error") or j.get("message"))
+            logging.getLogger("simwb.qt").warning("The job failed: %s", msg)
+            box = QMessageBox(QMessageBox.Warning, "The job failed", msg, QMessageBox.Ok, self)
+            box.setAttribute(Qt.WA_DeleteOnClose)
+            box.open()                                                     # (does not stop the program: a test or script goes on)
         elif j.get("status") == "done":
             self.statusBar().showMessage(f"{j.get('kind', '')} done", 6000)
 

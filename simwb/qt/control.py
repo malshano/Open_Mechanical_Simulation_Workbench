@@ -543,7 +543,8 @@ class Control(QObject):
     def _click(self, id):
         o = self._w(id)
         if not o.isEnabled() or not o.isVisible():
-            raise ValueError(f"The control '{id}' is {'disabled' if not o.isEnabled() else 'not visible'} now (step: {self.win.step})")
+            why = f": {o.toolTip()}" if not o.isEnabled() and o.toolTip() else ""
+            raise ValueError(f"The control '{id}' is {'disabled' if not o.isEnabled() else 'not visible'} now (step: {self.win.step}){why}")
         o.click()
 
     def _register(self):

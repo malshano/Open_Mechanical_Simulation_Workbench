@@ -175,4 +175,9 @@ class _Panel(QWidget):
         raise NotImplementedError
 
     def _fail(self, e: Exception):
-        QMessageBox.warning(self, "Cannot do that", str(e))
+        import logging
+
+        logging.getLogger("simwb.qt").warning("Cannot do that: %s", e)
+        box = QMessageBox(QMessageBox.Warning, "Cannot do that", str(e), QMessageBox.Ok, self)
+        box.setAttribute(Qt.WA_DeleteOnClose)
+        box.open()                                                         # (shown over the window; does not stop the program)

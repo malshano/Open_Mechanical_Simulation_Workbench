@@ -514,3 +514,23 @@ def test_every_action_parameter_that_could_name_a_file_is_covered_by_the_assista
     for name, spec in T._PATHS.items():
         if name in ctl.actions:
             assert set(spec) <= set(ctl.actions[name].params), f"tools._PATHS lists arguments {name} does not have"
+
+
+def test_run_says_what_is_missing_and_errors_never_block(ctl):
+    """The bundled heat example has no loads: Run is disabled and says why (the control API's answer too), and an error box does not
+    stop the program (it used to be a modal box that a script or the assistant could not get past)."""
+    ctl.do("study.new", {"name": "Plate", "study": "heat_conduction"})
+    ctl.do("geometry.import", {"path": str(EXAMPLES / "heated_plate.step")})
+    assert from_thread(ctl.app, lambda: ctl.wait_idle(300), 320)["idle"]
+    ctl.do("step.go", {"step": "mesh"})
+    ctl.do("mesh.preset", {"preset": "coarse"})
+    ctl.do("mesh.generate")
+    assert from_thread(ctl.app, lambda: ctl.wait_idle(300), 320)["idle"]
+    ctl.do("step.go", {"step": "solve"})
+    ctl._settle()
+    with pytest.raises(ValueError, match="setup is not complete"):
+        ctl.do("solve.run")
+    assert "Before it can run" in str(ctl.widget_do("solve.state")["value"])
+    before = ctl.log.n
+    ctl.win.panels["solve"]._fail(ValueError("a test message"))      # returns at once: no box waits for a click
+    assert any("a test message" in r["text"] for r in ctl.log.items if r["i"] > before)     # (and the reason is in the log)
