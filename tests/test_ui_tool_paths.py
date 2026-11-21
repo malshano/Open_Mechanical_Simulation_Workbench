@@ -205,3 +205,25 @@ def test_device_names_in_their_unicode_forms_are_refused(window):
         with pytest.raises(ValueError, match="device name"):
             tools.ui_do(None, {"action": "view.picture", "args": {"path": str(Path(P.WORKSPACE) / name)}})
     assert window == []
+
+
+def test_names_windows_treats_as_the_same_file_are_refused(window):
+    ws = Path(P.WORKSPACE)
+    for name in ["project.json.", "project.json ", "locations.json...", "PROJEC~1.JSO", "claude~2.md"]:
+        with pytest.raises(ValueError, match="dot or a space|8.3"):
+            tools.ui_do(None, {"action": "results.export", "args": {"format": "report", "path": str(ws / "a" / name)}})
+    for where in [".ui.", ".claude "]:
+        with pytest.raises(ValueError, match="dot or a space"):
+            tools.ui_do(None, {"action": "results.export", "args": {"format": "csv", "path": str(ws / where / "x.csv")}})
+    assert window == []
+
+
+def test_a_folder_the_user_chose_is_not_a_settings_or_credentials_folder(tmp_path):
+    for where in [".claude", ".git", ".ssh", ".aws", ".ui"]:
+        with pytest.raises(ValueError, match="own files|not kept in"):
+            tools._check_paths("create_project", {"name": "x", "location": str(tmp_path / where / "studies")})
+    startup = tmp_path / "Start Menu" / "Programs" / "Startup"
+    with pytest.raises(ValueError, match="not kept in"):
+        tools._check_paths("create_project", {"name": "x", "location": str(startup)})
+    ok = tools._check_paths("create_project", {"name": "x", "location": str(tmp_path / "Simulations")})
+    assert ok["location"] == str(tmp_path / "Simulations")

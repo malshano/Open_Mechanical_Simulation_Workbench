@@ -633,14 +633,17 @@ _PATH_KEYS = {"path", "paths", "location", "folder", "file", "files", "dir", "di
               "step_path", "filename", "output", "output_path", "input", "input_path", "src", "url", "uri"}
 _RESERVED_NAMES = {"project.json", "locations.json", "control.json", ".mcp.json", "claude.md", "claude.local.md"}
 _RESERVED_DIRS = {".claude", ".ui", ".git"}
+_SENSITIVE_DIRS = {".ssh", ".aws", ".azure", ".gnupg", ".kube", ".docker"}       # (credentials: nothing of the workbench goes there)
 
 
-def _refuse_reserved(action: str, target: Path) -> None:
+def _refuse_reserved(action: str, target: Path, folder: bool = False) -> None:
     """The workbench's own files (a study's project.json, the list of studies, the window's token, an agent's settings) are never
     written by a path that comes through the assistant: an export could otherwise replace one of them."""
     low = [x.lower() for x in target.parts]
     if low and low[-1] in _RESERVED_NAMES or any(x in _RESERVED_DIRS for x in low):
         raise ValueError(f"{action}: '{target.name}' is one of the workbench's own files; choose another name")
+    if folder and (any(x in _SENSITIVE_DIRS for x in low) or ("start menu" in low and "startup" in low)):
+        raise ValueError(f"{action}: a study is not kept in a settings, credentials or start-up folder ('{target}'); choose another folder")
 
 
 _DEVICE_NAMES = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
@@ -685,6 +688,11 @@ def _local_path(action: str, raw) -> Path:
     tail = lexical[2:] if not posix else lexical
     if ":" in tail:
         raise ValueError(f"{action}: a path with an alternate data stream is not allowed through the assistant")
+    for part in (x for x in re.split(r"[\\/]", tail) if x):
+        if part != part.rstrip(" ."):                              # (Windows drops the trailing dot or space: 'project.json.' is project.json)
+            raise ValueError(f"{action}: a name ending in a dot or a space is not allowed through the assistant")
+        if re.search(r"~[0-9]", part):                             # (an 8.3 short name, such as PROJEC~1.JSO, is another name of a file)
+            raise ValueError(f"{action}: a short (8.3) file name is not allowed through the assistant; give the full name")
     if any(P.is_device_name(part) for part in re.split(r"[\\/]", tail) if part):
         raise ValueError(f"{action}: a device name in the path is not allowed through the assistant")
     if not posix:
@@ -724,6 +732,8 @@ def _check_paths(action: str, args: dict) -> dict:
             raise ValueError(f"{action} takes {', '.join(sorted(kinds))} files only (not '{target.suffix or 'no extension'}')")
         if inside is False and not target.is_file():              # (a read: an existing ordinary file of this computer)
             raise ValueError(f"{action}: '{target}' is not an existing file")
+        if inside == "local":
+            _refuse_reserved(action, target, folder=True)             # (a folder the user chose: still not a settings or credentials folder)
         if inside is True:
             _refuse_reserved(action, target)
             if kinds is not None and target.exists():             # (a file is written, never replaced: choose a new name)
