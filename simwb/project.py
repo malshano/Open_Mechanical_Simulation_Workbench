@@ -297,6 +297,17 @@ IMPORT_MAX_BYTES = 100 * 2 ** 30          # a saved study with its results can b
 IMPORT_MAX_ENTRIES = 200_000
 _DEVICE_NAMES = {"con", "prn", "aux", "nul", "conin$", "conout$", "clock$",
                  *(f"com{i}" for i in range(0, 10)), *(f"lpt{i}" for i in range(0, 10))}
+
+
+def is_device_name(part: str) -> bool:
+    """Whether a file name is a Windows device (CON, NUL, COM1, LPT1 ... with or without an extension). The name is first brought to its
+    plain form (NFKC), so that the superscript digits (COM1 written with a superscript one) and full-width letters count too."""
+    import unicodedata
+
+    stem = unicodedata.normalize("NFKC", str(part)).split(".")[0].rstrip(" ").lower()
+    return stem in _DEVICE_NAMES
+
+
 _AGENT_FILES = {".mcp.json", "claude.md", "claude.local.md"}   # (export leaves them out too: the importer writes its own)
 
 
@@ -315,7 +326,7 @@ def _member_parts(label: str, name: str) -> list[str]:
     for part in parts:
         # Windows drops trailing dots and spaces and treats CON, NUL, COM1 ... (with any extension) as devices, in any folder:
         # opening one to write would write to the device, and 'a.' and 'a' would be the same file
-        if part != part.rstrip(" .") or part.split(".")[0].rstrip(" ").lower() in _DEVICE_NAMES:
+        if part != part.rstrip(" .") or is_device_name(part):
             raise ValueError(f"{label} holds an entry with a name Windows cannot keep as a file: {name}")
     return parts
 
@@ -347,6 +358,8 @@ def _unpack_study(z, d: Path, label: str) -> None:
                 if written > IMPORT_MAX_BYTES:
                     raise ValueError(f"{label} is too large to be a saved study")
                 dst.write(chunk)
+        if not target.is_file() or target.is_symlink():            # (what was written is an ordinary file of the study, not a device)
+            raise ValueError(f"{label} holds an entry that cannot be kept as a file: {info.filename}")
 
 
 def import_project(zip_path: str, location: str | None = None, name: str | None = None) -> "Project":

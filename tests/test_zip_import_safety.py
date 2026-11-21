@@ -97,7 +97,7 @@ def test_a_normal_study_still_round_trips(workspace, tmp_path):
 def test_device_names_and_names_windows_cannot_keep_are_refused(workspace, tmp_path):
     P = workspace
     for bad in ["con", "CON.txt", "geometry/nul", "geometry/aux.step", "COM1", "lpt9.log", "results/conout$", "a. ", "geometry./x", "name.",
-                "name "]:
+                "name ", "COM\u00b9", "lpt\u00b2.txt", "geometry/COM\u00b3.step", "\uff23\uff2f\uff2e", "\uff4e\uff55\uff4c.csv"]:
         z = _zip(tmp_path / "dev.zip", [(bad, "x")])
         with pytest.raises(ValueError, match="cannot keep as a file|outside the study folder"):
             P.import_project(str(z))

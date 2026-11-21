@@ -685,7 +685,7 @@ def _local_path(action: str, raw) -> Path:
     tail = lexical[2:] if not posix else lexical
     if ":" in tail:
         raise ValueError(f"{action}: a path with an alternate data stream is not allowed through the assistant")
-    if any(part.split(".")[0].lower() in _DEVICE_NAMES for part in re.split(r"[\\/]", tail) if part):
+    if any(P.is_device_name(part) for part in re.split(r"[\\/]", tail) if part):
         raise ValueError(f"{action}: a device name in the path is not allowed through the assistant")
     if not posix:
         import ctypes

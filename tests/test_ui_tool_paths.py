@@ -29,7 +29,8 @@ def test_writes_outside_the_workspace_are_refused(window):
 
 
 def test_a_path_that_climbs_out_of_the_workspace_is_refused(window):
-    sneaky = Path(P.WORKSPACE) / ".." / ".." / "evil.png"
+    ws = Path(P.WORKSPACE)
+    sneaky = ws.joinpath(*[".."] * len(ws.parts)) / "evil.png"      # (climbs to the drive root, wherever the workspace is)
     with pytest.raises(ValueError, match="only inside the workspace"):
         tools.ui_do(None, {"action": "view.picture", "args": {"path": str(sneaky)}})
     assert window == []
@@ -197,3 +198,10 @@ def test_controls_that_quit_or_sign_out_are_not_operated(window):
     tools.ui_widget(None, {"id": "file.exit", "op": "get"})   # (reading is fine)
     tools.ui_widget(None, {"id": "mesh.generate", "op": "click"})
     assert [c[1]["id"] for c in window] == ["file.exit", "mesh.generate"]
+
+
+def test_device_names_in_their_unicode_forms_are_refused(window):
+    for name in ["COM\u00b9.png", "lpt\u00b2.png", "\uff23\uff2f\uff2e.png"]:
+        with pytest.raises(ValueError, match="device name"):
+            tools.ui_do(None, {"action": "view.picture", "args": {"path": str(Path(P.WORKSPACE) / name)}})
+    assert window == []
