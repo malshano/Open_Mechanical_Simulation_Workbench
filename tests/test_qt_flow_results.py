@@ -186,3 +186,39 @@ def test_contour_lines_are_part_of_the_display(ctl, solved):
     assert ov()["contour_labels"] == 0 and ov()["contours"] == 7
     ctl.do("results.show", {"contours": False})
     assert ov()["contours"] == 0
+
+
+def _swept_wing_results():
+    """A slender swept 'wing' (span 10 along y, chord 1 along x, thickness 0.1, swept back 5 over the span) in a large box of air."""
+    from scipy.spatial import Delaunay
+    span = np.linspace(0, 10, 11)
+    wing = np.array([[x + 0.5 * y, y, z] for y in span for x in (0.0, 1.0) for z in (0.0, 0.1)])
+    air = np.array([[x, y, z] for x in (-30.0, 40.0) for y in (-10.0, 20.0) for z in (-20.0, 20.0)])
+    nodes = np.vstack([wing, air])
+    tets = Delaunay(nodes).simplices
+    outer, cells = boundary_from_tets(tets)
+    # the wing's skin between every two span stations (points 4k .. 4k+3: x0 z0, x0 z1, x1 z0, x1 z1; the wing points come first in nodes)
+    quads = [(0, 2), (1, 3), (0, 1), (2, 3)]                         # bottom, top, leading and trailing faces
+    wing_tris = np.array([t for k in range(len(span) - 1) for a, b in quads
+                          for t in ([4 * k + a, 4 * k + b, 4 * k + 4 + a], [4 * k + b, 4 * k + 4 + b, 4 * k + 4 + a])])
+    tris = np.vstack([outer, wing_tris])
+    cells = np.concatenate([cells, np.zeros(len(wing_tris), cells.dtype)])
+    group = np.concatenate([np.zeros(len(outer), int), np.ones(len(wing_tris), int)])
+    fields = {"Velocity": ("node", np.ones(len(nodes)), "m/s")}
+    rs = ResultSet(nodes, tets, np.zeros(len(tets)), ["air"], fields, tris, cells, group, ["farfield", "body"])
+    return rs, None
+
+
+def test_a_section_of_a_slender_swept_wing_is_framed_by_its_chord_at_the_cut():
+    """Cut across the span, the camera's box is measured in the chord at the cut (1), not in the span (10) or the fore-and-aft length
+    of the whole swept wing (6): otherwise the section is a speck in the picture."""
+    from simwb.qt.engine import Engine
+
+    rs, _ = _swept_wing_results()
+    stub = type("E", (), {"_flow_summary": lambda self: {"default_groups": ["body"], "U_inf": [-20.0, 0, 0]}})()
+    whole = Engine._flow_box(stub, rs, 0.3, 0.8)
+    cut = Engine._flow_box(stub, rs, 0.3, 0.8, "y", 5.0)
+    width = lambda b: b[3] - b[0]                                    # noqa: E731  (along x, the flow)
+    assert width(whole) > 10                                         # (sized by the span: 6 + 2 x 0.3 x 10 + 0.8 x 10)
+    assert 2.0 < width(cut) < 3.0, cut                               # (the chord at mid-span: 1 + 2 x 0.3 + 0.8 = 2.4)
+    assert cut[0] < 3.0 + 1e-9 and cut[3] > 3.5                     # (and it is where the chord is at y = 5: x from 2.5 to 3.5)

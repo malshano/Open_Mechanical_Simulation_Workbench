@@ -158,18 +158,23 @@ class Engine(QObject):
         box = self._flow_box(rs) if flow else None            # (a flow result is looked at close to the object, not across the whole far field)
         pos = ax = None
         if section:
-            axis, frac = section
-            ax = "xyz".index(axis)
-            lo, hi = (float(box[ax]), float(box[3 + ax])) if box else (float(rs.nodes[:, ax].min()), float(rs.nodes[:, ax].max()))
-            pos = lo + min(max(float(frac), 0.0), 1.0) * (hi - lo)
+            ax, pos = self._section_pos(rs, section, box)
         if flow:
             return self._flow_surface(rs, field, ax, pos, box)
         return rs.surface(field) if ax is None else rs.clip(field, ax, pos)
 
+    @staticmethod
+    def _section_pos(rs, section, box):
+        """(axis index, position) of a section given as (axis 'x'|'y'|'z', fraction 0..1 of the box, or of the whole result without one)."""
+        axis, frac = section
+        ax = "xyz".index(axis)
+        lo, hi = (float(box[ax]), float(box[3 + ax])) if box else (float(rs.nodes[:, ax].min()), float(rs.nodes[:, ax].max()))
+        return ax, lo + min(max(float(frac), 0.0), 1.0) * (hi - lo)
+
     def _flow_summary(self) -> dict:
         return ((self.state() or {}).get("solve") or {}).get("summary") or {}
 
-    def _flow_box(self, rs, around=9.0, downstream=12.0):
+    def _flow_box(self, rs, around=9.0, downstream=12.0, axis=None, at=None):
         """[x0, y0, z0, x1, y1, z1] around the object of an external flow (9 body sizes each way, 21 downstream; the camera looks closer): where the flow is worth
         looking at. None when the study has no object cut out of the air (a cooling duct is looked at whole)."""
         s = self._flow_summary()
@@ -181,7 +186,20 @@ class Engine(QObject):
         if not len(pts):
             return None
         lo, hi = pts.min(0), pts.max(0)
-        size = float((hi - lo).max()) or 1.0
+        if axis is not None and at is not None:
+            # the part of the object near the cut (a swept or tapered wing is much longer fore and aft over its whole span than its chord
+            # at the cut): the points in a thin slab round the section, when there are enough of them
+            ax = "xyz".index(axis)
+            slab = max(0.02 * float(hi[ax] - lo[ax]), 1e-9)
+            near = pts[np.abs(pts[:, ax] - at) <= slab]
+            if len(near) >= 3:                                # (enough to measure the section in its plane)
+                keep_lo, keep_hi = lo[ax], hi[ax]
+                lo, hi = near.min(0), near.max(0)
+                lo[ax], hi[ax] = keep_lo, keep_hi
+        ext = hi - lo
+        # the size the margins are measured in: the object's largest extent; for a cut, its largest extent IN the cut plane (a slender wing cut
+        # across its span is one chord long there, not one span: sized by the span, the section would be a speck in the picture)
+        size = float((ext if axis is None else np.delete(ext, "xyz".index(axis))).max()) or float(ext.max()) or 1.0
         lo, hi = lo - around * size, hi + around * size
         u = np.asarray(s.get("U_inf") or [0, 0, 0], float)
         if np.linalg.norm(u):
@@ -193,12 +211,16 @@ class Engine(QObject):
         dom_lo, dom_hi = rs.nodes.min(0), rs.nodes.max(0)
         return np.concatenate([np.maximum(lo, dom_lo), np.minimum(hi, dom_hi)]).tolist()
 
-    def flow_focus(self):
-        """The region the camera looks at when an external flow is cut open: close around the object (the plane drawn reaches further, so that
-        the large cells at its edge fall outside the picture)."""
+    def flow_focus(self, section=None):
+        """The region the camera looks at when an external flow is cut open along axis: close around the object, measured in its size within
+        the cut plane (the plane drawn reaches further, so that the large cells at its edge fall outside the picture)."""
         if self.project().study not in FLOW_STUDIES:
             return None
-        return self._flow_box(self.project().results(), 0.3, 0.8)
+        rs = self.project().results()
+        if not section:
+            return self._flow_box(rs, 0.3, 0.8)
+        ax, pos = self._section_pos(rs, section, self._flow_box(rs))
+        return self._flow_box(rs, 0.3, 0.8, section[0], pos)
 
     def _flow_surface(self, rs, field: str, ax, pos, box):
         """A flow or cooling result: the outside of the air box would hide everything, so draw the object (what the solver says to show:
