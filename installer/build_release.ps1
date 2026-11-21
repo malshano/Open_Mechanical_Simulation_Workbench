@@ -49,6 +49,8 @@ if (Test-Path $ico) { $cscArgs += "/win32icon:$ico" }
 if (-not (Test-Path $exe)) { throw 'The setup exe could not be compiled.' }
 
 # 4. checksums
-Get-ChildItem $dist -File | ForEach-Object { "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name } | Set-Content (Join-Path $dist 'SHA256SUMS.txt') -Encoding ASCII
+# (LF line ends, so that 'sha256sum -c SHA256SUMS.txt' also works on Linux, macOS and Git Bash)
+$sums = Get-ChildItem $dist -File | ForEach-Object { "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name }
+[IO.File]::WriteAllText((Join-Path $dist 'SHA256SUMS.txt'), (($sums -join "`n") + "`n"), (New-Object Text.ASCIIEncoding))
 Remove-Item $stage -Recurse -Force
 Get-ChildItem $dist -File | ForEach-Object { Write-Host ("  {0}  {1:N1} MB" -f $_.Name, ($_.Length / 1MB)) }
