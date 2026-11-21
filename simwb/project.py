@@ -2428,8 +2428,10 @@ class Project:
                 raise ValueError("Layer growth must be between 1.0 and 2.0")
             if first is not None and first <= 0:
                 raise ValueError("First layer thickness must be > 0 mm (empty = automatic)")
+            # (an option not given keeps its value: a call that only changes the number of layers must not switch
+            # the tolerant limits off)
             m["layers"] = {"n": n, "growth": g, "first": None if first is None else first / 1000,
-                           "tolerant": bool(layers.get("tolerant", False))}
+                           "tolerant": bool(layers.get("tolerant", (m.get("layers") or {}).get("tolerant", False)))}
         if edge_refinement is not None:  # fine cells along sharp edges (leading / trailing edges): off | True | factor
             if edge_refinement in (False, 0, "off"):
                 m.pop("edge_refine", None)
@@ -2937,14 +2939,50 @@ class Project:
             m["hex_dir"] = str(self.mesh_dir / "polyMesh_hex")
         return m
 
-    def mesh_view(self, clip_axis=None, clip_pos=None, hide_fluid=False, poor=None, color="quality"):
-        """Surface (or crinkle-clipped) mesh triangles for inspection, coloured by color: 'quality' (1 = a perfect cell),
-        'size' (edge length of the cell, mm: how the mesh grades away from the walls) or 'region' (each body, the
-        surface of the object and the far-field of a flow study: how the domain was put together). poor: only the cells
-        below this quality (all their faces; the worst 20000), with the box round the worst one."""
-        if color not in ("quality", "size", "region"):
-            raise ValueError("color must be 'quality', 'size' or 'region'")
+    def mesh_metrics(self):
+        """Statistics, histograms and the cell budget (which cell sizes use the cells) of the stored mesh."""
+        from . import meshviz
+
         m = self.load_mesh()
+        if "hex" in m:
+            raise ValueError("The size and growth metrics need the tetrahedral mesh (the hex-dominant mesh is shown "
+                             "by its quality only)")
+        d = meshviz.summary(m["nodes"], m["tets"], m.get("quality"))
+        d["method"] = "tet"
+        return d
+
+    def mesh_view(self, clip_axis=None, clip_pos=None, hide_fluid=False, poor=None, metric="quality"):
+        """Surface (or crinkle-clipped) mesh triangles coloured by a cell metric, for inspection: quality (default),
+        size, aspect, growth (size jump to the neighbours), volume, or region (each body, the surface of the object
+        and the far-field of a flow study: how the domain was put together). poor: only the cells below this quality (all
+        their faces; the worst 20000), with the box round the worst one."""
+        from . import meshviz
+
+        metric = (metric or "quality").lower()
+        if metric != "region" and metric not in meshviz.METRICS:
+            raise ValueError(f"Unknown mesh metric '{metric}'. Available: {', '.join(meshviz.METRICS)}, region")
+        m = self.load_mesh()
+        label, unit, worse = meshviz.METRICS["quality" if metric == "region" else metric]
+        if metric == "region":
+            if poor is not None:
+                raise ValueError("'poor' selects cells by their quality; use it with the quality metric")
+            vals = m["quality"]
+        elif metric != "quality":
+            if "hex" in m:
+                raise ValueError("The size and growth metrics need the tetrahedral mesh")
+            if poor is not None:
+                raise ValueError("'poor' selects cells by their quality; use it with the quality metric")
+            vals = meshviz.cell_metrics(m["nodes"], m["tets"], (metric,))[metric]
+        else:
+            vals = m["quality"]
+        d = self._mesh_view(m, vals, unit, clip_axis, clip_pos, hide_fluid, poor, region=(metric == "region"),
+                            log=(metric == "size"))
+        if poor is None and metric != "region" and d.get("n_tris", 1):
+            d.update({"metric": metric, "label": label, "higher_is_worse": worse,
+                      "range": meshviz.display_range(metric, vals)})
+        return d
+
+    def _mesh_view(self, m, vals, unit, clip_axis, clip_pos, hide_fluid, poor, region=False, log=False):
         if poor is not None:
             q = m["quality"]
             sel = np.where(q < float(poor))[0]
@@ -2965,22 +3003,16 @@ class Project:
         regions = [str(b["id"]) for b in bodies]
         reg_index = {b["id"]: i for i, b in enumerate(bodies)}
         tr = np.vectorize(reg_index.get)(m["tet_vol"]) if len(bodies) > 1 else np.zeros(len(m["tets"]), int)
-        # the other ways to colour the cells: the edge of the equal-volume regular tet (mm) and the body each one is in
-        corner = m["nodes"][m["tets"]]
-        vol = np.abs(np.einsum("ij,ij->i", corner[:, 1] - corner[:, 0],
-                               np.cross(corner[:, 2] - corner[:, 0], corner[:, 3] - corner[:, 0]))) / 6.0
-        size_mm = (6.0 * math.sqrt(2.0) * vol) ** (1.0 / 3.0) * 1000.0
-        rs = ResultSet(m["nodes"], m["tets"], tr, regions,
-                       {"Quality": ("cell", m["quality"].astype(float), "-"), "Cell size": ("cell", size_mm, "mm")},
+        rs = ResultSet(m["nodes"], m["tets"], tr, regions, {"Quality": ("cell", vals.astype(float), unit)},
                        *((m["tris"].astype(np.int64), m["tri_owner"]) if "tri_owner" in m else boundary_from_tets(m["tets"])),
                        np.zeros(0), [])
         rs.surf_group = np.zeros(len(rs.surf_tris), np.int32)
 
         def paint(tris, cells):
-            if color == "region":
+            if region:
                 return self._region_payload(rs, m, tris, cells, bodies, tr)
-            d = rs._tri_payload(tris, cells, "Cell size" if color == "size" else "Quality")
-            if color == "size":
+            d = rs._tri_payload(tris, cells, "Quality")
+            if log:
                 d["scale"] = "log"  # (sizes span a factor of 50 or more: equal steps of the ratio, not of the size)
             return d
 

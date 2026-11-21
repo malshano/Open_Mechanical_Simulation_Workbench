@@ -2,15 +2,22 @@
 
     python benchmarks/mesh_analyze.py results.jsonl [more.jsonl ...]
 
-Only converged runs (`valid`) are used. Runs are grouped by method, layers, growth, mode and shape and ordered by the
-solver's final cell count. For a group with three or more meshes the observed order of convergence p, the
-Richardson-extrapolated Cf and Roache's grid-convergence index (safety factor 1.25) of the finest pair are printed;
-the refinement ratio is r = (cells ratio)^(1/3).
+A run is used only when it converged and its wall layers are there (mesh_benchmark.layers_ok: at least 80 % of the
+target thickness by the layer table of the log, else at least 90 % of the wall faces extruded); the stored `valid` flag
+is ignored and recomputed, so files written under older rules are judged by the same rule. Rows are grouped by the
+complete method (method, layers, growth, flow mode, shape, edge refinement, tolerant layers, leading-edge size) and
+ordered by the solver's final cell count; repeats of one spec are shown as a mean and a range. A group of three or more
+meshes also gets the observed order of convergence, the Richardson-extrapolated Cf and Roache's grid-convergence index
+(safety factor 1.25) of the finest pair, with r = (cells ratio)^(1/3); only when the three values converge monotonically.
 """
 import json
 import math
 import sys
 from collections import defaultdict
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from mesh_benchmark import layers_ok  # noqa: E402
 
 
 def load(paths):
@@ -18,6 +25,11 @@ def load(paths):
     for p in paths:
         rows += [json.loads(ln) for ln in open(p, encoding="utf-8") if ln.strip()]
     return rows
+
+
+def method_key(r):
+    return (r["method"], r["layers"], r["growth"], r["mode"], r["shape"], r.get("edge_factor"),
+            bool(r.get("tolerant_layers")), r.get("le_mm"))
 
 
 def richardson(rows):
@@ -36,29 +48,44 @@ def richardson(rows):
     return p, ext, gci
 
 
+def usable(r):
+    return bool(r.get("converged")) and layers_ok(r)
+
+
 def main(paths):
     rows = load(paths)
-    groups = defaultdict(list)
+    groups = defaultdict(lambda: defaultdict(list))
     for r in rows:
+        if str(r.get("edge_field", "")).endswith("superseded"):      # made by code that no longer exists (see results/README.md)
+            continue
         if r.get("error"):
             print(f"ERROR  {r.get('spec', r.get('method'))}: {r['error'][:120]}")
-        elif not (r.get("converged") and (r.get("layers", 0) == 0 or r.get("layers_kept_percent") is None
-                                          or r["layers_kept_percent"] >= 90.0)):
-            why = ("unconverged" if not r.get("converged") else f"only {r['layers_kept_percent']:.0f} % of the layers kept")
-            print(f"not used ({why}, err {r.get('cf_error_percent')} %)  {r.get('spec')}")
+        elif not usable(r):
+            why = "unconverged" if not r.get("converged") else (
+                f"{r.get('layers_mean')} of {r['layers']} layers, {r.get('layers_thickness_percent')} % thickness"
+                if r.get("layers_mean") is not None else f"{r.get('layers_kept_percent')} % of faces extruded")
+            print(f"not used ({why}; err {r.get('cf_error_percent')} %)  {r.get('spec')}")
         else:
-            groups[(r["method"], r["layers"], r["growth"], r["mode"], r["shape"])].append(r)
-    for key, g in sorted(groups.items()):
-        g.sort(key=lambda r: r["cells_final"])
-        m, n, gr, mode, shape = key
-        print(f"\n{m}  layers={n} growth={gr}  {mode} {shape} plate")
-        print(f"  {'preset':<9}{'cells(mesh)':>12}{'cells(final)':>13}{'layers kept':>12}{'mesh s':>8}{'solve s':>9}{'RAM MB':>8}{'KB/cell':>9}{'Cf':>10}{'err %':>8}")
-        for r in g:
-            print(f"  {r['preset']:<9}{r['cells']:>12,}{r['cells_final']:>13,}{(r.get('layers_kept_percent') or 0):>11.0f}%"
-                  f"{r['mesh_seconds']:>8.0f}{r['solve_seconds']:>9.0f}{(r.get('total_ram_mb') or 0):>8}{(r.get('ram_kb_per_final_cell') or 0):>9.1f}"
-                  f"{r['cf']:>10.5f}{r.get('cf_error_percent', float('nan')):>8.1f}")
-        if len(g) >= 3:
-            rc = richardson(g)
+            groups[method_key(r)][r["preset"]].append(r)
+    for key, presets in sorted(groups.items(), key=lambda kv: str(kv[0])):
+        m, n, gr, mode, shape, edge, tol, le = key
+        extra = (f" edge x{edge:g}" if edge else "") + (" tolerant layers" if tol else "") + (f" le {le:g} mm" if le else "")
+        print(f"\n{m}  layers={n} growth={gr}{extra}  {mode} {shape} plate")
+        print(f"  {'preset':<9}{'n':>2}{'cells(mesh)':>12}{'cells(final)':>13}{'layers':>8}{'mesh s':>8}{'solve s':>9}{'RAM MB':>8}{'Cf':>10}{'err %':>8}")
+        table = []
+        for preset, rs in presets.items():
+            rs.sort(key=lambda r: r["cf"])
+            mid = rs[len(rs) // 2]
+            table.append((mid, rs))
+        table.sort(key=lambda t: t[0]["cells_final"])
+        for mid, rs in table:
+            spread = f"  (range {rs[0].get('cf_error_percent')} .. {rs[-1].get('cf_error_percent')} %)" if len(rs) > 1 else ""
+            lay = f"{mid['layers_mean']}" if mid.get("layers_mean") is not None else f"{(mid.get('layers_kept_percent') or 0):.0f}%"
+            print(f"  {mid['preset']:<9}{len(rs):>2}{mid['cells']:>12,}{mid['cells_final']:>13,}{lay:>8}"
+                  f"{mid['mesh_seconds']:>8.0f}{mid['solve_seconds']:>9.0f}{(mid.get('total_ram_mb') or 0):>8}"
+                  f"{mid['cf']:>10.5f}{mid.get('cf_error_percent', float('nan')):>8.1f}{spread}")
+        if len(table) >= 3:
+            rc = richardson([t[0] for t in table])
             print("  grid convergence: " + (f"p = {rc[0]:.2f}, extrapolated Cf = {rc[1]:.5f}, GCI(fine) = {rc[2]:.1f} %" if rc else "not monotone / not enough information"))
 
 

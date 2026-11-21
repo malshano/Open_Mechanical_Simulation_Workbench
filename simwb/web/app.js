@@ -1585,14 +1585,15 @@ function panelMesh() {
         <span>Max aspect ratio</span><b>${fmt1(s.hex.aspect_ratio_max)}</b>
         ${s.hex.layers_extruded_percent != null ? `<span>Wall faces with layers</span><b>${fmt1(s.hex.layers_extruded_percent)} %</b>` : ''}` : ''}
       <span>Time</span><b>${s.seconds} s</b></div>
-      <h3>Colour the mesh by</h3><div class="seg">${[['quality', 'Quality', 'How close each cell is to a perfect one (1 = perfect, red = poor)'],
-        ['size', 'Cell size', 'The edge length of each cell, on a log scale: shows how the mesh grows from the walls and refinement zones into the air'],
-        ['region', 'Region', 'Which body each cell belongs to; in a flow study the surface of the object (where it was cut out of the air) and the far-field']]
-        .map(([k, l, t]) => `<button data-meshcolor="${k}" class="${S.meshColor === k ? 'on' : ''}" title="${t}">${l}</button>`).join('')}</div>
       <h3>Cut through the mesh</h3><div class="seg">${[['', 'Off'], ['x', 'X'], ['y', 'Y'], ['z', 'Z']]
         .map(([k, l]) => `<button data-meshcut="${k}" class="${(S.clip.axis || '') === k ? 'on' : ''}">${l}</button>`).join('')}</div>
       <p class="small muted" style="margin:4px 0">A cut shows the cells inside: the air around the object, where it was cut out of the air, and how the cells grow with distance. Move the cut with the slider above the view.</p>
       <h3>Cell quality</h3><canvas class="chart" id="histo" style="height:110px"></canvas>
+      ${s.method === 'hex' ? '' : `<div class="row" style="gap:6px;align-items:center;margin:4px 0" title="Colour the mesh by the cell size, the aspect ratio, the size jump to the neighbours or the volume, to see where the cells are spent">
+        <label for="meshMetric">Colour the mesh by</label>
+        <select id="meshMetric" style="width:auto">${[['quality', 'Quality'], ['size', 'Cell size'], ['aspect', 'Aspect ratio'], ['growth', 'Size jump'], ['volume', 'Cell volume'], ['region', 'Region']]
+          .map(([v, t]) => `<option value="${v}" ${S.meshMetric === v ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+      <div id="vizBox" class="small muted">Cell budget…</div>`}
       <div class="row" style="gap:6px;align-items:center;margin:4px 0" title="Show only the cells below this quality, on the CAD model, to see where the mesher struggles (thin gaps, small faces, sharp corners)">
         <label class="row" style="gap:4px"><input type="checkbox" id="poorOn" ${S.meshPoor.on ? 'checked' : ''} style="width:auto"> Show cells below</label>
         <input type="number" id="poorThr" min="0.01" max="0.9" step="0.05" value="${S.meshPoor.thr}" style="width:70px">
@@ -3401,7 +3402,22 @@ function clipValue() {
 }
 
 S.meshPoor = { on: false, thr: 0.1, worst: null };
-S.meshColor = 'quality';   // what the mesh is coloured by: quality | size | region
+S.meshMetric = 'quality';  // what colours the mesh: quality | size | aspect | growth | volume
+
+// where the cells are spent: for every size band the share of cells and of the volume, and plain findings
+async function loadMeshBudget() {
+  const box = $('#vizBox');
+  if (!box) return;
+  try {
+    const d = await api(P('/mesh/metrics'));
+    const mx = Math.max(...d.budget.map(b => b.cells_percent), 1);
+    box.innerHTML = `<b>Cell budget</b> (size band → share of cells / of the volume)<table class="small" style="width:100%">` +
+      d.budget.map(b => `<tr><td>${fmt(b.size_from, 3)}–${fmt(b.size_to, 3)} mm</td>
+        <td style="width:45%"><div style="background:var(--accent,#3b82f6);height:8px;width:${(100 * b.cells_percent / mx).toFixed(0)}%"></div></td>
+        <td style="text-align:right">${b.cells_percent.toFixed(1)} % / ${b.volume_percent.toFixed(1)} %</td></tr>`).join('') + `</table>` +
+      d.findings.map(f => `<div class="note warn">${esc(f)}</div>`).join('');
+  } catch (e) { box.textContent = ''; }
+}
 async function showMesh() {
   if (S.p.mesh.status !== 'ready' && S.p.mesh.status !== 'stale') { viewer.clearOverlay(); viewer.showGeometry(true); return; }
   if (S.meshPoor.on) {  // mesh metrics: only the poor cells, on the CAD model
@@ -3427,18 +3443,15 @@ async function showMesh() {
     }
   }
   const hideFluid = S.p.study === 'cht_enclosure' && S.hideAir;
-  const q = (S.clip.axis ? `?clip_axis=${S.clip.axis}&clip_pos=${clipValue()}&hide_fluid=${hideFluid}` : `?hide_fluid=${hideFluid && S.p.study === 'cht_enclosure'}`)
-    + `&color=${S.meshColor}`;
+  const metric = S.p.mesh?.stats?.method === 'hex' ? 'quality' : S.meshMetric;
+  const q = (S.clip.axis ? `?clip_axis=${S.clip.axis}&clip_pos=${clipValue()}&hide_fluid=${hideFluid}` : `?hide_fluid=${hideFluid && S.p.study === 'cht_enclosure'}`) + `&metric=${metric}`;
   try {
     const d = await api(P('/mesh/view' + q));
-    const by = S.meshColor;
-    viewer.setOverlay(d, { wire: true, range: by === 'size' ? [d.min, d.max] : [0, 1], fixed: by === 'quality' });
-    if (S.fitMesh) { S.fitMesh = false; viewer.fitOverlay([0, 1, 0]); }
+    const rev = metric === 'quality';  // for the quality low is bad: the other metrics have large = coarse or stretched
+    viewer.setOverlay(d, { wire: true, range: d.range || [0, 1], reverse: rev });
     viewer.setZoneWire(d.zone_lines);
     viewer.showGeometry(false);
-    if (by === 'quality') legend('Cell quality', '-', [0, 1], true);
-    else if (by === 'size') legend('Cell size', 'mm', [d.min, d.max], false, true);
-    else legendCats(d);
+    if (metric === 'region') legendCats(d); else legend(d.label || 'Cell quality', d.unit || '-', d.range || [0, 1], rev);
   } catch (e) { toast(e.message, true); }
 }
 
@@ -3588,10 +3601,11 @@ function bindPanel(el) {
     else r.size = Math.max(1e-6, parseFloat(inp.value) / 1000 || r.size);
     await savePartSizing(rs);
   }));
-  el.querySelectorAll('[data-meshcolor]').forEach(b => b.onclick = () => { S.meshColor = b.dataset.meshcolor; renderPanel(); showMesh(); });
   el.querySelectorAll('[data-meshcut]').forEach(b => b.onclick = () => {
     const sel = $('#clipAxis'); sel.value = b.dataset.meshcut; sel.onchange({ target: sel }); renderPanel();
   });
+  $('#meshMetric', el)?.addEventListener('change', e => { S.meshMetric = e.target.value; if (!S.meshPoor.on) showMesh(); });
+  if ($('#vizBox', el)) loadMeshBudget();
   $('#poorOn', el)?.addEventListener('change', e => { S.meshPoor.on = e.target.checked; renderPanel(); showMesh(); });
   $('#poorThr', el)?.addEventListener('change', e => { S.meshPoor.thr = Math.min(0.9, Math.max(0.01, +e.target.value || 0.1)); if (S.meshPoor.on) showMesh(); });
   el.querySelectorAll('[data-defeature]').forEach(i => i.onchange = () => act(async () => {
