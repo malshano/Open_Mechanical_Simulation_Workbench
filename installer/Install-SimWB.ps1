@@ -293,8 +293,9 @@ if (-not (Test-Path $py)) {
     if ($code -ne 0) { Fail 'Could not set up Python.' 'See the log; a proxy or antivirus may be blocking the download.' }
     Ok "Python $PYTHON ready (a private copy, your own Python is untouched)"
 } else { Skip 'Python environment already there' }
-$req = if (Test-Path (Join-Path $InstallDir 'requirements-qt.txt')) { 'requirements-qt.txt' } else { 'requirements.txt' }   # (the desktop application's libraries on top of the web ones)
-$code = RunLogged $uv @('pip', 'install', '--python', $py, '-r', (Join-Path $InstallDir $req)) 'packages' $uvEnv
+$reqs = @('-r', (Join-Path $InstallDir 'requirements.txt'))
+if (Test-Path (Join-Path $InstallDir 'requirements-qt.txt')) { $reqs += @('-r', (Join-Path $InstallDir 'requirements-qt.txt')) }   # (the desktop application's libraries, ON TOP of the others)
+$code = RunLogged $uv (@('pip', 'install', '--python', $py) + $reqs) 'packages' $uvEnv
 if ($code -ne 0) { Fail 'Could not install the Python libraries.' 'Run the setup again: it continues where it stopped.' }
 Ok 'Libraries installed'
 
