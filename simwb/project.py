@@ -295,6 +295,8 @@ def export_project(pid: str, zip_path: str, keep_results: bool = True) -> Path:
 
 IMPORT_MAX_BYTES = 100 * 2 ** 30          # a saved study with its results can be tens of GB: more than this is not one
 IMPORT_MAX_ENTRIES = 200_000
+_DEVICE_NAMES = {"con", "prn", "aux", "nul", "conin$", "conout$", "clock$",
+                 *(f"com{i}" for i in range(0, 10)), *(f"lpt{i}" for i in range(0, 10))}
 _AGENT_FILES = {".mcp.json", "claude.md", "claude.local.md"}   # (export leaves them out too: the importer writes its own)
 
 
@@ -310,6 +312,11 @@ def _member_parts(label: str, name: str) -> list[str]:
     parts = [x for x in n.split("/") if x not in ("", ".")]
     if n.startswith("/") or ":" in n or ".." in parts or not parts:
         raise ValueError(f"{label} holds an entry outside the study folder: {name}")
+    for part in parts:
+        # Windows drops trailing dots and spaces and treats CON, NUL, COM1 ... (with any extension) as devices, in any folder:
+        # opening one to write would write to the device, and 'a.' and 'a' would be the same file
+        if part != part.rstrip(" .") or part.split(".")[0].rstrip(" ").lower() in _DEVICE_NAMES:
+            raise ValueError(f"{label} holds an entry with a name Windows cannot keep as a file: {name}")
     return parts
 
 

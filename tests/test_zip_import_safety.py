@@ -92,3 +92,20 @@ def test_a_normal_study_still_round_trips(workspace, tmp_path):
     z = P.export_project(pr.id, str(tmp_path / "out.zip"))
     back = P.import_project(str(z), location=str(tmp_path / "other"))
     assert (back.dir / "geometry" / "model.step").read_text() == "STEP"
+
+
+def test_device_names_and_names_windows_cannot_keep_are_refused(workspace, tmp_path):
+    P = workspace
+    for bad in ["con", "CON.txt", "geometry/nul", "geometry/aux.step", "COM1", "lpt9.log", "results/conout$", "a. ", "geometry./x", "name.",
+                "name "]:
+        z = _zip(tmp_path / "dev.zip", [(bad, "x")])
+        with pytest.raises(ValueError, match="cannot keep as a file|outside the study folder"):
+            P.import_project(str(z))
+    assert not [p for p in P.list_projects() if p["name"] == "Bracket"]      # (nothing was opened)
+
+
+def test_names_that_only_look_like_devices_are_fine(workspace, tmp_path):
+    P = workspace
+    z = _zip(tmp_path / "ok.zip", [("geometry/console.step", "S"), ("results/communication.csv", "C"), ("mesh/lpt.npz", "M")])
+    pr = P.import_project(str(z))
+    assert (pr.dir / "geometry" / "console.step").read_text() == "S"
