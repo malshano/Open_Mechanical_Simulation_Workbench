@@ -302,6 +302,50 @@ def layer_first_thickness(V, L, nu, zones=(), y_plus=30.0) -> float:
     return min(out) if out else 0.01 * L
 
 
+# snappyHexMesh layer-step limits (see write_external_aero): the strict ones are the long-standing default; the tolerant
+# ones keep layers on sharp, finely meshed walls (measured on the flat plate: benchmarks/results)
+LAYER_STRICT = {"mfr": 0.5, "mtm": 0.3, "iters": 50, "relaxed_iter": "", "relaxed": "maxNonOrtho 75;"}
+LAYER_TOLERANT = {"mfr": 0.8, "mtm": 0.6, "iters": 100, "relaxed_iter": "\n    nRelaxedIter        3;",
+                  "relaxed": "maxNonOrtho 75; minTwist 0.001; minDeterminant 1e-5; minFaceWeight 0.02; minVolRatio 0.01;"}
+
+WALL_FUNCTION_MODELS = ("kOmegaSST", "kOmega", "kEpsilon", "realizableKE", "SpalartAllmaras", "kOmegaSSTDDES")
+
+
+def boundary_layer_thickness(V, L, nu, laminar: bool) -> float:
+    """99 % thickness of a flat-plate boundary layer at the end of a length L: Blasius 5 L / sqrt(Re) when laminar,
+    0.37 L Re^-0.2 when turbulent."""
+    re = max(V * L / nu, 1.0)
+    return 5.0 * L / math.sqrt(re) if laminar else 0.37 * L * re ** -0.2
+
+
+def layer_plan(V, L, nu, model: str, n: int, growth: float, zones=(), first=None) -> dict:
+    """First layer thickness (m) and what it resolves, for n wall layers growing by `growth`.
+
+    Wall-function models (k-omega SST, k-epsilon ...): the first cell centre at y+ ~ 30 (`layer_first_thickness`).
+    Laminar: there is no wall function, the boundary layer itself must be resolved. The n layers should span about
+    1.3 times the layer thickness at the end of the body, so the first layer is sized from that (never thinner than
+    1/200 of it); the cells across the thickness are reported, and few of them means: use more layers.
+    A `first` given by the user is kept and only reported. Returns {first, n, growth, delta, cells_across_delta,
+    total, laminar}."""
+    laminar = model == "laminar"
+    delta = boundary_layer_thickness(V, L, nu, laminar) if V > 0.1 else 0.0
+    n = max(int(n), 1)
+    g = max(float(growth), 1.0001)
+    series = (g ** n - 1.0) / (g - 1.0)                    # sum of the layer thicknesses / the first one
+    if first:
+        t1 = float(first)
+    elif laminar and delta > 0:
+        t1 = max(1.3 * delta / series, delta / 200.0)
+    else:
+        t1 = layer_first_thickness(V, L, nu, zones)
+    total = t1 * series
+    across = 0.0
+    if delta > 0 and t1 > 0:                               # layers inside delta: solve t1 (g^k - 1)/(g - 1) = delta
+        across = min(float(n), math.log1p(delta * (g - 1.0) / t1) / math.log(g))
+    return {"first": t1, "n": n, "growth": g, "delta": delta, "cells_across_delta": across, "total": total,
+            "laminar": laminar}
+
+
 def freestream_velocity(settings: dict) -> np.ndarray:
     V = float(settings.get("speed", 0.0))
     fwd = np.array(AXES[settings.get("forward_axis", "+x")], float)
@@ -907,9 +951,14 @@ relaxationFactors
     n_lay = int(lay.get("n") or 0) if wall_names and not hexmesh else 0
     if n_lay:
         g = float(lay.get("growth", 1.2))
-        first = lay.get("first") or layer_first_thickness(V, L, nu, project.get("moving_zones") or [])  # automatic: y+ ~ 30
+        # automatic first layer: y+ ~ 30 for the wall-function models, a resolved boundary layer when laminar
+        first = layer_plan(V, L, nu, s.get("turbulence", "kOmegaSST"), n_lay, g, project.get("moving_zones") or [],
+                           lay.get("first"))["first"]
         size = (f"relativeSizes       false;\n    firstLayerThickness {float(first):.8g};\n"
                 f"    minThickness        {float(first) * 0.1:.8g};")
+        # tolerant layers (opt-in): with the strict limits snappyHexMesh removes layers wherever the cells are small
+        # and the wall is sharp, which is exactly where a leading edge needs them
+        tol = LAYER_TOLERANT if lay.get("tolerant") else LAYER_STRICT
         lays = "".join(f'        "{w}" {{ nSurfaceLayers {n_lay}; }}\n' for w in wall_names)
         _w(case / "system" / "snappyHexMeshDict", header("dictionary", "snappyHexMeshDict", "system") + f"""
 castellatedMesh false;
@@ -937,18 +986,18 @@ addLayersControls
     nSmoothSurfaceNormals 1;
     nSmoothNormals      3;
     nSmoothThickness    10;
-    maxFaceThicknessRatio 0.5;
-    maxThicknessToMedialRatio 0.3;
+    maxFaceThicknessRatio {tol['mfr']};
+    maxThicknessToMedialRatio {tol['mtm']};
     minMedialAxisAngle  90;
     nBufferCellsNoExtrude 0;
-    nLayerIter          50;
+    nLayerIter          {tol['iters']};{tol['relaxed_iter']}
 }}
 meshQualityControls
 {{
     maxNonOrtho 70; maxBoundarySkewness 20; maxInternalSkewness 4; maxConcave 80; minVol 1e-15;
     minTetQuality -1e30; minArea -1; minTwist 0.02; minDeterminant 0.001; minFaceWeight 0.02;
     minVolRatio 0.01; minTriangleTwist -1; nSmoothScale 4; errorReduction 0.75;
-    relaxed {{ maxNonOrtho 75; }}
+    relaxed {{ {tol['relaxed']} }}
 }}
 mergeTolerance 1e-6;
 """)

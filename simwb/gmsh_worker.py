@@ -667,6 +667,52 @@ def face_extents(f) -> list:
     return sorted((proj.max(0) - proj.min(0)).tolist())
 
 
+def sharp_edges(gmsh, face_ids, min_length: float, max_face_angle: float = 140.0, limit: int = 200):
+    """The edges (gmsh curves) shared by exactly two of the faces `face_ids` where the faces meet sharply, longest first:
+    [(curve tag, face angle in degrees, length)].
+
+    The face angle is the angle between the two faces seen from the edge: 180 = smooth (a fillet seam), 90 = the
+    corner of a box, a few degrees = a knife edge such as the leading edge of a wing. At the middle of the edge it is
+    measured between the directions that lie in each face's tangent plane, perpendicular to the edge and pointing into
+    the face (the side of the face's centre), so it does not depend on which way the CAD normals point and it is right
+    for curved faces too. Edges shorter than min_length are left out."""
+    ids = set(int(i) for i in face_ids)
+    found = []
+    for _, tag in gmsh.model.getEntities(1):
+        up, _down = gmsh.model.getAdjacencies(1, tag)
+        surfs = sorted({int(s) for s in up if int(s) in ids})
+        if len(surfs) != 2:
+            continue
+        length = float(gmsh.model.occ.getMass(1, tag))
+        if length < min_length:
+            continue
+        lo, hi = gmsh.model.getParametrizationBounds(1, tag)
+        t = [(lo[0] + hi[0]) / 2]
+        p = np.array(gmsh.model.getValue(1, tag, t), float)
+        e = np.array(gmsh.model.getDerivative(1, tag, t), float)
+        if np.linalg.norm(e) < 1e-30:
+            continue
+        e /= np.linalg.norm(e)
+        dirs = []
+        for s in surfs:
+            uv = gmsh.model.getParametrization(2, s, [float(x) for x in p])
+            n = np.array(gmsh.model.getNormal(s, list(uv)), float)[:3]
+            d = np.cross(n, e)                                   # in the tangent plane, perpendicular to the edge
+            if np.linalg.norm(d) < 1e-12:
+                continue
+            d /= np.linalg.norm(d)
+            if d @ (np.array(gmsh.model.occ.getCenterOfMass(2, s), float) - p) < 0:
+                d = -d                                           # ... pointing to the side the face lies on
+            dirs.append(d)
+        if len(dirs) != 2:
+            continue
+        angle = math.degrees(math.acos(float(np.clip(dirs[0] @ dirs[1], -1.0, 1.0))))
+        if angle < max_face_angle:
+            found.append((int(tag), angle, length))
+    found.sort(key=lambda x: -x[2])
+    return found[:limit]
+
+
 def face_width(f) -> float:
     """Width of a face: middle principal extent (for a cylinder this is its diameter, for a fin top its
     thickness)."""
@@ -1151,6 +1197,31 @@ def task_mesh(job: dict) -> dict:
         fields.setNumber(ft, "DistMax", float(r["size"]) * 10)
         use.append(ft)
 
+    # sharp edges (leading and trailing edges, corners): cells of wall size / factor along them, back to the wall size
+    # within 12 edge cells. Flow quantities change fastest there (a laminar plate's first 5 % of length carries about
+    # 22 % of its friction), and it costs few cells because only a thin tube round each edge is refined.
+    edge_info = None
+    if study == "external_aero" and ms.get("edge_refine") and not ms.get("size_min"):
+        factor = float(ms["edge_refine"].get("factor", 6.0))
+        h_edge = max(h_wall / factor, L / 3000.0)
+        if h_edge < 0.9 * h_wall:
+            edges = sharp_edges(gmsh, wall_faces, max(0.03 * L, 8 * h_edge))
+            if edges:
+                fe = fields.add("Distance")
+                fields.setNumbers(fe, "CurvesList", [e[0] for e in edges])
+                fields.setNumber(fe, "Sampling", int(min(2000, max(50, 2 * max(e[2] for e in edges) / h_edge))))
+                fte = fields.add("Threshold")
+                fields.setNumber(fte, "InField", fe)
+                fields.setNumber(fte, "SizeMin", h_edge)
+                fields.setNumber(fte, "SizeMax", size_far)
+                fields.setNumber(fte, "DistMin", h_edge)
+                fields.setNumber(fte, "DistMax", h_edge * 12)
+                use.append(fte)
+                edge_info = {"edges": len(edges), "size": h_edge, "factor": factor,
+                             "min_face_angle": min(e[1] for e in edges), "total_length": sum(e[2] for e in edges)}
+                progress(0.09, f"Sharp edges refined: {len(edges)} edge(s), {edge_info['total_length']:.3g} m long, "
+                               f"cells of {h_edge * 1e3:.2f} mm")
+
     mn = fields.add("Min")
     fields.setNumbers(mn, "FieldsList", use)
     fields.setAsBackgroundMesh(mn)
@@ -1337,6 +1408,7 @@ def task_mesh(job: dict) -> dict:
             "histogram": hist.tolist(), "edges": edges.tolist(),
         },
         "defeatured_faces": sum(len(g) - 1 for g in merged),
+        "edge_refine": edge_info,
         "collapsed_cells_repaired": int(n_collapsed),
         "sizes": {"near_wall": h_wall, "body": h_body, "far": size_far, "feature": feature,
                   "min_gap": min_gap,
