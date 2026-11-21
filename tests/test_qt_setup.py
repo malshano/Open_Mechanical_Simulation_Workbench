@@ -178,7 +178,12 @@ def test_loads_and_gravity_are_drawn_as_arrows(bracket):
     c.do("setup.bc_add", {"type": "force", "faces": c.front, "name": "Camera"})
     assert len(v.arrow_actors) == 1                                                  # the load, along its direction
     b = v.arrow_actors[0].GetBounds()
-    assert b[1] - b[0] > b[3] - b[2]                                                 # the force is along x: the arrow is longest in x
+    # the arrow is longest along the force (the default force of the study type: -100 N in z)
+    from simwb import studies
+    force = next(t for t in studies.STUDIES["static_structural"]["face_bc_types"].values() if "fz_N" in [q["key"] for q in t["params"]])
+    f = [next(q["default"] for q in force["params"] if q["key"] == k) for k in ("fx_N", "fy_N", "fz_N")]
+    extent = [b[1] - b[0], b[3] - b[2], b[5] - b[4]]
+    assert max(range(3), key=lambda i: abs(f[i])) == max(range(3), key=lambda i: extent[i]), (f, extent)
     c.widget_do("setup.setting.gravity", "set", "-z")
     assert len(v.arrow_actors) == 2 and any("Gravity" in la.GetInput() for la in v.label_actors)
     c.widget_do("setup.setting.gravity", "set", "off")
