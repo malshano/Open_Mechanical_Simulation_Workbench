@@ -287,13 +287,14 @@ else {
 $uvEnv = @{ UV_PYTHON_INSTALL_DIR = (Join-Path $tools 'python'); UV_CACHE_DIR = (Join-Path $tools 'uv-cache'); UV_PYTHON_PREFERENCE = 'only-managed' }
 
 # 4 ---------------------------------------------------------------------------------------- python + packages
-StepStart 'Python and the simulation libraries' 'gmsh, NumPy, SciPy, FastAPI, ... (about 700 MB)'
+StepStart 'Python and the simulation libraries' 'gmsh, NumPy, SciPy, FastAPI, Qt, VTK ... (about 1.1 GB)'
 if (-not (Test-Path $py)) {
     $code = RunLogged $uv @('venv', '--python', $PYTHON, (Join-Path $InstallDir '.venv')) 'python' $uvEnv
     if ($code -ne 0) { Fail 'Could not set up Python.' 'See the log; a proxy or antivirus may be blocking the download.' }
     Ok "Python $PYTHON ready (a private copy, your own Python is untouched)"
 } else { Skip 'Python environment already there' }
-$code = RunLogged $uv @('pip', 'install', '--python', $py, '-r', (Join-Path $InstallDir 'requirements.txt')) 'packages' $uvEnv
+$req = if (Test-Path (Join-Path $InstallDir 'requirements-qt.txt')) { 'requirements-qt.txt' } else { 'requirements.txt' }   # (the desktop application's libraries on top of the web ones)
+$code = RunLogged $uv @('pip', 'install', '--python', $py, '-r', (Join-Path $InstallDir $req)) 'packages' $uvEnv
 if ($code -ne 0) { Fail 'Could not install the Python libraries.' 'Run the setup again: it continues where it stopped.' }
 Ok 'Libraries installed'
 
@@ -338,11 +339,14 @@ try {
     $bw.Write($png); $bw.Close(); $fs.Close(); $g.Dispose(); $bmp.Dispose()
 } catch { $icon = $null; Logf "icon: $_" }
 $launcher = Join-Path $InstallDir 'installer\Launch-SimWB.ps1'
+$launcherDesktop = Join-Path $InstallDir 'installer\Launch-SimWB-Desktop.ps1'
 $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $wsh = New-Object -ComObject WScript.Shell
 $links = @(
     @{ Path = (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Mechanical Simulation Workbench.lnk'); Args = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$launcher`""; Desc = 'Start the workbench' },
+    @{ Path = (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Mechanical Simulation Workbench (beta desktop).lnk'); Args = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$launcherDesktop`""; Desc = 'Start the desktop application (beta)' },
     @{ Path = (Join-Path ([Environment]::GetFolderPath('Programs')) 'Mechanical Simulation Workbench.lnk'); Args = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$launcher`""; Desc = 'Start the workbench' },
+    @{ Path = (Join-Path ([Environment]::GetFolderPath('Programs')) 'Mechanical Simulation Workbench (beta desktop).lnk'); Args = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$launcherDesktop`""; Desc = 'Start the desktop application (beta)' },
     @{ Path = (Join-Path ([Environment]::GetFolderPath('Programs')) 'Uninstall Mechanical Simulation Workbench.lnk'); Args = "-NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $InstallDir 'installer\Uninstall-SimWB.ps1')`""; Desc = 'Remove the workbench and its solvers' }
 )
 if ($NoDesktopShortcut) { $links = @($links | Where-Object { $_.Path -notlike (Join-Path ([Environment]::GetFolderPath('Desktop')) '*') }) }
@@ -356,7 +360,7 @@ elseif ($NoDesktopShortcut) { Ok 'Start menu icons made (no desktop icon, as cho
 else { Ok 'Desktop and Start menu icons made' }
 Push-Location $InstallDir   # (the packages must be found in the install folder, not in the folder the setup was started from)
 $env:PYTHONPATH = ''
-$test = & $py -c "import gmsh, numpy, scipy, fastapi, simwb.server; from simwb.solvers.openfoam import runner; from simwb.solvers.calculix import installer as c; print('openfoam', runner.detect(True)['available'], '| calculix', c.detect(True)['available'])" 2>&1
+$test = & $py -c "import gmsh, numpy, scipy, fastapi, PySide6.QtWidgets, vtk, simwb.server, simwb.qt.app; from simwb.solvers.openfoam import runner; from simwb.solvers.calculix import installer as c; print('openfoam', runner.detect(True)['available'], '| calculix', c.detect(True)['available'])" 2>&1
 $testExit = $LASTEXITCODE; Pop-Location
 Logf ($test -join ' ')
 if ($testExit -eq 0) { Ok ("Self-test passed (" + ($test | Select-Object -Last 1) + ")") } else { Warn 'The self-test reported a problem; see install.log. The workbench may still start.' }
@@ -366,7 +370,7 @@ $mins = [Math]::Round(((Get-Date) - $T0).TotalMinutes, 1)
 Line ''
 Line '   ╔══════════════════════════════════════════════════════════╗' Green
 C    '   ║  ' Green; C ("✓  All set in $mins minutes".PadRight(56)) White; Line '║' Green
-C    '   ║  ' Green; C 'Start it from the desktop icon.'.PadRight(56) Gray; Line '║' Green
+C    '   ║  ' Green; C 'Start it from the desktop icon (the beta desktop one is new).'.PadRight(56) Gray; Line '║' Green
 C    '   ║  ' Green; C 'Your studies are saved where you choose.'.PadRight(56) Gray; Line '║' Green
 Line '   ╚══════════════════════════════════════════════════════════╝' Green
 Line ''

@@ -17,6 +17,8 @@ if (-not $Quiet) { $a = Read-Host '  Type YES to continue'; if ($a -ne 'YES') { 
 # stop a running workbench first
 Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.ExecutablePath -like "$Root*" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 foreach ($p in @((Join-Path ([Environment]::GetFolderPath('Desktop')) 'Mechanical Simulation Workbench.lnk'),
+                 (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Mechanical Simulation Workbench (beta desktop).lnk'),
+                 (Join-Path ([Environment]::GetFolderPath('Programs')) 'Mechanical Simulation Workbench (beta desktop).lnk'),
                  (Join-Path ([Environment]::GetFolderPath('Programs')) 'Mechanical Simulation Workbench.lnk'),
                  (Join-Path ([Environment]::GetFolderPath('Programs')) 'Uninstall Mechanical Simulation Workbench.lnk'))) {
     Remove-Item $p -Force -ErrorAction SilentlyContinue
