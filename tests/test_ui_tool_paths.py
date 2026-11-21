@@ -138,3 +138,62 @@ def test_links_in_a_path_are_not_followed(window, tmp_path):
     assert window == []
     tools.ui_do(None, {"action": "geometry.import", "args": {"path": str(real / "wing.step")}})   # (the real folder is fine)
     assert window[-1][1]["action"] == "geometry.import"
+
+
+# ---- the MCP tools that name a file or folder, empty paths, the workbench's own files, replacing files, controls not for a model
+def test_create_project_and_import_step_are_checked_like_the_window_actions(window, tmp_path, monkeypatch):
+    bs = chr(92)
+    unc = bs * 2 + "attacker" + bs + "share"
+    seen = []
+    monkeypatch.setattr(tools, "create_project", lambda pr, a: seen.append(a) or {"ok": 1})
+    tools_by_name = {t[0]: t for t in tools.TOOLS + tools.MCP_EXTRA}
+    assert "create_project" in tools_by_name and "import_step" in tools_by_name
+    out = tools.call("create_project", None, {"name": "x", "study": "static_structural", "location": unc})
+    assert out.startswith("ERROR") and ("network" in out or "full local path" in out)
+    out = tools.call("import_step", None, {"step_path": unc + bs + "w.step"})
+    assert out.startswith("ERROR") and ("network" in out or "full local path" in out)
+    out = tools.call("import_step", None, {"step_path": str(tmp_path / "notes.txt")})
+    assert out.startswith("ERROR") and "files only" in out
+
+
+def test_a_folder_the_user_chose_is_fine_for_create_project(tmp_path):
+    folder = tmp_path / "Simulations"
+    out = tools._check_paths("create_project", {"name": "x", "location": str(folder)})
+    assert out["location"] == str(folder)                     # (local, and need not exist yet)
+
+
+def test_an_empty_path_is_refused_not_taken_as_the_working_folder(window):
+    for action, key in [("study.open_folder", "path"), ("study.export", "path"), ("study.new", "location")]:
+        with pytest.raises(ValueError, match="is empty"):
+            tools.ui_do(None, {"action": action, "args": {key: "  "}})
+    assert window == []
+
+
+def test_the_workbenchs_own_files_are_never_written(window):
+    ws = Path(P.WORKSPACE)
+    for name in ["locations.json", "project.json", "CLAUDE.md", "CLAUDE.local.md", ".mcp.json"]:
+        with pytest.raises(ValueError, match="own files"):
+            tools.ui_do(None, {"action": "results.export", "args": {"format": "report", "path": str(ws / "a" / name)}})
+    for where in [".ui", ".claude"]:
+        with pytest.raises(ValueError, match="own files"):
+            tools.ui_do(None, {"action": "results.export", "args": {"format": "csv", "path": str(ws / where / "x.csv")}})
+    assert window == []
+
+
+def test_a_file_is_written_but_never_replaced(window, tmp_path):
+    existing = Path(P.WORKSPACE) / "report.json"
+    existing.parent.mkdir(parents=True, exist_ok=True)
+    existing.write_text("keep me")
+    with pytest.raises(ValueError, match="exists already"):
+        tools.ui_do(None, {"action": "results.export", "args": {"format": "report", "path": str(existing)}})
+    tools.ui_do(None, {"action": "results.export", "args": {"format": "report", "path": str(existing.with_name("new.json"))}})
+    assert existing.read_text() == "keep me" and window[-1][1]["action"] == "results.export"
+
+
+def test_controls_that_quit_or_sign_out_are_not_operated(window):
+    for wid in ["file.exit", "assistant.logout", "assistant.login"]:
+        with pytest.raises(ValueError, match="not operated through the assistant"):
+            tools.ui_widget(None, {"id": wid, "op": "click"})
+    tools.ui_widget(None, {"id": "file.exit", "op": "get"})   # (reading is fine)
+    tools.ui_widget(None, {"id": "mesh.generate", "op": "click"})
+    assert [c[1]["id"] for c in window] == ["file.exit", "mesh.generate"]

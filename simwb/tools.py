@@ -616,7 +616,8 @@ def ui_actions(pr, a):
 # a file must be of the kind it expects. Deny by default: an action not listed here that takes a path-like argument is refused,
 # so a new action cannot slip through. (A person at the menus, and the REST window control, are not limited.)
 _CAD = {".step", ".stp", ".stl", ".obj"}
-_PATHS = {  # action: {argument: (inside the workspace/temp required, allowed suffixes or None)}
+_PATHS = {  # tool or action: {argument: (where, allowed suffixes or None)}; where: True = inside the workspace or temp, "local" = a place on
+            # a local drive the USER chose (a new study's folder), False = an existing file to read
     "view.picture": {"path": (True, {".png"})},
     "study.export": {"path": (True, {".zip"})},
     "results.export": {"path": (True, {".csv", ".vtk", ".vtu", ".html", ".pdf", ".md", ".txt", ".json"})},
@@ -625,8 +626,21 @@ _PATHS = {  # action: {argument: (inside the workspace/temp required, allowed su
     "study.import": {"location": (True, None), "path": (False, {".zip"})},
     "study.open_folder": {"path": (True, None)},                  # (the study then writes into that folder)
     "geometry.import": {"path": (False, _CAD)},
+    "create_project": {"location": ("local", None), "step_path": (False, _CAD)},       # (MCP tools: the model names them for the user)
+    "import_step": {"step_path": (False, _CAD)},
 }
-_PATH_KEYS = {"path", "paths", "location", "folder", "file", "files", "dir", "directory", "target", "dest", "destination", "out"}
+_PATH_KEYS = {"path", "paths", "location", "folder", "file", "files", "dir", "directory", "target", "dest", "destination", "out",
+              "step_path", "filename", "output", "output_path", "input", "input_path", "src", "url", "uri"}
+_RESERVED_NAMES = {"project.json", "locations.json", "control.json", ".mcp.json", "claude.md", "claude.local.md"}
+_RESERVED_DIRS = {".claude", ".ui", ".git"}
+
+
+def _refuse_reserved(action: str, target: Path) -> None:
+    """The workbench's own files (a study's project.json, the list of studies, the window's token, an agent's settings) are never
+    written by a path that comes through the assistant: an export could otherwise replace one of them."""
+    low = [x.lower() for x in target.parts]
+    if low and low[-1] in _RESERVED_NAMES or any(x in _RESERVED_DIRS for x in low):
+        raise ValueError(f"{action}: '{target.name}' is one of the workbench's own files; choose another name")
 
 
 _DEVICE_NAMES = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
@@ -698,16 +712,23 @@ def _check_paths(action: str, args: dict) -> dict:
         raise ValueError(f"{action}: the argument(s) {', '.join(unknown)} are not allowed through the assistant")
     roots = [Path(P.WORKSPACE).resolve(), Path(tempfile.gettempdir()).resolve()]
     for key, (inside, kinds) in spec.items():
-        if args.get(key) in (None, ""):
+        if args.get(key) is None:
             continue                                              # (no place named: the application's own default)
+        if isinstance(args[key], str) and not args[key].strip():
+            raise ValueError(f"{action}: the argument '{key}' is empty; give a full path or leave it out")
         target = _local_path(action, args[key])
-        if inside and not any(target == r or r in target.parents for r in roots):
+        if inside is True and not any(target == r or r in target.parents for r in roots):
             raise ValueError(f"{action} through the assistant works only inside the workspace ({roots[0]}) or the temp folder: "
                              f"'{target}' is elsewhere. Use a place there and ask the user to move it, or let them do it from the menu.")
         if kinds is not None and target.suffix.lower() not in kinds:
             raise ValueError(f"{action} takes {', '.join(sorted(kinds))} files only (not '{target.suffix or 'no extension'}')")
-        if not inside and not target.is_file():                   # (a read: an existing ordinary file of this computer)
+        if inside is False and not target.is_file():              # (a read: an existing ordinary file of this computer)
             raise ValueError(f"{action}: '{target}' is not an existing file")
+        if inside is True:
+            _refuse_reserved(action, target)
+            if kinds is not None and target.exists():             # (a file is written, never replaced: choose a new name)
+                raise ValueError(f"{action}: '{target.name}' exists already, and a file is not replaced through the assistant; "
+                                 f"choose another name")
         args[key] = str(target)
     return args
 
@@ -721,7 +742,13 @@ def ui_widgets(pr, a):
     return _ui("widgets", {"filter": a.get("filter"), "visible_only": bool(a.get("visible_only"))})
 
 
+_NOT_FOR_A_MODEL = {"file.exit", "chrome.close", "assistant.login", "assistant.logout"}   # (quit; sign in and out of the account)
+
+
 def ui_widget(pr, a):
+    if str(a["id"]) in _NOT_FOR_A_MODEL and a.get("op", "get") != "get":
+        raise ValueError(f"The control '{a['id']}' is not operated through the assistant (it quits the application or changes the "
+                         f"sign-in): ask the user to use it")
     return _ui("widget", {"id": a["id"], "op": a.get("op", "get"), "value": a.get("value")})
 
 
@@ -811,6 +838,8 @@ def call(name: str, pr, args: dict) -> str:
     if missing:
         return f"ERROR: missing argument(s) {missing} for {name}"
     try:
+        if name != "ui_do":                                       # (ui_do checks the action it carries: see _check_paths)
+            args = _check_paths(name, args or {})
         return _fmt(fn(pr, args or {}))
     except Exception as e:  # noqa: BLE001
         return f"ERROR: {e}"
