@@ -1,8 +1,8 @@
 ---
 title: Mechanical Simulation Workbench - User Manual
 audience: engineers who use the workbench (not people who change its code; for that read TECHNICAL_MANUAL.md)
-product_version: 0.1.0
-document_version: 1
+product_version: 0.4.0b1
+document_version: 2
 format: Markdown, one topic per section, UI labels in **bold**, file names and commands in `code`
 how_to_use_this_file_with_an_llm: >
   Paste the whole file, or only the section whose heading matches the task. Every section is self-contained:
@@ -15,8 +15,8 @@ how_to_use_this_file_with_an_llm: >
 
 | Item | Value |
 |---|---|
-| What it is | A local web application: import CAD, mark faces, mesh, solve, look at results. Like Ansys Workbench, but small. |
-| Runs where | On your own computer. Address: <http://127.0.0.1:8765>. Nothing is uploaded. |
+| What it is | A local application: import CAD, mark faces, mesh, solve, look at results. Like Ansys Workbench, but small. Two forms: the web version (a browser page) and, from 0.4.0 beta 1, a desktop version in its own window (section 15). |
+| Runs where | On your own computer. Web address: <http://127.0.0.1:8765>. Nothing is uploaded. |
 | Input | STEP (preferred), STL or OBJ files. |
 | Studies | Heat transfer in solids, Static structural, Vibration (modal), Electronics cooling (CFD), External aerodynamics (CFD). |
 | Solvers | Built-in finite-element solvers (no install) and OpenFOAM (installed automatically on Windows). |
@@ -46,6 +46,8 @@ Terms used in this manual:
 2. The first start creates a Python environment (Python 3.10 or newer is needed), installs the packages and, for the flow studies, downloads OpenFOAM (about 200 MB) and the Microsoft MPI runtime (about 12 MB) into the workbench folder. No administrator rights are needed. It takes a few minutes.
 3. The browser opens at <http://127.0.0.1:8765>. If it does not, open that address yourself.
 4. To stop: click **Close** (top right). This stops the server and every running solver.
+
+The one-click setup (`Install SimWB.bat` or `SimWB-Setup.exe`) also installs Qt and VTK and makes a second icon, **Mechanical Simulation Workbench (beta desktop)**, that starts the desktop version (section 15).
 
 Other ways to start:
 
@@ -504,6 +506,139 @@ Back up or move a study by copying its folder, then use **Open a saved study...*
 - DES needs fine meshes and small time steps; a coarse mesh gives smooth, wrong-looking vortices.
 - Volume, arrow and particle views are visualisations of the results; they do not add physics.
 
+
+---
+
+## 15. The desktop application (beta)
+
+Version 0.4.0 beta 1 adds the workbench as a **desktop program**: the same studies, solvers and assistant in a window of its own
+instead of a browser page. It uses the same engine, so a study made in one can be opened in the other. Sections 3 to 14 describe the
+web version; this section says what is the same, what is different and what is not there yet. Terms: the **web version** is the
+browser page of sections 1 to 14; the **desktop version** is this window.
+
+### 15.1 Start it
+
+| How | What happens |
+|---|---|
+| The icon **Mechanical Simulation Workbench (beta desktop)** on the desktop or in the Start menu (made by the setup) | Opens the window; no console and no browser. |
+| `run_workbench_qt.bat` in the workbench folder | The same. If Qt and VTK (about 400 MB) are not installed, it installs them once first. |
+| `.venv\Scripts\python -m simwb.qt` | The same, from a console. `--project <name>` opens a study at once; `--no-api` turns off the local control interface (see 15.8). |
+
+The web icon still starts the web version. Both can be installed together; they share the same studies and the same settings variables
+(section 1). To stop the desktop version click **Close** (top right): it stops every running solver.
+
+### 15.2 The window
+
+| Area | Where | What it does |
+|---|---|---|
+| Menus **File, View, Help** | top left | **File**: new, open, save, save as, export and import a study (15.3). **View**: dark, light or system theme (remembered), show or hide the docks. |
+| **Simple / Expert** | top right | As in section 2. The choice is remembered. |
+| **Jobs** | top right | The running jobs (meshing, solving ...), each with **Stop**. |
+| **Claude** | top right | Shows or hides the assistant dock (15.6). |
+| **Close** | top right | Stops all jobs and leaves. |
+| Study switcher and **New** | below the menus | The open study; a list of the others; **New** goes back to the start screen. |
+| Step bar | below that | **Geometry, Setup, Mesh, Solve, Results** with a tick for each finished step. |
+| Outline | left, upper | The model tree. Click a node to select it. |
+| Step panel | left, lower | The settings of the step. Results has the tabs **Summary, Display, Flow, Probe, Checks** (Flow only for flow and cooling studies). |
+| 3D view | centre | Left button turns, the wheel zooms, the middle button (or Shift + left button) pans. Its bar: **Iso, X, Y, Z, Fit**, **Edges**, **Air box** and **Picture** (a PNG with the colour scale). Click a face to select it; Ctrl-click adds. |
+| Output | below the 3D view | **Messages** and **Solver log**. |
+| Claude dock | right | The assistant. |
+| Status bar | bottom | The study, its type, the mesh and solution state. |
+
+With no study open the window shows **What do you want to simulate?**: a card for every study type (what it does, which solver, **Use my
+CAD file** or **Try example**), **Open a saved study...**, **Import a study file...** and the studies opened lately. Docks that are in the
+way can be closed from the **View** menu and come back when a study opens.
+
+### 15.3 Saving, opening and sharing a study
+
+A study is written to its folder after every change, so nothing is lost when the window closes. The **File** menu:
+
+| Entry | What it does |
+|---|---|
+| **New study** | Back to the start screen (the open study is saved first). |
+| **Open study folder** | Any folder that holds a `project.json`. |
+| **Open from the workspace**, **Open recent** | The studies of the workspace; the last ten opened. |
+| **Save** | Writes the study now and says when. |
+| **Save as** | A full copy in another folder (optionally with the solver case and results); the copy becomes the open study. |
+| **Export study to one file** | One `.zip`, with or without the solver case and results (much smaller without). |
+| **Import study from a file** | Unpacks an exported `.zip` into a new study. It refuses anything that is not a saved study, anything that would write outside its own folder, and anything unreasonably large; an AI agent's settings files inside the zip (`.claude`, `CLAUDE.md`, `.mcp.json`) are not unpacked. |
+
+To give a study to a colleague: **Export study to one file** (leave out the results to keep it small), send the `.zip`, and they use
+**Import study from a file**. The same functions are in the web version.
+
+### 15.4 Results
+
+The tabs are the ones of section 8, with these differences and additions.
+
+- **Display**: field, colour map (reverse, bands), range (auto or typed), deformation (animated, end state or off; scale; hidden when
+  nothing deforms, as in flow and temperature results), edges, **Max and Min labels** (drag a label with the mouse to move it), and a
+  **Section**: an axis and a position that cut the model, with the cut plane shown over the object.
+- **Contour lines**: in Display, switch on **Contours**: a number of evenly spaced lines, extra values you type, and **Write the value on
+  each line** (on by default). Lines are drawn over the colours, on the surface or on the section.
+- **Flow tab** (flow and cooling studies): ways of looking at the flow, drawn together over the grey object. Choose the **Region** (around
+  the object, or the whole air box) and the **Grid** (48, 64, 96 or 128 points across: finer shows more and takes longer).
+  - **Vortex surfaces** (turbulence): surfaces of equal Q-criterion (rotation beats strain). The slider **Weaker vortices shown** works
+    towards the right (the Q value under it falls): at the strong end the surfaces only wrap the wall layer on the object; towards the
+    weak end the tip vortices, the leading-edge vortex and the wake appear, and also more noise. **Coloured by** picks the field painted on
+    them; **Keep clear of walls** hides the surface near the object; **Smoothing** rounds it. For a wake use the whole air box, a weak
+    setting and turn the view (**Z** for the top, **-X** from behind).
+  - **Volume rendering**: the whole flow as a see-through cloud (field, density, colour map or smoke).
+  - **Arrows** on a plane (axis, position, number across) and **Particle paths** (number, where they start, steps). The paths are drawn
+    still, not animated as in the web version.
+  - A Region of the whole air box with a fine grid needs more memory; if the window is slow, go back to a coarser grid.
+- **Probe**: pin values by clicking the coloured result; line plot between two points or from the minimum to the maximum.
+- **Export**: report (HTML), table (CSV) and VTK for ParaView, in the Results step.
+- The camera fits what you look at: switching a section on or off, or choosing another view, re-fits the view to the object or the cut.
+
+Limits of the views: contour lines and their labels do not follow an animated deformation; labels can be hidden behind a surface; the
+force coefficients of a flow study use the frontal area of the object, which is not the wing area of a wing (work from the forces).
+
+### 15.5 The mesh
+
+The Mesh step has the same settings as section 6 (resolution presets, tetrahedral or hex-dominant, advanced sizes, part sizing, wall
+layers, refinement boxes and cylinders). To inspect the result: **colour the mesh by** quality, **cell size** (a log scale, so the growth
+from the walls into the air shows) or **region** (each body; in a flow study the surface of the object and the far-field planes), **cut**
+through it along x, y or z, look at the cells **below a quality threshold** and **zoom to the worst** one. The web version also colours by
+aspect ratio, size jump and volume and shows a cell budget.
+
+### 15.6 The Claude assistant in the window
+
+Same assistant as section 10: it sets up, meshes, runs and explains, with the same tools, and the chat is kept for each study. It
+has no shell and no access to your files. Whatever it writes or reads goes through checks: it saves files only inside the workspace or
+the temporary folder, never replaces an existing file or one of the workbench's own files, never uses a network path or a link, and reads
+only CAD files and exported studies by their full path (starting with a drive letter). If it says it may not use a path, give it a
+place inside the workspace, and move the file yourself afterwards. The `/` commands of section 11 are not in the desktop version: use
+**Log out**, **New chat** and **Stop** in the dock.
+
+### 15.7 Not in the desktop beta yet
+
+These are in the web version (use it for them; a study opens in both):
+
+- CAD edits of the model (holes, fillets, patterns ...) and the air-volume editor with its size presets.
+- Symmetry planes; detecting and editing rotors and moving zones; the flow-condition form (fluid, turbulence model, steady or transient)
+  beyond the settings generated for each study type.
+- Continue or extend a finished run, the number of cores, starting from another solution, and the advanced OpenFOAM numerics and case
+  files viewer.
+- The time bar and MP4 export for transient results; the modal spectrum, flutter and sweep plots; the mesh sensitivity and three-level checks.
+- Wake and tip-vortex refinement that is made automatically for rotors.
+
+`docs/QT_PARITY.md` lists every control of the web version and its state in the desktop version.
+
+### 15.8 For people who script it
+
+The window serves a local interface on `127.0.0.1` (port 8765 or the next free one; `--no-api` turns it off): the same operations as
+the menus and controls, by name, so that Claude Code or a script can drive and inspect the running window. Running Python inside the
+window needs `--debug-api` and a secret; do not use that on a shared computer. `docs/QT_APP.md` has the full list and the security notes.
+
+### 15.9 If something goes wrong
+
+| Problem | What to do |
+|---|---|
+| A box **The job failed** | Read its message, close it and run the step again. Meshing can fail to start when the computer is short of memory (close other programs). |
+| The window is slow with a flow study | Use a coarser **Grid** in the Flow tab, or the region around the object. |
+| Text appears as empty boxes in a picture taken by a script | That happens only in the test mode without fonts (`QT_QPA_PLATFORM=offscreen`); the real window is not affected. |
+| The desktop icon says the libraries are missing | Run the setup again, or `run_workbench_qt.bat`, which installs Qt and VTK. |
+| A feature you know from the web version is missing | See 15.7; open the same study in the web version. |
 
 ## Choosing the solver: built-in FEM or CalculiX (structural studies)
 

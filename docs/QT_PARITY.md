@@ -8,8 +8,8 @@ plus the toolbar and application bar. Status: ✅ done in the Qt app · 🟡 par
 
 > **Last reviewed:** after the fifth critic round of the Qt interface (overall 5.4 / 7). Rows marked ✅ have tests in `tests/test_qt_*.py`;
 > 🟡 rows say what is missing. The largest remaining gaps are: CAD edits and the air-volume editor (Geometry), symmetry planes, rotors and
-> moving zones (Setup), continue / extend runs, cores and advanced OpenFOAM numerics (Solve), CFD result views (contours, vectors,
-> streamlines), the time bar for transient results, and the colour legend as an overlay inside the 3D view.
+> moving zones (Setup), continue / extend runs, cores and advanced OpenFOAM numerics (Solve), and the time bar for transient results.
+> (The CFD result views - contours, vectors, vortex surfaces, volume cloud, particle paths - and the colour legend are done.)
 
 ## Application bar, view toolbar, status
 

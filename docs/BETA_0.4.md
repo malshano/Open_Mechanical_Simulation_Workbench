@@ -9,7 +9,8 @@ The web version is still installed and has its own icon; nothing in your saved s
 - **Save and open cases**: save as a full copy, export a study to one `.zip` file, import it again.
 - **Results**: colour maps, cuts, contour lines with their values written on them, labels of the highest and lowest value that you can
   move, animation, probes. For flow and cooling studies: vortex surfaces, a volume cloud, vector arrows and particle paths over the object.
-- **Mesh views**: colour the mesh by quality, cell size, aspect ratio, size jump, volume or region, with a cell budget.
+- **Mesh views**: colour the mesh by quality, cell size or region, cut through it, show the cells below a quality threshold (the web version
+  also colours by aspect ratio, size jump and volume and shows a cell budget).
 - **Safer assistant**: the assistant (and an MCP client) can only write files inside the workspace or the temp folder, never replace
   a file, and cannot reach network or device paths; a saved study that is opened is unpacked with its entry names checked.
 
