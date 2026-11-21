@@ -630,8 +630,10 @@ class Control(QObject):
             if not eng.pid:
                 raise ValueError("No study is open")
             return win.panels["results"]
-        R("results.flow", "Flow and cooling studies: switch on the flow tools (vortex surfaces, volume cloud, arrows, particle paths) and set them. Omitted arguments stay.",
+        R("results.flow", "Flow and cooling studies: switch on the flow tools (contour planes, vortex surfaces, volume cloud, arrows, particle paths) and set them. "
+                          "Omitted arguments stay.",
           {"region": (S, "object|all", False), "grid": (N, "48|64|96|128", False),
+           "planes": ("array", "contour planes, replacing the list: [{field, axis x|y|z, position 0..1 across the region, opacity 0.1..1}]; [] for none", False),
            "iso": (B, "vortex surfaces (Q-criterion) on/off", False), "iso_k": (N, "2..60: weaker vortices shown", False), "iso_color": (S, "field the surfaces are coloured by", False),
            "iso_gap": (N, "keep clear of walls, mm", False), "iso_smooth": (N, "0..3", False),
            "volume": (B, "volume rendering on/off", False), "volume_field": (S, "field of the cloud", False), "volume_density": (N, "0.5..30", False),
@@ -844,7 +846,11 @@ class Control(QObject):
             for k, v in kw.items():
                 if v is None:
                     continue
-                if k == "region":
+                if k == "planes":
+                    if not isinstance(v, list):
+                        raise ValueError("planes must be a list of {field, axis, position, opacity}")
+                    f.set_planes(v, emit=False)
+                elif k == "region":
                     data(f.region, v)
                 elif k == "grid":
                     data(f.res, str(int(v)))

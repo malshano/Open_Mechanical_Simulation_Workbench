@@ -222,6 +222,12 @@ class Engine(QObject):
         ax, pos = self._section_pos(rs, section, self._flow_box(rs))
         return self._flow_box(rs, 0.3, 0.8, section[0], pos)
 
+    def flow_focus_at(self, axis: str, pos: float):
+        """The camera's box for a contour plane across axis at pos (metres): close round the object, in its size at the plane."""
+        if self.project().study not in FLOW_STUDIES:
+            return None
+        return self._flow_box(self.project().results(), 0.3, 0.8, axis, pos)
+
     def _flow_surface(self, rs, field: str, ax, pos, box):
         """A flow or cooling result: the outside of the air box would hide everything, so draw the object (what the solver says to show:
         the body of an aircraft, the solid parts of a cooled assembly); with a section, the field on the plane through the air as well,
@@ -236,11 +242,12 @@ class Engine(QObject):
         return merge_payloads(plane, obj)
 
     # ------------------------------------------------------------------ flow tools: vortex surfaces, volume, arrows, particle paths
-    def flow_object(self, field: str, time_index: int = -1):
-        """The object (or the solid parts) of a flow result coloured by a field, whole."""
+    def flow_object(self, field: str, time_index: int = -1, cut=None):
+        """The object (or the solid parts) of a flow result coloured by a field: whole, or with cut=(axis index, position) only the part on the
+        low side of that plane, cut open there."""
         rs = self.project().results().at(time_index)
         s = self._flow_summary()
-        return rs.surface(field, groups=s.get("default_groups") or None, hide_regions=tuple(s.get("default_hidden_regions") or ()))
+        return rs.surface(field, groups=s.get("default_groups") or None, hide_regions=tuple(s.get("default_hidden_regions") or ()), below=cut)
 
     def flow_defaults(self) -> dict:
         """What the Flow tab starts from: the keep-clear-of-walls distance of the vortex surfaces (mm, 2 % of the reference length) and
@@ -290,6 +297,18 @@ class Engine(QObject):
             pos = box[ax] + min(max(float(vec.get("frac", 0.5)), 0.0), 1.0) * (box[3 + ax] - box[ax])
             n = int(vec.get("n", 24))
             out["vectors"] = memo(("vec", ax, round(pos, 6), n), lambda: resample.vector_payload(rs, ax, pos, box, n, "Velocity", hide))
+        planes = []
+        for pl in tools.get("planes") or []:
+            f = pl.get("field")
+            if f not in rs.fields or pl.get("axis", "y") not in ("x", "y", "z"):
+                continue
+            ax = "xyz".index(pl.get("axis", "y"))
+            pos = box[ax] + min(max(float(pl.get("frac", 0.5)), 0.0), 1.0) * (box[3 + ax] - box[ax])
+            pay = memo(("plane", f, ax, round(pos, 9)), lambda f=f, ax=ax, pos=pos: resample.plane_payload(rs, f, ax, pos, box, 0))
+            planes.append({"payload": pay, "field": f, "axis": pl.get("axis", "y"), "pos": pos,
+                           "opacity": min(max(float(pl.get("opacity", 1.0)), 0.1), 1.0)})
+        if planes:
+            out["planes"] = planes
         st = tools.get("streams") or {}
         if st.get("on") and "Velocity" in rs.fields:
             u = np.asarray(s.get("U_inf") or [1.0, 0.0, 0.0], float)

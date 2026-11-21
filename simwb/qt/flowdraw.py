@@ -31,6 +31,43 @@ def _lut(tab, lo: float, hi: float) -> vtkLookupTable:
     return lut
 
 
+def add_plane(view, p: dict, tab, lo: float, hi: float, opacity: float = 1.0, contours=None) -> int:
+    """A contour plane: the field on a cut through the flow (a resample.plane_payload), coloured over lo..hi, with the contour lines of the Display
+    tab when they are on. Returns the number of contour levels drawn."""
+    from vtkmodules.vtkRenderingCore import vtkActor, vtkPolyDataMapper
+
+    pts = _arr(p["positions"], np.float32).reshape(-1, 3).astype(np.float64)
+    idx = _arr(p["indices"], np.uint32).reshape(-1, 3).astype(np.int64)
+    val = _arr(p["values"], np.float32).astype(np.float64)
+    if not len(idx):
+        return 0
+    pd = view._polydata(pts, idx)
+    arr = numpy_to_vtk(np.ascontiguousarray(val), deep=True)
+    arr.SetName("value")
+    per_face = p.get("per") == "face"
+    (pd.GetCellData() if per_face else pd.GetPointData()).SetScalars(arr)
+    m = vtkPolyDataMapper()
+    m.SetInputData(pd)
+    m.SetLookupTable(_lut(tab, lo, hi))
+    m.UseLookupTableScalarRangeOn()
+    m.SetScalarRange(lo, hi)
+    m.SetColorModeToMapScalars()
+    m.SetScalarModeToUseCellData() if per_face else m.SetScalarModeToUsePointData()
+    a = vtkActor()
+    a.SetMapper(m)
+    pr = a.GetProperty()
+    pr.SetAmbient(0.7)
+    pr.SetDiffuse(0.35)
+    pr.SetOpacity(float(opacity))
+    pr.BackfaceCullingOff()
+    a.PickableOff()
+    view.ren.AddActor(a)
+    view.overlay_actors.append(a)
+    if contours and contours.get("on"):
+        return view._add_contours(pd, per_face, lo, hi, contours, p.get("scale") == "log")
+    return 0
+
+
 def add_arrows(view, p: dict, tab, lo: float, hi: float, length: float):
     """Arrows at p['positions'] along p['vectors'], coloured by their length (the speed); an arrow is `length` m per unit of speed."""
     pts = _arr(p["positions"], np.float32).reshape(-1, 3).astype(np.float64)

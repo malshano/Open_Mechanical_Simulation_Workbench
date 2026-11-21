@@ -200,21 +200,26 @@ class ResultsPanel(_Panel):
         row.addWidget(true)
         dv.addLayout(row)
         v.addWidget(self.deform_box)
-        v.addWidget(_h("Section"))
+        self.section_box = QWidget()                 # (parts only: a flow has its contour planes in the Flow tab)
+        sv = QVBoxLayout(self.section_box)
+        sv.setContentsMargins(0, 0, 0, 0)
+        sv.setSpacing(6)
+        sv.addWidget(_h("Section"))
         self.section_hint = _muted("Cut the part to see the inside: the field on the cut faces, for the side below the plane.")
-        v.addWidget(self.section_hint)
+        sv.addWidget(self.section_hint)
         w, self.section_grp, self.section_btns = _seg([("", "Off"), ("x", "X"), ("y", "Y"), ("z", "Z")], "", prefix="results.section")
         for k, b in self.section_btns.items():
             b.clicked.connect(lambda _=False, k=k: self._section_changed())
             b.setToolTip("No section" if not k else f"Cut at a plane across {k.upper()}")
-        v.addWidget(w)
+        sv.addWidget(w)
         self.section_pos = wid(QSlider(Qt.Horizontal), "results.section.pos")
         self.section_pos.setRange(0, 1000)
         self.section_pos.setValue(500)
         self.section_pos.setEnabled(False)
         self.section_pos.setToolTip("Where the plane cuts the part (from one end to the other)")
         self.section_pos.valueChanged.connect(lambda _=0: self._display_changed())
-        v.addWidget(self.section_pos)
+        sv.addWidget(self.section_pos)
+        v.addWidget(self.section_box)
         v.addWidget(_h("Model"))
         self.edges = wid(QCheckBox("Show the mesh edges"), "results.edges")
         self.edges.setToolTip("Draw the edges of the mesh cells on the surface")
@@ -492,14 +497,13 @@ class ResultsPanel(_Panel):
         elif self.stack.currentIndex() == 2:
             self.tab_btns["summary"].click()
         self.deform_box.setVisible(any(f["name"] == "Total deformation" or f["name"].startswith("Mode ") for f in infos))
-        self.section_hint.setText("Cut through the air to see the flow: the field on the plane, with the half of the object below it. "
-                                  "Off draws the object alone." if flow else
-                                  "Cut the part to see the inside: the field on the cut faces, for the side below the plane.")
-        if flow and infos and self._sec_pid != self.engine.pid:
-            self._sec_pid = self.engine.pid           # (a flow result opens cut through the middle: the whole air box would hide the object)
-            self.section_btns["y"].setChecked(True)
-            self.section_pos.setValue(500)
+        self.section_box.setVisible(not flow)
+        if flow and not self.section_btns[""].isChecked():          # (a flow is cut with the contour planes of the Flow tab)
+            self.section_btns[""].setChecked(True)
             self._section_changed()
+        if flow and infos and self._sec_pid != self.engine.pid:
+            self._sec_pid = self.engine.pid           # (a flow result opens with one contour plane through the middle: the air box would hide the object)
+            self.flow.set_planes([{"axis": "y", "frac": 0.5}], emit=False)
         sig = json.dumps([st["study"], st["solve"].get("status"), st["solve"].get("summary"), names, theme.effective(),
                           st.get("mesh_check")], default=str, sort_keys=True)
         if sig == self._sig:

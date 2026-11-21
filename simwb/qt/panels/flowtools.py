@@ -1,10 +1,12 @@
-"""The Flow tab of the results step (flow and cooling studies): the ways of looking at a flow that the web version has - vortex surfaces
-(Q-criterion), volume rendering, vector arrows on a plane and particle paths. Every tool has its own switch and they can be combined; the
+"""The Flow tab of the results step (flow and cooling studies): the ways of looking at a flow that the web version has - contour planes (as
+many as wanted, each moved along its axis with a slider), vortex surfaces (Q-criterion), volume rendering, vector arrows on a plane and particle
+paths. Every tool has its own switch and they can be combined; the
 object is drawn in grey under them. Plain widgets with ids (results.flow.*), so that the control API and the tests reach every one."""
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QHBoxLayout, QLabel, QSlider, QSpinBox, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFrame, QHBoxLayout, QLabel, QPushButton, QSlider, QSpinBox,
+                               QVBoxLayout, QWidget)
 
 from ..ids import wid
 from .common import _h, _muted, _seg
@@ -35,6 +37,20 @@ class FlowTools(QWidget):
         row.addWidget(self.region, 1)
         row.addWidget(self.res)
         v.addLayout(row)
+        # ---- contour planes
+        v.addWidget(_h("Contour planes"))
+        v.addWidget(_muted("Cuts through the flow, coloured by a field. Add as many as you like; move each along its axis with its slider."))
+        self.planes: list = []                   # what each plane shows: {field, axis, frac 0..1 along the region, opacity 0.1..1}
+        self._box = None                         # (the region in metres, for the positions in mm)
+        self._plane_rows: list = []
+        self.planes_box = QVBoxLayout()
+        self.planes_box.setSpacing(8)
+        v.addLayout(self.planes_box)
+        self.plane_add = wid(QPushButton("+  Add contour plane"), "results.flow.planes.add")
+        self.plane_add.setObjectName("ghostBorder")
+        self.plane_add.setToolTip("Another cut through the flow (a new plane starts across Y, in the middle)")
+        self.plane_add.clicked.connect(lambda _=False: self.add_plane())
+        v.addWidget(self.plane_add)
         # ---- vortex surfaces
         self.iso_box = QWidget()
         iv = QVBoxLayout(self.iso_box)
@@ -130,6 +146,125 @@ class FlowTools(QWidget):
         if not self._quiet:
             self.changed.emit()
 
+    # ------------------------------------------------------------------ contour planes
+    def _names_now(self) -> list:
+        return [f["name"] for f in self.infos]
+
+    def add_plane(self, field=None, axis="y", frac=0.5, opacity=1.0, emit=True):
+        names = self._names_now()
+        if field is None:
+            field = "Velocity" if "Velocity" in names else (names[0] if names else "")
+        if names and field not in names:
+            raise ValueError(f"{field!r} is not a field of this result: " + ", ".join(names))
+        if axis not in ("x", "y", "z"):
+            raise ValueError("axis must be x, y or z")
+        self.planes.append({"field": field, "axis": axis, "frac": min(max(float(frac), 0.0), 1.0),
+                            "opacity": min(max(float(opacity), 0.1), 1.0)})
+        self._rebuild_planes()
+        if emit:
+            self._emit()
+
+    def remove_plane(self, i: int, emit=True):
+        if not 0 <= i < len(self.planes):
+            raise ValueError(f"There is no plane {i + 1} (there are {len(self.planes)})")
+        self.planes.pop(i)
+        self._rebuild_planes()
+        if emit:
+            self._emit()
+
+    def set_planes(self, planes: list, emit=True):
+        """Replace the list: [{field, axis, frac (or position), opacity}]."""
+        self.planes = []
+        for p in planes or []:
+            p = dict(p)
+            self.add_plane(p.get("field"), p.get("axis", "y"), p.get("frac", p.get("position", 0.5)), p.get("opacity", 1.0), emit=False)
+        self._rebuild_planes()
+        if emit:
+            self._emit()
+
+    def set_box(self, box):
+        """The region the planes cross (metres): their positions are then written in mm."""
+        self._box = list(box) if box else None
+        for i, _ in enumerate(self._plane_rows):
+            self._pos_label(i)
+
+    def _pos_text(self, i: int, frac=None) -> str:
+        p = self.planes[i]
+        frac = p["frac"] if frac is None else frac
+        if not self._box:
+            return f"{frac * 100:.0f} %"
+        ax = "xyz".index(p["axis"])
+        lo, hi = self._box[ax], self._box[3 + ax]
+        return f"{p['axis']} = {(lo + frac * (hi - lo)) * 1000:.4g} mm"
+
+    def _pos_label(self, i: int, frac=None):
+        if i < len(self._plane_rows):
+            self._plane_rows[i]["pos_label"].setText(self._pos_text(i, frac))
+
+    def _rebuild_planes(self):
+        while self.planes_box.count():
+            it = self.planes_box.takeAt(0)
+            if it.widget() is not None:
+                it.widget().deleteLater()
+        self._plane_rows = []
+        names = self._names_now()
+        for i, p in enumerate(self.planes):
+            n = i + 1
+            card = QFrame()
+            card.setObjectName("card")
+            cv = QVBoxLayout(card)
+            cv.setContentsMargins(10, 8, 10, 8)
+            cv.setSpacing(6)
+            head = QHBoxLayout()
+            title = QLabel(f"<b>Plane {n}</b>")
+            head.addWidget(title)
+            head.addStretch(1)
+            rm = wid(QPushButton("Remove"), f"results.flow.plane.{n}.remove")
+            rm.setObjectName("ghostBorder")
+            rm.setToolTip(f"Delete plane {n}")
+            rm.clicked.connect(lambda _=False, i=i: self.remove_plane(i))
+            head.addWidget(rm)
+            cv.addLayout(head)
+            field = wid(QComboBox(), f"results.flow.plane.{n}.field")
+            for nm in names or [p["field"]]:
+                field.addItem(nm, nm)
+            field.setCurrentText(p["field"])
+            field.setToolTip("The field the plane is coloured by")
+            field.currentTextChanged.connect(lambda t, i=i: self._plane_set(i, "field", t))
+            cv.addLayout(self._row("Field", field))
+            w, _grp, btns = _seg([("x", "X"), ("y", "Y"), ("z", "Z")], p["axis"], prefix=f"results.flow.plane.{n}.axis")
+            for k, b in btns.items():
+                b.setToolTip(f"The plane across {k.upper()}")
+                b.clicked.connect(lambda _=False, i=i, k=k: self._plane_set(i, "axis", k))
+            cv.addLayout(self._row("Plane across", w))
+            pos = wid(QSlider(Qt.Horizontal), f"results.flow.plane.{n}.pos")
+            pos.setRange(0, 1000)
+            pos.setValue(int(round(p["frac"] * 1000)))
+            pos.setTracking(False)                 # (the plane is cut again when the handle is let go; the label follows the drag)
+            pos.setToolTip("Move the plane along its axis, across the region")
+            pos.sliderMoved.connect(lambda val, i=i: self._pos_label(i, val / 1000.0))
+            pos.valueChanged.connect(lambda val, i=i: self._plane_set(i, "frac", val / 1000.0))
+            cv.addLayout(self._row("Position", pos))
+            pos_label = wid(_muted(""), f"results.flow.plane.{n}.where")
+            cv.addWidget(pos_label)
+            op = wid(QSlider(Qt.Horizontal), f"results.flow.plane.{n}.opacity")
+            op.setRange(10, 100)
+            op.setValue(int(round(p["opacity"] * 100)))
+            op.setTracking(False)
+            op.setToolTip("Opacity: lower to see the object and the other tools behind the plane")
+            op.valueChanged.connect(lambda val, i=i: self._plane_set(i, "opacity", val / 100.0))
+            cv.addLayout(self._row("Opacity", op))
+            self.planes_box.addWidget(card)
+            self._plane_rows.append({"card": card, "field": field, "axis": btns, "pos": pos, "pos_label": pos_label, "opacity": op})
+            self._pos_label(i)
+
+    def _plane_set(self, i: int, key: str, value):
+        if i < len(self.planes) and self.planes[i].get(key) != value:
+            self.planes[i][key] = value
+            if key in ("frac", "axis"):
+                self._pos_label(i)
+            self._emit()
+
     # ------------------------------------------------------------------ small builders
     def _combo(self, id_: str, items: list, tip: str) -> QComboBox:
         c = wid(QComboBox(), id_)
@@ -186,6 +321,10 @@ class FlowTools(QWidget):
             self.iso_gap.blockSignals(True)
             self.iso_gap.setValue(float(defaults.get("gap_mm") or 0.0))
             self.iso_gap.blockSignals(False)
+            for p in self.planes:                                    # (a plane on a field this result does not have takes the first)
+                if p["field"] not in names and names:
+                    p["field"] = "Velocity" if "Velocity" in names else names[0]
+            self._rebuild_planes()
         self._iso_note()
 
     def _iso_note(self):
@@ -201,8 +340,9 @@ class FlowTools(QWidget):
                 "volume": {"on": self.vol_on.isChecked(), "field": self.vol_field.currentText(), "density": self.vol_density.value() / 10.0,
                            "style": self.vol_style.currentData()},
                 "vectors": {"on": self.vec_on.isChecked(), "axis": axis, "frac": self.vec_pos.value() / 1000.0, "n": self.vec_n.value()},
-                "streams": {"on": self.par_on.isChecked(), "n": self.par_n.value(), "seed": self.par_seed.currentData(), "steps": self.par_steps.value()}}
+                "streams": {"on": self.par_on.isChecked(), "n": self.par_n.value(), "seed": self.par_seed.currentData(), "steps": self.par_steps.value()},
+                "planes": [dict(p) for p in self.planes]}
 
     def any_on(self) -> bool:
         r = self.request()
-        return any(r[k]["on"] for k in ("iso", "volume", "vectors", "streams"))
+        return any(r[k]["on"] for k in ("iso", "volume", "vectors", "streams")) or bool(r["planes"])

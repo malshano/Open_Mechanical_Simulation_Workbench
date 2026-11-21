@@ -222,3 +222,48 @@ def test_a_section_of_a_slender_swept_wing_is_framed_by_its_chord_at_the_cut():
     assert width(whole) > 10                                         # (sized by the span: 6 + 2 x 0.3 x 10 + 0.8 x 10)
     assert 2.0 < width(cut) < 3.0, cut                               # (the chord at mid-span: 1 + 2 x 0.3 + 0.8 = 2.4)
     assert cut[0] < 3.0 + 1e-9 and cut[3] > 3.5                     # (and it is where the chord is at y = 5: x from 2.5 to 3.5)
+
+
+def test_contour_planes_are_a_list_in_the_flow_tab(ctl):
+    """Contour planes: as many as wanted, each with a field, an axis, a position slider (written in mm) and an opacity; Remove and + Add."""
+    import pytest
+
+    from simwb.qt.panels.flowtools import FlowTools
+    f = FlowTools()
+    f.set_fields([{"name": "Velocity", "max": 12.0}, {"name": "Pressure", "max": 5.0}], {"gap_mm": 0.0, "free_stream": 10.0})
+    assert f.request()["planes"] == [] and not f.any_on()
+    f.add_plane()                                                                                 # (Velocity across Y, in the middle)
+    f.add_plane("Pressure", "x", 0.25, 0.5)
+    assert f.any_on() and [(q["field"], q["axis"], q["frac"], q["opacity"]) for q in f.request()["planes"]] == \
+        [("Velocity", "y", 0.5, 1.0), ("Pressure", "x", 0.25, 0.5)]
+    rows = f._plane_rows
+    assert rows[1]["pos"].value() == 250 and rows[1]["opacity"].value() == 50 and rows[1]["field"].currentText() == "Pressure"
+    f.set_box([-1.0, -2.0, -3.0, 1.0, 2.0, 3.0])
+    assert rows[1]["pos_label"].text() == "x = -500 mm"                                             # (a quarter of the way across x)
+    rows[0]["pos"].setValue(1000)                                                                 # the slider moves the plane
+    assert f.request()["planes"][0]["frac"] == 1.0 and f._plane_rows[0]["pos_label"].text() == "y = 2000 mm"
+    f.remove_plane(0)
+    assert [q["field"] for q in f.request()["planes"]] == ["Pressure"]
+    f.set_planes([{"axis": "z", "position": 0.1}, {"field": "Velocity", "axis": "x"}])
+    assert [(q["axis"], q["frac"]) for q in f.request()["planes"]] == [("z", 0.1), ("x", 0.5)]
+    with pytest.raises(ValueError, match="not a field"):
+        f.add_plane("Temperature")
+    with pytest.raises(ValueError, match="axis"):
+        f.add_plane("Velocity", "w")
+    with pytest.raises(ValueError, match="no plane 5"):
+        f.remove_plane(4)
+
+
+def test_a_contour_plane_is_drawn_with_its_contour_lines(ctl):
+    from simwb import resample
+    from simwb.qt import flowdraw
+    rs = _box_results()
+    pay = resample.plane_payload(rs, "Temperature", 1, 0.5, [0, 0, 0, 1, 1, 1], 0)
+    v = ctl.win.view
+    tab = flowdraw.table("turbo", False, 0)
+    n0 = len(v.overlay_actors)
+    assert flowdraw.add_plane(v, pay, tab, 20.0, 30.0, 0.6) == 0                                   # the plane alone
+    assert len(v.overlay_actors) == n0 + 1 and abs(v.overlay_actors[-1].GetProperty().GetOpacity() - 0.6) < 1e-9
+    levels = flowdraw.add_plane(v, pay, tab, 20.0, 30.0, 1.0, {"on": True, "n": 4, "levels": [], "labels": False})
+    assert levels == 4 and len(v.overlay_actors) >= n0 + 4                                       # (+ a plane and its two line layers)
+    v.clear_overlay()

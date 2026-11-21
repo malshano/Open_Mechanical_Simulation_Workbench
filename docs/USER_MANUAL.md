@@ -572,11 +572,18 @@ The tabs are the ones of section 8, with these differences and additions.
 
 - **Display**: field, colour map (reverse, bands), range (auto or typed), deformation (animated, end state or off; scale; hidden when
   nothing deforms, as in flow and temperature results), edges, **Max and Min labels** (drag a label with the mouse to move it), and a
-  **Section**: an axis and a position that cut the model, with the cut plane shown over the object.
+  **Section** for parts (heat and structural results): an axis and a position that cut the part open. A flow is cut with contour planes
+  in the Flow tab instead.
 - **Contour lines**: in Display, switch on **Contours**: a number of evenly spaced lines, extra values you type, and **Write the value on
-  each line** (on by default). Lines are drawn over the colours, on the surface or on the section.
+  each line** (on by default). Lines are drawn over the colours: on the surface, on the section, and on every contour plane of a flow.
 - **Flow tab** (flow and cooling studies): ways of looking at the flow, drawn together over the grey object. Choose the **Region** (around
   the object, or the whole air box) and the **Grid** (48, 64, 96 or 128 points across: finer shows more and takes longer).
+  - **Contour planes**: cuts through the flow coloured by a field, as many as you like. A flow result opens with one (Velocity, across Y,
+    in the middle). **+ Add contour plane** adds another; each has its **Field**, **Plane across** X, Y or Z, a **Position** slider that
+    moves it along that axis (its place is written under it in mm; the plane is cut again when you let go), an **Opacity** slider (lower
+    it to see the object and the other tools behind) and **Remove**. With one plane alone the object is cut open at it and seen straight
+    on, as a section; with several planes, or other tools on, the object is drawn whole. The colours run over the range that holds nearly
+    all of the flow (1st to 99th percentile).
   - **Vortex surfaces** (turbulence): surfaces of equal Q-criterion (rotation beats strain). The slider **Weaker vortices shown** works
     towards the right (the Q value under it falls): at the strong end the surfaces only wrap the wall layer on the object; towards the
     weak end the tip vortices, the leading-edge vortex and the wake appear, and also more noise. **Coloured by** picks the field painted on

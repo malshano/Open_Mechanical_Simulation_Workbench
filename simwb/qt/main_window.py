@@ -647,7 +647,7 @@ class MainWindow(QMainWindow):
                     p = self.engine.result_surface(r["field"], section=r.get("section"))
                     info = next((f for f in self.panels["results"].fields if f["name"] == r["field"]), {})
                     flow = st["study"] in AIR_KINDS
-                    if flow and r.get("flow") and any(r["flow"][k]["on"] for k in ("iso", "volume", "vectors", "streams")):
+                    if flow and r.get("flow") and (any(r["flow"][k]["on"] for k in ("iso", "volume", "vectors", "streams")) or r["flow"].get("planes")):
                         self._draw_flow_tools(r, info)
                         return
                     rng = r["range"]
@@ -702,7 +702,11 @@ class MainWindow(QMainWindow):
                                    bands=r["bands"], vrange=rng)
             legend = True
         else:
-            self.view.show_surface(self.engine.flow_object(r["field"]), name="Object", unit="", edges=r["edges"], solid=(0.66, 0.70, 0.76))
+            one = L.get("planes", [])
+            cut = None
+            if len(one) == 1 and not any(k in L for k in ("volume", "vectors", "paths")):
+                cut = ("xyz".index(one[0]["axis"]), one[0]["pos"])   # (one plane alone: the object is cut open there, as a section; its near half would hide the plane)
+            self.view.show_surface(self.engine.flow_object(r["field"], cut=cut), name="Object", unit="", edges=r["edges"], solid=(0.66, 0.70, 0.76))
         if "volume" in L:
             f = fields.get(t["volume"]["field"], {})
             win = flowdraw.volume_window(L["volume"], t["volume"]["field"], L["free_stream"])
@@ -710,6 +714,18 @@ class MainWindow(QMainWindow):
             if not legend:
                 self.view.legend.set_scalar(t["volume"]["field"], f.get("unit", ""), win[0], win[1], tab, log=bool(L["volume"].get("log")))
                 legend = True
+        n_lines = 0
+        for pl in L.get("planes", []):
+            f = fields.get(pl["field"], {})
+            lo, hi = (f["p01"], f["p99"]) if f.get("p99", 0) > f.get("p01", 0) else (f.get("min", 0.0), f.get("max", 1.0))
+            n_lines += flowdraw.add_plane(self.view, pl["payload"], tab, lo, hi, pl["opacity"], r.get("contours"))
+            if not legend:
+                self.view.legend.set_scalar(pl["field"], f.get("unit", ""), lo, hi, tab)
+                legend = True
+        if L.get("planes"):
+            self.view.overlay_info["planes"] = [{"field": p["field"], "axis": p["axis"], "pos_m": p["pos"], "opacity": p["opacity"]} for p in L["planes"]]
+            self.view.overlay_info["plane_contour_levels"] = n_lines
+        self.panels["results"].flow.set_box(L.get("box"))
         if "vectors" in L and L["vectors"]["n"]:
             v = L["vectors"]
             flowdraw.add_arrows(self.view, v, tab, v["min"], v["max"], 1.2 * v["h"] / (v["p95"] or v["max"] or 1.0))
@@ -722,8 +738,14 @@ class MainWindow(QMainWindow):
             if not legend:
                 self.view.legend.set_scalar("Speed", pth.get("unit", ""), pth["min"], pth["max"], tab)
                 legend = True
-        self.view.overlay_info["flow_tools"] = [k for k in ("iso", "volume", "vectors", "paths") if k in L]
-        self._fit_once((self.engine.pid, "results", "tools"), "iso")
+        self.view.overlay_info["flow_tools"] = [k for k in ("planes", "iso", "volume", "vectors", "paths") if k in L]
+        only_planes = L.get("planes") and not any(k in L for k in ("iso", "volume", "vectors", "paths"))
+        if only_planes:                                   # planes alone: looked at straight on, close round the object at the first one
+            first = L["planes"][0]
+            self.view.set_focus(self.engine.flow_focus_at(first["axis"], first["pos"]))
+            self._fit_once((self.engine.pid, "results", "plane", first["axis"]), f"+{first['axis']}")
+        else:
+            self._fit_once((self.engine.pid, "results", "tools"), "iso")
         self.view.render()
         self.panels["results"].draw_marks()
 
