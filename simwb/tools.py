@@ -632,12 +632,32 @@ _PATH_KEYS = {"path", "paths", "location", "folder", "file", "files", "dir", "di
 _DEVICE_NAMES = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
 
 
+def _refuse_links(action: str, lexical: str) -> None:
+    """No part of the path may be a symbolic link or a junction (which can lead to a network share or anywhere else): each part is
+    looked at WITHOUT following it. (Cloud-sync placeholders, also reparse points, are fine.) Parts that do not exist yet end the walk."""
+    import os
+    import stat
+
+    symlink_or_junction = {0xA000000C, 0xA0000003}               # IO_REPARSE_TAG_SYMLINK, IO_REPARSE_TAG_MOUNT_POINT
+    parts = Path(lexical).parts
+    for i in range(1, len(parts) + 1):
+        here = os.path.join(*parts[:i]) if i > 1 else parts[0]
+        try:
+            st = os.lstat(here)
+        except FileNotFoundError:
+            return
+        except OSError as e:
+            raise ValueError(f"{action}: cannot look at '{here}' ({e.strerror or e})") from None
+        if stat.S_ISLNK(st.st_mode) or getattr(st, "st_reparse_tag", 0) in symlink_or_junction:
+            raise ValueError(f"{action}: '{here}' is a link; links are not followed in a path that comes through the assistant")
+
+
 def _local_path(action: str, raw) -> Path:
     """The path as a local file or folder, checked WITHOUT touching the disk until it is known to be local: it must be a full path
     that begins with a drive letter (so not a UNC path, a device or NT object path, a path of the current drive, a relative or
-    '~' path), without alternate data streams or device names, on a drive that is not a network drive. Only then is it resolved
-    (links followed) and the result checked again, because a link may lead to a share. The caller uses the returned path, not the
-    text it was given, so what was checked is what is opened."""
+    '~' path), without alternate data streams or device names, on a drive that is not a network drive. It is never resolved: links
+    are not followed but refused (see _refuse_links), because following one would itself reach the host a link points to. The caller
+    uses the returned path, not the text it was given, so what was checked is what is opened."""
     import os
     import re
     import sys
@@ -658,13 +678,8 @@ def _local_path(action: str, raw) -> Path:
 
         if ctypes.windll.kernel32.GetDriveTypeW(lexical[:3]) == 4:   # DRIVE_REMOTE: a mapped network drive
             raise ValueError(f"{action}: a file on a network drive is not allowed through the assistant")
-    target = Path(lexical).resolve()
-    real = str(target)
-    if real.startswith(chr(92) * 2) or (not posix and (len(real) < 2 or real[1] != ":")):
-        raise ValueError(f"{action}: the path leads to a network or device location, which is not allowed through the assistant")
-    if not posix and ctypes.windll.kernel32.GetDriveTypeW(real[:3]) == 4:
-        raise ValueError(f"{action}: the path leads to a network drive, which is not allowed through the assistant")
-    return target
+    _refuse_links(action, lexical)
+    return Path(lexical)
 
 
 def _check_paths(action: str, args: dict) -> dict:

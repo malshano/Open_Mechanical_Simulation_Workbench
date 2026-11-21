@@ -115,3 +115,26 @@ def test_the_window_gets_the_checked_path_not_the_text_given(window, tmp_path):
     (tmp_path / "wing.step").write_text("ISO-10303-21;")
     tools.ui_do(None, {"action": "geometry.import", "args": {"path": str(f)}})
     assert window[-1][1]["args"]["path"] == str((tmp_path / "wing.step").resolve())
+
+
+def test_links_in_a_path_are_not_followed(window, tmp_path):
+    import os
+    import subprocess
+    import sys
+
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "wing.step").write_text("ISO-10303-21;")
+    link = tmp_path / "link"
+    try:
+        if sys.platform == "win32":                               # a junction needs no privilege
+            subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(real)], check=True, capture_output=True)
+        else:
+            os.symlink(real, link, target_is_directory=True)
+    except Exception:
+        pytest.skip("cannot make a link here")
+    with pytest.raises(ValueError, match="is a link"):
+        tools.ui_do(None, {"action": "geometry.import", "args": {"path": str(link / "wing.step")}})
+    assert window == []
+    tools.ui_do(None, {"action": "geometry.import", "args": {"path": str(real / "wing.step")}})   # (the real folder is fine)
+    assert window[-1][1]["action"] == "geometry.import"
