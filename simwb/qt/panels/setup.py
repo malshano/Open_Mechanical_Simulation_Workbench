@@ -1,4 +1,7 @@
-"""The setup step panel: parts and materials, boundary conditions (picked on the model), study settings, readiness.
+"""The setup step panel, in the order of the web version's step: about the study (and its solver), parts and materials, boundary conditions
+(picked on the model; auto-detect inlet & outlet of a cooling study), symmetry planes, rotors (drone), moving zones (flow studies), the
+study's settings under the heading the web version gives them (Flow condition, Loads ...) with the suggested end time of a sliding-mesh run
+and the weight / thrust of a drone, readiness.
 
 Everything here is built from the engine's own definitions of the study (simwb.studies: boundary-condition types with their colours,
 help and parameters; settings; what the study needs), so every study type gets a complete panel."""
@@ -6,32 +9,28 @@ from __future__ import annotations
 
 import json
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout
 
 from ... import materials
+from .. import bcs as bcmarks
 from .. import mode, theme
+from .. import rotors as rotmod
+from .. import symmetry as symmod
 from ..forms import ParamForm, fmt_num
 from ..ids import wid
 from .common import ClickLabel, Section, _h, _muted, _Panel, clear_layout
 
 ADD_TEXT = "＋ Add boundary condition…"
+SETTINGS_HEADING = {"external_aero": "Flow condition", "vibration_modal": "Modes and vibration source", "aeroelastic_flutter": "Air flow and modes",
+                    "static_structural": "Loads", "heat_conduction": "Solver settings"}
 
 
-def bc_summary(btype: dict, params: dict) -> str:
-    """The value a boundary condition carries, short enough for a label on the model: '20 N', '60 °C', '5 W/m²K'."""
-    p = params or {}
-    comps = [k for k in p if k.startswith("f") and k.endswith("_N") and len(k) == 4]
-    if comps:                                        # a force given by components: its size
-        mag = sum(float(p[k]) ** 2 for k in comps) ** 0.5
-        return f"{fmt_num(mag)} N"
-    out = []
-    units = {q["key"]: q.get("unit", "") for q in btype.get("params", [])}
-    for q in btype.get("params", []):
-        k = q["key"]
-        if k in p and not q.get("options") and len(out) < 2:
-            out.append(f"{fmt_num(p[k])} {units.get(k, '')}".strip())
-    return ", ".join(out)
+def fmt_time(t: float) -> str:
+    return f"{t / 3600:.3g} h" if t >= 3600 else f"{t / 60:.3g} min" if t >= 120 else f"{t:.3g} s"
+
+
+bc_summary = lambda btype, params: bcmarks.bc_value({"params": params}, btype)  # noqa: E731  (the value a condition carries)
 
 
 def _item() -> QFrame:
@@ -47,15 +46,35 @@ class SetupPanel(_Panel):
         self._sig = None
         self.active: str | None = None          # the boundary condition whose faces are being picked
         self.last_selection: list = []
+        self.axis_pick: tuple | None = None     # ('rotor' | 'zone', index) while a centre of rotation is picked on the model
+        self.sym = symmod.Symmetry(self)
+        self.rot = rotmod.Rotors(self)
+        self.status = wid(_muted(""), "setup.status")         # what the last action did (or why it could not), until the next one
+        self.status.setVisible(False)
+        self.v.addWidget(self.status)
         self.holder = QVBoxLayout()
         self.holder.setSpacing(10)
         self.v.addLayout(self.holder)
         self.v.addStretch(1)
 
+    def say(self, text: str):
+        """A line at the top of the panel (and in the status bar) saying what happened."""
+        self.status.setText(text)
+        self.status.setVisible(bool(text))
+        if text and self.win is not None:
+            self.win.statusBar().showMessage(text, 8000)
+
+    def redo(self):
+        """Build the panel again now (a choice that only the panel holds: a draft plane, a pick mode) and redraw the marks."""
+        self._sig = None
+        if self.engine.pid:
+            self.refresh(self.engine.state())
+
     # ------------------------------------------------------------------ the 3D view
     def bind(self, win):
         super().bind(win)
         win.view.selectionChanged.connect(self._selection_changed)
+        win.view.facePicked.connect(self._face_picked)
 
     def shown(self):
         self.view.set_pick_mode("face")
@@ -68,8 +87,15 @@ class SetupPanel(_Panel):
         self.view.set_labels([])
         self.view.set_arrows([])
         self.active = None
+        self.axis_pick = None
+        self.sym.picking = False
+
+    def _picking_other(self) -> bool:
+        return bool(self.axis_pick or self.sym.picking)
 
     def _selection_changed(self, ids):
+        if self._picking_other():                       # (the click places a plane or a centre of rotation: see _face_picked)
+            return
         self.last_selection = list(ids)
         if self.win is not None and self.win.step == "setup" and self.active:
             try:
@@ -78,45 +104,39 @@ class SetupPanel(_Panel):
             except Exception as e:  # noqa: BLE001
                 self._fail(e)
 
+    def _face_picked(self, fid: int, add: bool):
+        if self.win is None or self.win.step != "setup" or not self.engine.pid:
+            return
+        if self.sym.picking:
+            self.view.set_selection([])
+            self.sym.from_face(fid)
+        elif self.axis_pick:
+            # (the point clicked, for the circular edge nearest to it, is known once the view has finished the click)
+            QTimer.singleShot(0, lambda fid=fid: self._axis_face(fid))
+
+    def _axis_face(self, fid: int):
+        if not self.axis_pick:
+            return
+        h = self.view.last_hit or {}
+        point = h.get("point") if h.get("face") == fid else None
+        self.view.set_selection([])
+        self.rot.picked(fid, list(point) if point is not None else None)
+
     def draw_marks(self):
-        """Tint the faces that carry a condition (the colour of its type) and hang its name and value on it."""
+        """Everything the setup hangs on the model (simwb.qt.bcs): each condition's faces tinted in its colour with its name and value,
+        arrows for loads and flows, the free stream, rotors and zones, heat sources, symmetry planes and gravity."""
         if self.win is None or self.win.step != "setup" or not self.engine.pid:
             return
         st = self.engine.state()
-        types = st["study_spec"]["face_bc_types"]
-        tints, labels, arrows = {}, [], []
         info = (st["geometry"].get("info") or {})
         bb = info.get("parts_bbox") or info.get("bbox")
         size = max((bb[k + 3] - bb[k]) for k in range(3)) if bb else 0.1
-        fmap = {f["id"]: f for f in self.engine.project().faces()}
-        for b in st.get("bcs") or []:
-            bt = types.get(b["type"], {})
-            if b["id"] != self.active:
-                for f in b.get("faces", []):
-                    tints[f] = bt.get("color", "#888888")
-            c = self.view.face_center(b.get("faces", []))
-            if c is not None:
-                val = bc_summary(bt, b.get("params") or {})
-                labels.append({"point": c, "text": f"{b['name']}: {val}" if val else b["name"], "color": bt.get("color")})
-                p = b.get("params") or {}
-                comps = [p.get(f"f{a}_N") for a in "xyz"]
-                if all(v is not None for v in comps) and any(abs(v) > 0 for v in comps):          # a force: an arrow along it, its tip on the faces
-                    arrows.append({"point": c, "dir": comps, "color": bt.get("color"), "length": 0.3 * size})
-                elif b["type"] == "pressure" and b.get("faces"):                                    # a pressure pushes on the faces: inward
-                    for fid in b["faces"][:6]:
-                        f = fmap.get(fid)
-                        fc = self.view.face_center([fid])
-                        if f and fc is not None:
-                            arrows.append({"point": fc, "dir": [-x for x in f["normal"]], "color": bt.get("color"), "length": 0.18 * size})
-        g = (st.get("settings") or {}).get("gravity")
-        if g and g != "off" and bb:                                                                 # gravity: an arrow from above the part
-            ax = "xyz".index(g[1])
-            sgn = 1.0 if g[0] == "+" else -1.0
-            d = [0.0, 0.0, 0.0]
-            d[ax] = sgn
-            ctr = [(bb[k] + bb[k + 3]) / 2 for k in range(3)]
-            arrows.append({"point": [ctr[0], ctr[1], ctr[2]], "dir": d, "color": theme.tokens()["ink"], "length": 0.34 * size})
-            labels.append({"point": [ctr[0], ctr[1], ctr[2] + (0.12 * size if ax != 2 else 0.0)], "text": "Gravity 9.81 m/s²", "color": theme.tokens()["muted"]})
+        t = theme.tokens()
+        tints, labels, arrows = bcmarks.marks(st, self.engine.project().faces(), self.view.face_center, size, self.active, self.sym.draft)
+        for a in arrows:
+            a["color"] = a.get("color") or t["ink"]
+        for la in labels:
+            la["color"] = la.get("color") or t["muted"]
         self.view.set_face_tints(tints)
         self.view.set_labels(labels)
         self.view.set_arrows(arrows)
@@ -129,8 +149,11 @@ class SetupPanel(_Panel):
         if not st:
             return
         hidden = sorted(self.win.hidden_bodies) if self.win is not None else []
+        busy = self.engine.project().busy()
         sig = json.dumps([st["study"], st.get("bcs"), [(b["id"], b["name"], b.get("material"), b.get("material_is_default"), b.get("heat_W"))
-                          for b in st["body_list"]], st.get("settings"), st.get("checks"), self.active, theme.effective(), hidden],
+                          for b in st["body_list"]], st.get("settings"), st.get("checks"), self.active, theme.effective(), hidden,
+                          st.get("symmetry"), st.get("rotors"), st.get("moving_zones"), (st.get("domain") or {}).get("enclosure_mode"),
+                          st["geometry"].get("updated"), busy, self.sym.draft, self.sym.picking, self.axis_pick, self.rot.oblique],
                          default=str, sort_keys=True) + str(mode.simple())
         if sig == self._sig:
             self.draw_marks()
@@ -138,23 +161,40 @@ class SetupPanel(_Panel):
         self._sig = sig
         clear_layout(self.holder)
         spec = st["study_spec"]
-        self._about(spec)
+        self._about(st, spec)
+        if busy:
+            self.holder.addWidget(wid(_muted("⏳ A job is running for this study: changes apply to the next run; the geometry tools wait for it."),
+                                      "setup.busy"))
         self._parts(st, spec)
         self._bcs(st, spec)
+        for w in self.sym.build(st, busy):
+            self.holder.addWidget(w)
+        if st["study"] == "external_aero":
+            for w in self.rot.build_rotors(st, busy):
+                self.holder.addWidget(w)
+        if st["study"] in ("external_aero", "cht_enclosure"):
+            for w in self.rot.build_zones(st, busy):
+                self.holder.addWidget(w)
         self._settings(st, spec)
         self._checks(st)
         nxt = wid(QPushButton("Next: mesh →"), "setup.next")
         nxt.setObjectName("primary")
+        nxt.setToolTip("Go to the Mesh step")
         nxt.clicked.connect(lambda: self.win.go("mesh"))
         self.holder.addWidget(nxt)
         self.draw_marks()
 
-    def _about(self, spec):
-        s = Section("About this simulation", "setup.about", expanded=True)
-        s.body.addWidget(_muted(spec.get("explain", "")))
+    def _about(self, st, spec):
+        s = Section(f"About this simulation: {spec.get('label', '')}", "setup.about", expanded=True)
+        s.body.addWidget(_muted(spec.get("explain", "") or spec.get("description", "")))
         needs = spec.get("needs") or []
         if needs:
             s.body.addWidget(_muted("What it needs: " + "; ".join(needs) + "."))
+        sv = (st.get("settings") or {}).get("structural_solver")
+        label = "CalculiX (the separate open-source program)" if str(sv or "").startswith("calculix") else spec.get("solver_label", "")
+        sol = wid(_muted(f"Solver: {label}"), "setup.about.solver")
+        sol.setToolTip("The program that solves this study" + (" (change it under Advanced settings, in Expert mode)" if sv else ""))
+        s.body.addWidget(sol)
         self.holder.addWidget(s)
 
     # ---- parts & materials
@@ -242,8 +282,24 @@ class SetupPanel(_Panel):
     def _bcs(self, st, spec):
         self.holder.addWidget(_h("Boundary conditions"))
         types = spec["face_bc_types"]
+        nat = st["study"] == "cht_enclosure" and (st.get("settings") or {}).get("air_flow") == "natural"
+        auto_box = (st.get("domain") or {}).get("enclosure_mode") == "auto_box"
+        other = (("Adiabatic wall (automatic air box sides: open to the room)" if auto_box else "Adiabatic wall") if nat
+                 else (spec.get("default_face_bc") or {}).get("label", ""))
+        if other:
+            self.holder.addWidget(wid(_muted(f"Other faces: {other}"), "setup.bc.other"))
+        if st["study"] == "cht_enclosure" and not nat:
+            io = wid(QPushButton("✨ Auto-detect inlet & outlet"), "setup.bc.auto_io")
+            io.setObjectName("ghostBorder")
+            io.setToolTip("Put the inlet and the outlet on the two end faces of the air volume (along its longest side, or the flow axis of "
+                          "an automatic air box); an inlet or outlet set before is replaced")
+            io.clicked.connect(self.auto_inlet_outlet)
+            self.holder.addWidget(io, 0, Qt.AlignLeft)
         for i, b in enumerate(st.get("bcs") or []):
             bt = types.get(b["type"], {})
+            if b.get("plane_id"):                    # the condition of a symmetry plane: set with the plane (below), shown greyed and linked
+                self.holder.addWidget(self._linked_card(i, b, bt, st))
+                continue
             card = _item()
             v = QVBoxLayout(card)
             v.setContentsMargins(10, 8, 10, 8)
@@ -265,22 +321,21 @@ class SetupPanel(_Panel):
             dele.clicked.connect(lambda _=False, bid=b["id"]: self.delete_bc(bid))
             head.addWidget(dele)
             v.addLayout(head)
-            v.addWidget(_muted(bt.get("label", b["type"])))
+            kind = _muted(bt.get("label", b["type"]) + " ⓘ")
+            kind.setToolTip(bt.get("help", ""))
+            v.addWidget(kind)
             n = len(b.get("faces", []))
-            if b.get("plane_id"):
-                v.addWidget(_muted("A symmetry plane: its faces follow the plane."))
-            else:
-                fb = wid(QPushButton(("Done picking" if b["id"] == self.active else f"Faces ({n})")), f"setup.bc.{i}.faces")
-                fb.setCheckable(True)
-                fb.setChecked(b["id"] == self.active)
-                fb.setObjectName("seg")
-                fb.setToolTip("Press, then click faces in the 3D view to put them in this condition (Ctrl adds or removes a face)")
-                fb.clicked.connect(lambda checked, bid=b["id"]: self.pick_faces(bid if checked else None))
-                v.addWidget(fb)
-                if b["id"] == self.active:
-                    v.addWidget(_muted("Click faces in the 3D view. Click a face again with Ctrl to remove it."))
-                elif n == 0:
-                    v.addWidget(_muted("No faces yet: press Faces, then click faces in the 3D view."))
+            fb = wid(QPushButton(("Done picking" if b["id"] == self.active else f"Faces ({n})")), f"setup.bc.{i}.faces")
+            fb.setCheckable(True)
+            fb.setChecked(b["id"] == self.active)
+            fb.setObjectName("toggle")
+            fb.setToolTip("Press, then click faces in the 3D view to put them in this condition (Ctrl adds or removes a face)")
+            fb.clicked.connect(lambda checked, bid=b["id"]: self.pick_faces(bid if checked else None))
+            v.addWidget(fb, 0, Qt.AlignLeft)
+            if b["id"] == self.active:
+                v.addWidget(_muted("Click faces in the 3D view. Click a face again with Ctrl to remove it."))
+            elif n == 0:
+                v.addWidget(_muted("No faces yet: press Faces, then click faces in the 3D view."))
             if bt.get("params"):
                 f = ParamForm(bt["params"], b.get("params") or {}, f"setup.bc.{i}.param")
                 f.changed.connect(lambda k, val, bid=b["id"], cur=dict(b.get("params") or {}): self._bc_update(bid, params={**cur, k: val}))
@@ -315,7 +370,12 @@ class SetupPanel(_Panel):
         picking faces for the new condition."""
         try:
             faces = list(self.last_selection if faces is None else faces)
+            if bc_type == "symmetry" and not faces:        # (a mirror is a plane through a flat face: the next click places it)
+                self.sym.toggle_pick(True)
+                return {"id": None, "name": "Symmetry plane", "type": "symmetry", "faces": [], "note": "Click a flat face in the 3D view"}
             bc = self.engine.project().add_bc(name, bc_type, faces, {})
+            if bc_type == "symmetry":
+                self.say("Rebuilding the geometry with the plane…")
             self.active = bc["id"] if bc.get("id") and not faces else None
             self.last_selection = []
             self.view.set_selection([])
@@ -323,6 +383,42 @@ class SetupPanel(_Panel):
             return bc
         except Exception as e:  # noqa: BLE001
             self._fail(e)
+
+    def _linked_card(self, i, b, bt, st):
+        """The condition of a symmetry plane: shown, greyed, with no controls of its own (move, flip or remove the plane instead)."""
+        pl = next((q for q in st.get("symmetry") or [] if q["id"] == b["plane_id"]), None)
+        card = _item()
+        wid(card, f"setup.bc.{i}.linked")
+        card.setToolTip("Set by the symmetry plane: move, flip or remove the plane under Symmetry planes")
+        v = QVBoxLayout(card)
+        v.setContentsMargins(10, 8, 10, 8)
+        v.setSpacing(4)
+        head = QHBoxLayout()
+        sw = QLabel("")
+        sw.setFixedSize(14, 14)
+        sw.setStyleSheet(f"background: {bt.get('color', '#888')}; border: 1px solid {theme.tokens()['line_strong']}; border-radius: 3px;")
+        head.addWidget(sw)
+        nm = QLabel(b["name"])
+        nm.setStyleSheet(f"font-weight: 600; color: {theme.tokens()['muted']};")
+        head.addWidget(nm, 1)
+        n = len(b.get("faces") or [])
+        head.addWidget(_muted(f"🔗 plane · {n} face{'' if n == 1 else 's'}"))
+        v.addLayout(head)
+        v.addWidget(_muted(f"{bt.get('label', 'Symmetry')} · connected to {pl['name'] if pl else 'its plane'} in Symmetry planes below "
+                           "(change it there)"))
+        return card
+
+    def auto_inlet_outlet(self):
+        """Cooling studies: the inlet and the outlet on the two end faces of the air volume."""
+        try:
+            res = self.engine.project().suggest_inlet_outlet(apply=True)
+        except Exception as e:  # noqa: BLE001
+            self._fail(e)
+            return None
+        self.say(f"Inlet ({len(res['inlet'])} face{'s' if len(res['inlet']) != 1 else ''}) and outlet ({len(res['outlet'])}) assigned "
+                 f"along {res['axis']}: set the inlet's speed or flow rate.")
+        self.engine.changed.emit()
+        return res
 
     def delete_bc(self, bid):
         try:
@@ -361,7 +457,7 @@ class SetupPanel(_Panel):
         params = spec.get("settings") or []
         if not params:
             return
-        self.holder.addWidget(_h("Loads and settings"))
+        self.holder.addWidget(_h(SETTINGS_HEADING.get(st["study"], "Flow & solver settings")))
         main = [p for p in params if not p.get("adv")]
         adv = [p for p in params if p.get("adv")]
         vals = st.get("settings") or {}
@@ -369,12 +465,56 @@ class SetupPanel(_Panel):
             f = ParamForm(main, vals, "setup.setting", simple=mode.simple())
             f.changed.connect(self._setting)
             self.holder.addWidget(f)
-        if adv and not mode.simple():          # (Simple mode: the essentials only)
-            s = Section("Advanced settings", "setup.advanced", expanded=False)
+        if adv and not mode.simple():          # (Simple mode: the essentials only; Expert: shown open, as the web version lists them)
+            s = Section("Advanced settings", "setup.advanced", expanded=True)
+            s.body.addWidget(_muted("Expert settings: the defaults suit a first run" +
+                                    (" (the solver program, the flow model, numerics)." if st["study"] != "static_structural" else " (the solver program).")))
             f = ParamForm(adv, vals, "setup.setting")
             f.changed.connect(self._setting)
             s.body.addWidget(f)
             self.holder.addWidget(s)
+        if st["study"] == "external_aero":
+            self._end_time(st)
+            w = self.rot.weight_note(st)
+            if w is not None:
+                self.holder.addWidget(w)
+
+    def _end_time(self, st):
+        """A transient run with sliding-mesh zones: the end time the engine suggests, with Use it."""
+        try:
+            a = self.engine.project().end_time_advice()
+        except Exception:  # noqa: BLE001
+            a = None
+        if not a:
+            return
+        card = _item()
+        v = QVBoxLayout(card)
+        v.setContentsMargins(10, 8, 10, 8)
+        v.setSpacing(4)
+        row = QHBoxLayout()
+        head = wid(QLabel(f"Suggested end time: {fmt_time(a['t'])}"), "setup.endtime.text")
+        head.setStyleSheet("font-weight: 600;")
+        head.setToolTip(f"{a['revs']:.3g} revolutions of {a['fast']}, about {round(a['steps']):,} time steps")
+        row.addWidget(head, 1)
+        if a["same"]:
+            row.addWidget(_muted("this is your end time"))
+        else:
+            use = wid(QPushButton("Use it"), "setup.endtime.use")
+            use.setObjectName("ghostBorder")
+            use.setToolTip(f"Set the end time to {fmt_time(a['t'])}")
+            use.clicked.connect(lambda _=False, t=a["t"]: self._setting("end_time", t))
+            row.addWidget(use)
+        v.addLayout(row)
+        v.addWidget(_muted(f"({a['revs']:.3g} revolutions of {a['fast']}, about {round(a['steps']):,} time steps.) Set by {a['why']}: the longest of 5 "
+                           "revolutions of the fastest zone, 2 of the slowest and 3 flow-through times of the model. Average the forces over the "
+                           "last revolution only."))
+        if a["long"]:
+            w = QLabel(f"⚠ Your end time of {fmt_time(a['cur'])} is {a['cur_revs']:.3g} revolutions of {a['fast']}: about "
+                       f"{round(a['cur'] / a['t'] * a['steps']):,} time steps.")
+            w.setWordWrap(True)
+            w.setStyleSheet(f"color: {theme.tokens()['warn_text']};")
+            v.addWidget(w)
+        self.holder.addWidget(card)
 
     def _setting(self, key, val):
         try:
