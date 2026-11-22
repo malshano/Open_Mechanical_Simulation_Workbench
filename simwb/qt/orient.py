@@ -260,7 +260,7 @@ class OrientController:
             return "Turning or moving…"
         who = "the whole model" if self.target is None else self.target["name"]
         if not self.steps:
-            return f"Nothing changed yet. Drag a ring (turn), an arrow (move) or the ball (move freely) in the 3D view, or use the buttons. Acting on: {who}."
+            return f"Nothing changed yet. Acting on: {who}."
         parts = [self._describe(s) for s in self.steps]
         tot = f" (in all: turn {angle_of(self.matrix):.1f}°, move {np.linalg.norm(self.shift) * 1000:.1f} mm)" if len(self.steps) > 1 else ""
         return f"On {who}: " + ", then ".join(parts) + tot

@@ -1398,7 +1398,10 @@ class Project:
         parts and is the same however they are turned, so a turn and its inverse bring the model back exactly (the
         middle of the bounding box of a tilted part is not the same point)."""
         info = self.data["geometry"].get("info") or {}
-        src = [b for b in info.get("source_bodies") or [] if b.get("centroid") and b.get("volume")]
+        eb = None                                                                  # (a duct that is the air of a cooling study is not a part)
+        if self.study == "cht_enclosure" and (self.data.get("domain", {}).get("enclosure_mode") or "body") == "body":
+            eb = (info.get("domain") or {}).get("enclosure_body")
+        src = [b for i, b in enumerate(info.get("source_bodies") or []) if i != eb and b.get("centroid") and b.get("volume")]
         solids = src or [b for b in self.bodies() if b["role"] == "solid"]
         if solids:
             w = np.array([max(b["volume"], 1e-30) for b in solids])

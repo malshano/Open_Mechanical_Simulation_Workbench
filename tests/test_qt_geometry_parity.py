@@ -573,3 +573,16 @@ def test_the_gizmo_stays_inside_the_picture_and_the_hint_has_a_bar_of_its_own(wi
             x, y, _ = g.project(p)
             assert -1 <= x <= w + 1 and -1 <= y <= h + 1                              # every ring point is inside the picture
     assert g.arrow_length < g._r
+
+
+def test_the_gizmo_sits_on_the_parts_not_on_the_duct_that_is_the_air(ctl):
+    """(The cooling example's duct is a body of the file that is the air: it pulled the turning point away from the chip and heatsink.)"""
+    c = ctl
+    c.do("study.example", {"study": "cht_enclosure"})
+    wait(c)
+    g = c.win.view.gizmo
+    bb = c.engine.state()["geometry"]["info"]["parts_bbox"]
+    assert g.on and all(bb[i] <= g.center[i] <= bb[i + 3] for i in range(3)), (g.center.tolist(), bb)
+    w, h = g._size()
+    x, y, _ = g.project(g.c)
+    assert 0 < x < w and 0 < y < h                                                     # the gizmo is in the picture
