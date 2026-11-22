@@ -106,6 +106,7 @@ class OrientController:
         self.apply_job = None                      # the job rebuilding the geometry; the preview stays until it is done
         self.pivot = np.zeros(3)
         self.size = 1.0
+        self.bound = 0.7                           # the bounding radius of what the gizmo acts on
         self.target: dict | None = None            # None: the whole model; else {"id": volume, "name": body name}
 
     # ------------------------------------------------------------------ the previewed change
@@ -354,7 +355,6 @@ class OrientController:
         row.addWidget(rings)
         v.addLayout(row)
         v.addWidget(p.align.start_button(busy))
-        p.align.build(v, busy)
         grid = QGridLayout()
         grid.setSpacing(4)
         for r, ax in enumerate("xyz"):
@@ -407,37 +407,47 @@ class OrientController:
         mv.setToolTip("Move by dx, dy, dz in mm (preview first)" if not busy else "Wait: the geometry is being rebuilt")
         mv.clicked.connect(lambda: self.move(*[float(f.text() or 0) for f in p.move_fields]))
         v.addWidget(mv)
-        # the readout, Apply / Cancel / Reset
-        self.readout = wid(_muted(self.text()), "geometry.rotate.readout")
-        v.addWidget(self.readout)
-        if self.pending:
-            v.addWidget(notice("info", "<b>Preview:</b> the " + ("parts are" if self.target is None else f"body {self.target['name']} is") +
-                               " turned or moved in the 3D view only (the air volume stays). Press <b>Apply</b> to rebuild the geometry this way, "
-                               "or Cancel. If you go to another step the change is applied.", "geometry.rotate.note"))
-        if self.target is not None and not can_edit:
-            v.addWidget(notice("warn", "Moving one body needs a STEP file (an STL or OBJ model cannot be edited): choose <b>Move all</b>.",
-                               "geometry.target.note"))
-        row = QHBoxLayout()
-        ap = wid(QPushButton("Apply"), "geometry.rotate.apply")
-        ap.setObjectName("primary")
-        ap.setEnabled(self.pending and not busy and (can_edit or self.target is None))
-        ap.setToolTip("Rebuild the geometry turned and moved like the preview (takes a moment)" if self.pending and not busy else
-                      "Wait: the geometry is being rebuilt" if busy else "Nothing to apply yet: drag a ring or an arrow, or press a button, first")
-        ap.clicked.connect(lambda: self._try(self.apply))
-        ca = wid(QPushButton("Cancel"), "geometry.rotate.cancel")
-        ca.setObjectName("ghostBorder")
-        ca.setEnabled(self.pending)
-        ca.setToolTip("Throw the preview away: the model goes back to where it was" if self.pending else "Nothing is previewed")
-        ca.clicked.connect(self.cancel)
         rs = wid(QPushButton("Reset orientation"), "geometry.turn.reset")
         rs.setObjectName("ghostBorder")
         rs.setEnabled(has_rotation and not busy)
         rs.setToolTip("Back to the orientation and place the CAD file had (rebuilds the geometry)" if has_rotation and not busy else
                       "Wait: the geometry is being rebuilt" if busy else "The whole model has not been turned or moved: it is as the file had it")
         rs.clicked.connect(lambda: self._try(self.reset))
-        for b in (ap, ca, rs):
-            row.addWidget(b)
-        v.addLayout(row)
+        v.addWidget(rs)
+
+    def build_bar(self, v: QVBoxLayout, busy: bool, can_edit: bool):
+        """The bar at the TOP of the panel: what is previewed (or the alignment in progress) in one line, and Apply / Cancel, always in sight."""
+        p = self.panel
+        bar = _item()
+        b = QVBoxLayout(bar)
+        b.setContentsMargins(8, 6, 8, 6)
+        b.setSpacing(4)
+        if p.align.active or p.align.picking:
+            line = ink_label(f"<b>{p.align.summary()}</b>", "geometry.align.summary")
+            b.addWidget(line)
+        self.readout = wid(_muted(self.text()), "geometry.rotate.readout")
+        b.addWidget(self.readout)
+        if self.target is not None and not can_edit:
+            b.addWidget(notice("warn", "Moving one body needs a STEP file (an STL or OBJ model cannot be edited): choose <b>Move all</b>.",
+                               "geometry.target.note"))
+        row = QHBoxLayout()
+        ap = wid(QPushButton("Apply"), "geometry.rotate.apply")
+        ap.setObjectName("primary")
+        ap.setEnabled(self.pending and not busy and (can_edit or self.target is None))
+        ap.setToolTip("Rebuild the geometry turned and moved like the preview in the 3D view (takes a moment). If you go to another step the change is applied."
+                      if self.pending and not busy else "Wait: the geometry is being rebuilt" if busy else
+                      "Nothing to apply yet: drag a ring or an arrow, press a turn or move button, or align a face first")
+        ap.clicked.connect(lambda: self._try(self.apply))
+        ca = wid(QPushButton("Cancel"), "geometry.rotate.cancel")
+        ca.setObjectName("ghostBorder")
+        ca.setEnabled(self.pending or p.align.active or p.align.picking)
+        ca.setToolTip("Throw the preview away: the model goes back to where it was" if self.pending else "Stop aligning"
+                      if p.align.active or p.align.picking else "Nothing is previewed")
+        ca.clicked.connect(self.cancel)
+        row.addWidget(ap, 1)
+        row.addWidget(ca, 1)
+        b.addLayout(row)
+        v.addWidget(bar)
 
     def _try(self, fn):
         try:

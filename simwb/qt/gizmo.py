@@ -15,7 +15,7 @@ from __future__ import annotations
 import math
 
 import numpy as np
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QTimer, Qt
 from vtkmodules.util.numpy_support import numpy_to_vtk, numpy_to_vtkIdTypeArray
 from vtkmodules.vtkCommonCore import vtkPoints
 from vtkmodules.vtkCommonDataModel import vtkCellArray, vtkPolyData
@@ -30,8 +30,9 @@ from . import theme
 
 SNAP_DEG = 5.0                          # Shift held: the angle snaps to steps of this many degrees (and a move to a round step in mm)
 RING_COLORS = ("#e23b3b", "#22c55e", "#3b82f6")   # x, y, z
-RING_SCALE = 0.62                       # the ring's radius in units of the model's largest extent
-ARROW_SCALE = 0.46                      # the move arrows' length, the same unit (they lie inside the rings)
+RING_SCALE = 0.6                        # the ring's radius in units of the bounding radius of what it acts on (half its diagonal) ...
+SCREEN_FRACTION = 0.30                  # ... but never more than this fraction of the 3D view's smaller side, so it always stays inside the picture
+ARROW_SCALE = 0.85                      # the move arrows' length in units of the ring's radius (they lie inside the rings)
 GRAB_PX = 9.0                           # how close (pixels) the pointer must be to a ring to take it
 HINT = "Drag a ring to turn · drag an arrow to move · drag the ball to move freely · hold Shift to snap (5°, round mm)"
 
@@ -92,6 +93,9 @@ class RotateGizmo:
         self.on = False
         self.center = np.zeros(3)
         self.size = 1.0
+        self.bound = 0.7                        # the bounding radius of what the gizmo acts on (half the diagonal of its box)
+        self._drawn_r = 0.0
+        self._redraw_queued = False
         self.callback = None
         self.actors: list = []
         self.hover: tuple | None = None         # ("rot" | "move" | "free", axis) under the pointer
@@ -104,7 +108,10 @@ class RotateGizmo:
         self.marker_actors: list = []
         self.text = None
         self.text_actor: vtkTextActor | None = None
-        self.hint_actor: vtkTextActor | None = None
+        try:
+            view.ren.GetActiveCamera().AddObserver("ModifiedEvent", self._camera_moved)
+        except Exception:  # noqa: BLE001
+            pass
 
     # ------------------------------------------------------------------ the camera, without a render window
     def _size(self):
@@ -144,13 +151,35 @@ class RotateGizmo:
         return out[0], d / (np.linalg.norm(d) or 1.0)
 
     # ------------------------------------------------------------------ the rings and arrows
+    def _scale(self) -> float:
+        """The ring's radius now (m): 0.6 x the bounding radius of what the gizmo acts on, cut down so that it takes at most 30 % of the
+        picture's smaller side where it is seen (zoomed in on a small part, or a model that fills the view, it stays inside)."""
+        base = RING_SCALE * self.bound
+        try:
+            cam = self.v.ren.GetActiveCamera()
+            d = np.array(cam.GetFocalPoint()) - np.array(cam.GetPosition())
+            right = np.cross(d, np.array(cam.GetViewUp()))
+            n = float(np.linalg.norm(right))
+            if n < 1e-12:
+                return base
+            right = right / n
+            c = self.c
+            x0, y0, _ = self.project(c)
+            x1, y1, _ = self.project(c + right * base)
+            px = math.hypot(x1 - x0, y1 - y0)                 # the ring's size on the screen if drawn at its natural size
+            w, h = self._size()
+            room = SCREEN_FRACTION * min(w, h)
+            return base if px <= room or px < 1e-9 else base * room / px
+        except Exception:  # noqa: BLE001
+            return base
+
     @property
     def radius(self) -> float:
-        return RING_SCALE * self.size
+        return self._scale()
 
     @property
     def arrow_length(self) -> float:
-        return ARROW_SCALE * self.size
+        return ARROW_SCALE * self._scale()
 
     @property
     def c(self) -> np.ndarray:
@@ -160,17 +189,18 @@ class RotateGizmo:
     def ring_points(self, a: int, n: int = 120) -> np.ndarray:
         u, v = ring_axes(a)
         t = np.linspace(0, 2 * np.pi, n, endpoint=False)
-        return self.c + self.radius * (np.cos(t)[:, None] * u + np.sin(t)[:, None] * v)
+        return self.c + self._r * (np.cos(t)[:, None] * u + np.sin(t)[:, None] * v)
 
     def arrow_tip(self, a: int) -> np.ndarray:
         e = np.zeros(3)
         e[a] = 1.0
-        return self.c + self.arrow_length * e
+        return self.c + ARROW_SCALE * self._r * e
 
-    def set(self, center, size: float, callback, target: int | None = None):
-        """Show the gizmo around `center` (the pivot of the turn), `size` the extent of what it acts on (m)."""
+    def set(self, center, size: float, callback, target: int | None = None, bound: float | None = None):
+        """Show the gizmo around `center` (the pivot of the turn), `size` the extent of what it acts on (m), `bound` its bounding radius."""
         self.center = np.asarray(center, float)
         self.size = max(float(size), 1e-9)
+        self.bound = max(float(bound) if bound else 0.7 * self.size, 1e-9)
         self.callback = callback
         self.target = target
         self.on = True
@@ -184,6 +214,24 @@ class RotateGizmo:
         self.v._clear(self.actors)
         self._hint(False)
         self.v.render()
+
+    @property
+    def _r(self) -> float:
+        return self._drawn_r if self._drawn_r > 0 else self._scale()
+
+    def _camera_moved(self, *_):
+        """The camera moved (a zoom, the view turned, the first fit): draw the gizmo again if its size on the screen should change."""
+        if not self.on or self.drag is not None or self._redraw_queued:
+            return
+        r = self._scale()
+        if self._drawn_r > 0 and abs(r - self._drawn_r) > 0.04 * self._drawn_r:
+            self._redraw_queued = True
+            QTimer.singleShot(0, self._redraw)
+
+    def _redraw(self):
+        self._redraw_queued = False
+        if self.on and self.drag is None:
+            self._draw()
 
     def _tube(self, pts, radius, color, opacity, closed=True):
         tube = vtkTubeFilter()
@@ -231,26 +279,28 @@ class RotateGizmo:
         v._clear(self.actors)
         if not self.on:
             return
+        self._drawn_r = self._scale()
+        R = self._drawn_r
         for a in range(3):
             hot, dim = self._state_of("rot", a)
-            self._tube(self.ring_points(a), self.size * (0.009 if hot else 0.005), RING_COLORS[a], 1.0 if hot else 0.35 if dim else 0.85)
+            self._tube(self.ring_points(a), R * (0.016 if hot else 0.009), RING_COLORS[a], 1.0 if hot else 0.35 if dim else 0.85)
         for a in range(3):                              # the move arrows: a shaft from the middle and a cone at its end
             hot, dim = self._state_of("move", a)
             op = 1.0 if hot else 0.35 if dim else 0.95
             tip = self.arrow_tip(a)
-            self._tube(np.array([self.c, tip]), self.size * (0.008 if hot else 0.0045), RING_COLORS[a], op, closed=False)
+            self._tube(np.array([self.c, tip]), R * (0.014 if hot else 0.008), RING_COLORS[a], op, closed=False)
             cone = vtkConeSource()
-            cone.SetHeight(self.size * 0.09)
-            cone.SetRadius(self.size * (0.035 if hot else 0.027))
+            cone.SetHeight(R * 0.15)
+            cone.SetRadius(R * (0.055 if hot else 0.043))
             cone.SetResolution(16)
             e = np.zeros(3)
             e[a] = 1.0
-            cone.SetCenter(*(tip + e * self.size * 0.045))
+            cone.SetCenter(*(tip + e * R * 0.075))
             cone.SetDirection(*e)
             self._solid(cone, RING_COLORS[a], op)
         hot, dim = self._state_of("free", 3)            # the ball in the middle: a free move in the plane of the view
         ball = vtkSphereSource()
-        ball.SetRadius(self.size * (0.032 if hot else 0.024))
+        ball.SetRadius(R * (0.05 if hot else 0.038))
         ball.SetThetaResolution(20)
         ball.SetPhiResolution(12)
         ball.SetCenter(*self.c)
@@ -259,21 +309,11 @@ class RotateGizmo:
         v.render()
 
     def _hint(self, on: bool):
-        v = self.v
-        if v.rw is None:
+        """The gizmo's hint in the bar under the 3D view (it never covers the picture)."""
+        bar = getattr(self.v, "banner", None)
+        if bar is None:
             return
-        if self.hint_actor is None:
-            self.hint_actor = vtkTextActor()
-            self.hint_actor.SetInput(HINT)
-            self.hint_actor.GetTextProperty().SetFontSize(13)
-            self.hint_actor.SetPosition(12, 10)
-            self.hint_actor.PickableOff()
-        self.hint_actor.GetTextProperty().SetColor(*_rgb(theme.tokens()["vp_text"]))
-        if on:
-            if not v.ren2.HasViewProp(self.hint_actor):
-                v.ren2.AddViewProp(self.hint_actor)
-        else:
-            v.ren2.RemoveViewProp(self.hint_actor)
+        bar.set("hint", HINT, 0) if on else bar.clear("hint")
 
     def show_angle(self, text: str | None):
         """What the drag in progress does (an angle, a distance), written in the corner of the 3D view (None: remove it)."""
@@ -549,14 +589,14 @@ class RotateGizmo:
         return {"rings": self.on, "hover": None if h is None else (f"{h[0]}:{'xyz'[h[1]] if h[1] < 3 else 'free'}"),
                 "dragging": None if d is None else f"{d['kind']}:{'xyz'[d['axis']] if d['axis'] < 3 else 'free'}",
                 "previewing": self.previewing, "preview_matrix": self.R.tolist(), "preview_shift_mm": (self.shift * 1000).round(6).tolist(),
-                "pivot": self.pivot.tolist(), "center": self.center.tolist(), "ring_radius": self.radius, "marker": self.marker is not None,
+                "pivot": self.pivot.tolist(), "center": self.center.tolist(), "ring_radius": self._r, "bound": self.bound, "marker": self.marker is not None,
                 "target_volume": self.target, "angle_text": self.text, "hint": HINT if self.on else "", "snap_mm": self.snap_mm()}
 
     def ring_point(self, a: int, deg: float) -> np.ndarray:
         """The world point of ring a at the given angle (0 along u)."""
         u, v = ring_axes(a)
         t = math.radians(deg)
-        return self.c + self.radius * (math.cos(t) * u + math.sin(t) * v)
+        return self.c + self._r * (math.cos(t) * u + math.sin(t) * v)
 
     def simulate_drag(self, a: int, degrees: float, shift: bool = False, start_deg: float = 20.0, steps: int = 6) -> dict:
         """A mouse drag along ring a that turns it by `degrees`: the press, a few moves and the release at the pixels where those
@@ -594,14 +634,14 @@ class RotateGizmo:
         e = np.zeros(3)
         e[a] = 1.0
         base = self.c.copy()
-        x, y, _ = self.project(base + e * self.arrow_length * along_frac)
+        x, y, _ = self.project(base + e * ARROW_SCALE * self._r * along_frac)
         if not self.press(x, y) or self.drag["kind"] != "move" or self.drag["axis"] != a:
             if self.drag is not None:
                 self.release(x, y)
             raise ValueError(f"The {'xyz'[a]} arrow cannot be taken from the camera's point of view: turn the 3D view so that it is not end-on")
         out = None
         for k in range(1, steps + 1):
-            x, y, _ = self.project(base + e * (self.arrow_length * along_frac + mm / 1000.0 * k / steps))
+            x, y, _ = self.project(base + e * (ARROW_SCALE * self._r * along_frac + mm / 1000.0 * k / steps))
             out = self.drag_to(x, y, shift)
         self.release(x, y, shift)
         return {"kind": "move", "axis": "xyz"[a], "mm": float(out) * 1000.0}

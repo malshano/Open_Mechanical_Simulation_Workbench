@@ -58,6 +58,22 @@ class AlignController:
                 "reference_direction": r and self.ref_normal(), "notice": self.notice,
                 "pending": self.p.orient.pending}
 
+    def summary(self) -> str:
+        """The current choice in one line: Face 7 -> Air volume: top (+z), same direction."""
+        f, r = self.face, self.ref
+        if self.pick:
+            return "Aligning: click the face of the model to align"
+        if f is None:
+            return ""
+        if r is not None:
+            how = ("facing away" if r["away"] else "facing the wall") if r["info"]["kind"] == "wall" else ("face to face" if r["away"] else "same direction")
+            return f"Face {f['face']} → {r['label'].capitalize() if r['label'].startswith('air') else r['label']}, {how}"
+        if self.target:
+            return f"Face {f['face']} → the plane facing {_minus(self.target)}"
+        if self.ref_pick:
+            return f"Face {f['face']} → click the plane to lay it against, or choose a coordinate plane"
+        return f"Face {f['face']} points {_minus(engine_orient.nearest_axis(self.normal()))}: choose the plane to lay it on"
+
     def normal(self) -> list:
         f = self.face
         return f["point_normal"] if self.mode == "point" and f.get("point_normal") else f["normal"]
@@ -83,6 +99,30 @@ class AlignController:
                   "is aligned by its average direction, or by the direction at the point you click.")
         self.p.view.set_pick_mode("face")
         self.p.view.set_selection([])
+        self._banner("Click the face of the model that you want to align (flat or curved), or press Done", "Done")
+        self.p.scroll_top()
+        self.p.rebuild()
+
+    def _banner(self, text: str | None, button: str | None = None):
+        """The instruction in the bar under the 3D view (None: take it away)."""
+        bar = getattr(self.p.view, "banner", None)
+        if bar is None:
+            return
+        if text:
+            bar.set("align", text, 1, button, self.stop_picking)
+        else:
+            bar.clear("align")
+
+    def stop_picking(self):
+        """Done / Skip in the bar: stop waiting for a click (the face and any previewed turn stay), and put the air volume back as it was."""
+        self.pick = self.ref_pick = False
+        self._banner(None)
+        if self.face is None:
+            self.end()
+        else:
+            self._restore_air()
+            self.p.view.set_face_tints({} if not self.ref else {self.ref["face"]: REF_COLOR})
+            self.p.orient.suspend(False)
         self.p.rebuild()
 
     def end(self, keep_preview: bool = False):
@@ -90,6 +130,7 @@ class AlignController:
         v = self.p.view
         was = self.active or self.ref_pick or self.saved is not None
         self._restore_air()
+        self._banner(None)
         self._reset()
         if v is not None:
             v.set_pick_mode(None)
@@ -137,7 +178,7 @@ class AlignController:
         self.p.view.set_pick_mode("face")
         self.p.orient.suspend(False)                              # (the preview of an earlier turn shows again, the face is in it)
         self.draw_marker()
-        self.p.rebuild()
+        self.start_ref_pick()                                     # (as the web version: the next click chooses the plane)
 
     def set_mode(self, mode: str):
         if not self.face or mode not in ("average", "point"):
@@ -159,6 +200,11 @@ class AlignController:
         if t not in engine_orient.AXES:
             raise ValueError(f"The plane's direction must be one of {', '.join(engine_orient.AXES)}")
         self.target, self.ref = t, None
+        if self.ref_pick:
+            self.ref_pick = False
+            self._banner(None)
+            self._restore_air()
+        self.p.view.set_face_tints({})
         self._set_turn(np.asarray(engine_orient.AXES[t], float), f"face {self.face['face']} laid on {_minus(t)}")
 
     def _set_turn(self, target_dir, text: str):
@@ -175,14 +221,16 @@ class AlignController:
 
     # ------------------------------------------------------------------ choosing a plane that is not a coordinate plane
     def _save_air(self):
-        """Show the air volume (translucent) and fit the view to it while a reference is picked, so its walls can be clicked."""
+        """Show the air volume (translucent) while a reference is picked, so its walls can be clicked. The camera stays on the model."""
         w = self.p.win
         if w is None or self.saved is not None or not w.act_air.isVisible():
             return
-        self.saved = {"air": bool(w.chk_air.isChecked()), "camera": self.p.view.camera()}
+        self.saved = {"air": bool(w.chk_air.isChecked())}
         if not self.saved["air"]:
-            w.chk_air.setChecked(True)                           # (shows it and fits the view to the whole air volume and the model)
-        self.p.view.set_view("iso")                              # (an oblique view: from straight along an axis one wall covers the whole picture)
+            w.chk_air.blockSignals(True)                         # (the switch's own handler would zoom out to the whole air volume)
+            w.chk_air.setChecked(True)
+            w.chk_air.blockSignals(False)
+            self.p.view.set_air_visible(True)
 
     def _restore_air(self):
         s, self.saved = self.saved, None
@@ -190,9 +238,10 @@ class AlignController:
         if s is None or w is None:
             return
         if w.chk_air.isChecked() != s["air"]:
+            w.chk_air.blockSignals(True)
             w.chk_air.setChecked(s["air"])
-        c = s["camera"]
-        self.p.view.set_camera(position=c["position"], focal_point=c["focal_point"], view_up=c["view_up"], view_angle=c["view_angle"])
+            w.chk_air.blockSignals(False)
+            self.p.view.set_air_visible(s["air"])
 
     def start_ref_pick(self):
         if not self.face:
@@ -201,11 +250,23 @@ class AlignController:
         self._save_air()
         self.p.orient.suspend(True)
         self.p.view.set_pick_mode("face")
-        has_air = self.saved is not None
-        self._say("info", "<b>Click the face to lay it against</b> in the 3D view: a face of any part (flat or curved)"
-                  + (", or a wall of the air volume, which is shown now. The walls and the bodies are also in the lists below, so you need not hit them." if has_air
-                     else ". The bodies and their faces are also in the lists below."))
+        pr = self.p.engine.project()
+        self._wall_names = {w["face"]: w["name"] for w in pr.air_walls()}
+        has_air = self.saved is not None or bool(self._wall_names)
+        self._banner("Now click the plane to align it to: a face of the model" + (" or a wall of the air volume (shown now; turn the view to reach another wall)" if has_air else "")
+                     + " - or choose a coordinate plane in the panel", "Done")
+        self.p.scroll_top()
         self.p.rebuild()
+
+    def hovered(self, fid: int):
+        """The pointer is over a face while the plane is being picked: say which one next to the cursor."""
+        from PySide6.QtGui import QCursor
+        from PySide6.QtWidgets import QToolTip
+        if not self.ref_pick or fid < 0:
+            QToolTip.hideText()
+            return
+        name = getattr(self, "_wall_names", {}).get(fid)
+        QToolTip.showText(QCursor.pos(), f"Air volume: {name}" if name else f"Face {fid}", self.p.view.iren)
 
     def choose_ref_face(self, fid: int, point=None, what: str = "face"):
         pr = self.p.engine.project()
@@ -220,6 +281,7 @@ class AlignController:
                     "label": label, "face": fid}
         info["click"] = info.get("click") or point
         self.ref_pick, self.target = False, None
+        self._banner(None)
         self.p.orient.suspend(False)
         self.p.view.set_face_tints({fid: REF_COLOR})
         self.p.view.set_selection([self.face["face"]])
@@ -354,6 +416,9 @@ class AlignController:
     def _done(self):
         self.end()
         self.p.rebuild()
+
+    def connect(self, view):
+        view.faceHovered.connect(self.hovered)
 
     def _try(self, fn):
         try:

@@ -53,6 +53,14 @@ class GeometryPanel(_Panel):
     def note(self) -> str:
         return _plain(self.align.notice[1]) if self.align.notice else ""
 
+    def scroll_top(self):
+        """Show the top of the panel (the bar with Apply / Cancel and the align box are there)."""
+        try:
+            if self.win is not None:
+                self.win.stack.currentWidget().verticalScrollBar().setValue(0)
+        except Exception:  # noqa: BLE001
+            pass
+
     def fail(self, e):
         self._fail(e)
 
@@ -66,6 +74,7 @@ class GeometryPanel(_Panel):
     def bind(self, win):
         super().bind(win)
         win.view.facePicked.connect(self._face_picked)
+        self.align.connect(win.view)
 
     def shown(self):
         self.view.set_pick_mode("face" if self.align.picking or self.align.face else None)
@@ -109,11 +118,12 @@ class GeometryPanel(_Panel):
                 bb = b["bbox"]
         if bb:
             o.size = max(bb[3] - bb[0], bb[4] - bb[1], bb[5] - bb[2])
+            o.bound = 0.5 * float(np.linalg.norm([bb[3] - bb[0], bb[4] - bb[1], bb[5] - bb[2]]))
             o.pivot = np.asarray(g.get("pivot") if (o.target is None and g.get("pivot")) else [(bb[k] + bb[k + 3]) / 2 for k in range(3)], float)
         o.preview_done(busy)
         if g.get("status") == "ready" and bb and o.rings_on and not busy:
             if v.gizmo.drag is None:
-                v.gizmo.set(o.pivot, o.size, o.on_handle, o.target["id"] if o.target else None)
+                v.gizmo.set(o.pivot, o.size, o.on_handle, o.target["id"] if o.target else None, o.bound)
         else:
             v.gizmo.clear()
         o.reapply()
@@ -142,6 +152,10 @@ class GeometryPanel(_Panel):
         if g.get("error"):
             self.holder.addWidget(_muted(f"The last import or edit failed: {g['error']}"))
         if g.get("status") == "ready":
+            can_edit = (g.get("info") or {}).get("source_format") not in ("stl", "obj")
+            self.orient.build_bar(self.holder, busy, can_edit)
+            if self.align.active or self.align.picking or self.align.notice:
+                self.align.build(self.holder, busy)
             self._file_card(st, g, busy)
             self._bodies(st)
             self.cad.build(self.holder, st, busy)

@@ -75,7 +75,6 @@ def test_a_drag_on_a_ring_turns_a_live_preview_and_apply_rebuilds(plate):
     assert not c.engine.state()["geometry"].get("rotation")              # ... the model is not, yet
     assert "z" in c.widget_do("geometry.rotate.readout")["value"] and "+90" in c.widget_do("geometry.rotate.readout")["value"]
     assert c.widget_do("geometry.rotate.apply")["enabled"] and c.widget_do("geometry.rotate.cancel")["enabled"]
-    assert c.widgets("geometry.rotate.note")["widgets"]                  # the preview notice (an icon box)
     job = c.do("geometry.rotate_apply")["result"]["job"]
     wait(c)
     after = box(c)
@@ -516,3 +515,61 @@ def test_a_part_of_a_flow_study_can_be_hidden(aero):
     assert c.win.view.geometry_info["faces"] < n                                        # (its faces are not drawn)
     c.widget_do("geometry.part.0.eye", "click")
     assert not c.win.hidden_parts and c.win.view.geometry_info["faces"] == n
+
+
+# ============================================================ the web version's flow: the camera stays on the model
+def test_after_the_first_click_the_plane_pick_starts_by_itself_and_the_camera_stays_on_the_model(aero):
+    c = aero
+    pr = c.engine.project()
+    view = c.win.view
+    f = max((f for f in pr.faces() if f.get("kind") == "body"), key=lambda f: f["area"])
+    cam0 = view.camera()
+    assert not c.win.chk_air.isChecked()
+    c.widget_do("geometry.align.start", "click")
+    assert "click the face of the model" in c.widget_do("view.banner")["value"].lower()            # the bar under the view says what to do
+    assert c.widget_do("view.banner.button")["text"] == "Done"
+    c.do("geometry.align_pick", {"face": f["id"]})
+    st = c.do("geometry.state")["result"]["align"]
+    assert st["picking_reference"]                                                                    # (no extra 'Pick the plane' press)
+    assert "now click the plane" in c.widget_do("view.banner")["value"].lower() and "air volume" in c.widget_do("view.banner")["value"]
+    assert c.win.chk_air.isChecked() and view.air_on                                                  # the air volume is shown ...
+    assert view.camera()["position"] == cam0["position"] and view.camera()["focal_point"] == cam0["focal_point"]   # ... the camera did not move
+    # a click on a wall previews the turn at once
+    wall = next(w for w in pr.air_walls() if "top" in w["name"])
+    assert c.widget_do("geometry.align.summary")["visible"]
+    c.do("geometry.align_pick", {"face": wall["face"]})
+    s = c.do("geometry.state")["result"]
+    assert s["pending"] and np.allclose(_normal_after(c), wall["normal"], atol=1e-6)
+    assert "→ Air volume: top" in c.widget_do("geometry.align.summary")["value"] and "facing the wall" in c.widget_do("geometry.align.summary")["value"]
+    assert view.camera()["position"] == cam0["position"]
+    c.widget_do("geometry.align.away", "click")
+    assert "facing away" in c.widget_do("geometry.align.summary")["value"]
+    c.widget_do("geometry.align.done", "click")
+    assert not c.win.chk_air.isChecked() and c.widget_do("view.banner")["value"].lower().startswith("drag a ring")   # (the air toggle is put back; the gizmo hint is back)
+    c.widget_do("geometry.rotate.cancel", "click")
+
+
+def test_apply_and_cancel_are_at_the_top_of_the_panel_in_sight(plate):
+    c = plate
+    top = c.widget_do("geometry.rotate.apply")["rect"][1]
+    assert top < c.widget_do("geometry.import")["rect"][1] + 5 and c.widget_do("geometry.rotate.cancel")["rect"][1] == top
+    assert c.widget_do("geometry.rotate.readout")["rect"][1] < c.widget_do("geometry.turn.x-90")["rect"][1]
+    c.widget_do("geometry.align.start", "click")
+    f = next(f for f in c.engine.project().faces() if f["surface_type"] == "Plane" and f.get("kind") not in ("farfield", "enclosure") and not f.get("interface"))
+    c.do("view.pick_face", {"id": f["id"]})
+    assert c.widget_do("geometry.align.summary")["rect"][1] < c.widget_do("geometry.import")["rect"][1]       # the align box comes first too
+    assert c.widget_do("geometry.align.face")["rect"][1] < c.widget_do("geometry.import")["rect"][1]
+
+
+def test_the_gizmo_stays_inside_the_picture_and_the_hint_has_a_bar_of_its_own(wing):
+    c = wing
+    g = c.win.view.gizmo
+    w, h = g._size()
+    assert "drag a ring" in c.widget_do("view.banner")["value"].lower() and "5°" in c.widget_do("view.banner")["value"]
+    r_px = max(np.hypot(g.project(p)[0] - g.project(g.c)[0], g.project(p)[1] - g.project(g.c)[1]) for p in g.ring_points(0) )
+    assert r_px <= 0.32 * min(w, h) + 1                                               # (at most 30 % of the picture's smaller side)
+    for a in range(3):
+        for p in g.ring_points(a):
+            x, y, _ = g.project(p)
+            assert -1 <= x <= w + 1 and -1 <= y <= h + 1                              # every ring point is inside the picture
+    assert g.arrow_length < g._r

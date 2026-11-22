@@ -29,6 +29,7 @@ import vtkmodules.vtkRenderingOpenGL2  # noqa: F401  (the OpenGL back end)
 import vtkmodules.vtkRenderingFreeType  # noqa: F401
 
 from . import colormaps, theme
+from .banner import Banner
 from .gizmo import RotateGizmo
 from .legend import Legend
 from .picking import FaceIndex, locator_for
@@ -76,6 +77,8 @@ class Viewport(QWidget):
         headless = no_gl()
         self.iren = QWidget(self) if headless else QVTKRenderWindowInteractor(self)
         lay.addWidget(self.iren, 1)
+        self.banner = Banner()          # what to do now, in a bar of its own under the picture (the gizmo's hint, the align step's instruction)
+        lay.addWidget(self.banner)
         self.legend = Legend()
         lay.addWidget(self.legend)
         self.viewbar = ViewBar(self)
@@ -280,7 +283,8 @@ class Viewport(QWidget):
         items = [(ids, col, 0.5) for col, ids in by_colour.items()]      # (translucent: the part stays visible under it)
         items.append((self.selection, "#ff9f1c", 0.9))
         if self.hover_highlight and self.hover_id >= 0 and self.hover_id not in self.selection:
-            items.append(([self.hover_id], "#ffd8a8", 0.8))
+            air = self.hover_id in {p[0] for p in self._air_parts}
+            items.append(([self.hover_id], "#4cc9f0" if air else "#ffd8a8", 0.3 if air else 0.8))   # (a wall of the air volume: a see-through tint)
         for ids, col, op in items:
             a = self._mark_actor(ids, col, op)
             if a is not None:
