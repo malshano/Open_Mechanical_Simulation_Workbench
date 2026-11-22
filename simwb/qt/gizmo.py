@@ -91,6 +91,7 @@ class RotateGizmo:
     def __init__(self, view):
         self.v = view
         self.on = False
+        self.paused = False                     # True while a face is being picked: the handles are hidden and cannot take a click
         self.center = np.zeros(3)
         self.size = 1.0
         self.bound = 0.7                        # the bounding radius of what the gizmo acts on (half the diagonal of its box)
@@ -206,6 +207,19 @@ class RotateGizmo:
         self.on = True
         self._draw()
 
+    def set_paused(self, on: bool):
+        """Hide the handles (and let every click through to the model) while the user is picking a face: the rings run over the model, so a
+        click on a face would otherwise grab a ring instead (the align steps: click the surface, click the plane)."""
+        on = bool(on)
+        if on == self.paused:
+            return
+        self.paused = on
+        self.drag = None
+        self.hover = None
+        if self.on:
+            self._draw()
+            self.v.render()
+
     def clear(self):
         self.on = False
         self.drag = None
@@ -277,7 +291,7 @@ class RotateGizmo:
     def _draw(self):
         v = self.v
         v._clear(self.actors)
-        if not self.on:
+        if not self.on or self.paused:
             return
         self._drawn_r = self._scale()
         R = self._drawn_r
@@ -348,7 +362,7 @@ class RotateGizmo:
     def pick(self, x: float, y: float) -> tuple | None:
         """The handle under pixel (x, y) (within a few pixels of its drawn line): ("free", 3) the ball, ("move", a) an arrow or ("rot", a)
         a ring; the nearest wins, the ball and the arrows before the rings where they meet."""
-        if not self.on:
+        if not self.on or self.paused:
             return None
         best, bd = None, GRAB_PX * self.dpr()
         c = self.project(self.c)

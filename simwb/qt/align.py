@@ -30,6 +30,30 @@ class AlignController:
         self._reset()
         self.saved: dict | None = None
 
+    @property
+    def pick(self) -> bool:
+        return self._pick
+
+    @pick.setter
+    def pick(self, on: bool):
+        self._pick = bool(on)
+        self._sync_gizmo()
+
+    @property
+    def ref_pick(self) -> bool:
+        return self._ref_pick
+
+    @ref_pick.setter
+    def ref_pick(self, on: bool):
+        self._ref_pick = bool(on)
+        self._sync_gizmo()
+
+    def _sync_gizmo(self):
+        """While a face is being picked (step 1 or 2) the gizmo's rings are hidden: they run over the model and would take the click."""
+        v = getattr(self.p, "view", None)
+        if v is not None:
+            v.gizmo.set_paused(getattr(self, "_pick", False) or getattr(self, "_ref_pick", False))
+
     def _reset(self):
         self.pick = False                  # waiting for the face to turn
         self.face: dict | None = None      # engine.align_info of the face to turn (+ "click")

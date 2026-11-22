@@ -105,6 +105,10 @@ class Viewport(QWidget):
             style = self._style = vtkInteractorStyleTrackballCamera()
             self.iren.SetInteractorStyle(style)
             style.AddObserver("StartInteractionEvent", lambda *_: self._user_moved())      # (the user took the camera: stop re-fitting it)
+            # (VTK's camera style grabs the mouse on a press: the release then goes ONLY to it and never reaches _on_release, so a click on a
+            # face - a press and release that hardly moved - was never seen when the press went to the camera. The style ends its interaction
+            # on that release: take it as the release. _on_release forgets the press, so the other path cannot count the click twice.)
+            style.AddObserver("EndInteractionEvent", lambda *_: self._on_release(None, None))
         self._focus = None      # (x0, x1, y0, y1, z0, z1): the camera is fitted to this region (a flow cut open: close to the object) instead of everything drawn
         self._autofit = False   # the camera was fitted by the program (not moved by the user): it is fitted again when the view is resized
         cam = self.ren.GetActiveCamera()
@@ -570,6 +574,14 @@ class Viewport(QWidget):
                 self.render()
             self.faceHovered.emit(int(fid))
 
+    def _to_view(self, q):
+        """A mouse position as VTK reports it (device pixels, origin bottom-left) -> the window pixels of click_at / hover_at (origin top-left,
+        as Qt and the control API count). They differ by the display scaling: on a 200 % screen a real click used to be taken for a place
+        twice as far out (and mirrored with the wrong height), so the face under the mouse was never found."""
+        dpr = float(self.iren.devicePixelRatioF() or 1.0)
+        h_dev = float(self.rw.GetSize()[1]) if self.rw is not None else self.iren.height() * dpr
+        return q[0] / dpr, (h_dev - 1.0 - q[1]) / dpr
+
     # (the mouse: a press and release that hardly moved is a click, anything else is the camera being turned)
     def _on_press(self, obj, event):
         self._press = tuple(self.iren.GetEventPosition())
@@ -602,7 +614,7 @@ class Viewport(QWidget):
         if abs(q[0] - p[0]) + abs(q[1] - p[1]) > 4:
             return
         add = bool(self.iren.GetControlKey() or self.iren.GetShiftKey())
-        self.click_at(q[0], self.iren.height() - 1 - q[1], add)
+        self.click_at(*self._to_view(q), add)
 
     def _on_move(self, obj, event):
         q = self.iren.GetEventPosition()
@@ -623,7 +635,7 @@ class Viewport(QWidget):
             return                                          # (over a ring: the cursor is a hand, no face is hovered)
         over = bool(self._label_state) and self._label_at(*q) is not None        # (the cursor says that a label can be dragged)
         self.iren.setCursor(Qt.SizeAllCursor) if over else self.iren.unsetCursor()
-        self.hover_at(q[0], self.iren.height() - 1 - q[1])
+        self.hover_at(*self._to_view(q))
 
     def picture(self, path: str):
         """The 3D view with its colour legend as a PNG."""
