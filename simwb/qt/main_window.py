@@ -640,9 +640,9 @@ class MainWindow(QMainWindow):
                     self.panels["mesh"].poor_info.setText(f"{n:,} cells below {poor:g}" + (f", the worst {p['worst']['quality']:.2f}" if p.get("worst") else " (none)"))
                     self._fit_once((self.engine.pid, "mesh", "poor", poor))
                     return
-                self.view.show_surface(p, name={"quality": "Cell quality", "size": "Cell size", "region": "Region"}[color],
-                                       unit="mm" if color == "size" else "-", edges=True, fixed_quality=color == "quality",
-                                       vrange=(0, 1) if color == "quality" else None, deform=0)
+                self.view.show_surface(p, name="Region" if color == "region" else p.get("label") or "Cell quality",
+                                       unit=p.get("unit") or "-", edges=True, fixed_quality=color == "quality",
+                                       vrange=(0, 1) if color == "quality" else p.get("range"), deform=0)
                 self._fit_once((self.engine.pid, "mesh", axis), f"+{axis}" if axis else None)
                 return
             if self.step == "results" and st["solve"].get("status") in ("done", "stale"):

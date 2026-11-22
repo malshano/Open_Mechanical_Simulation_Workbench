@@ -620,6 +620,7 @@ _PATHS = {  # tool or action: {argument: (where, allowed suffixes or None)}; whe
             # a local drive the USER chose (a new study's folder), False = an existing file to read
     "view.picture": {"path": (True, {".png"})},
     "study.export": {"path": (True, {".zip"})},
+    "solve.case_zip": {"path": (True, {".zip"})},
     "results.export": {"path": (True, {".csv", ".vtk", ".vtu", ".html", ".pdf", ".md", ".txt", ".json"})},
     "study.new": {"location": (True, None)},
     "study.save_as": {"location": (True, None)},

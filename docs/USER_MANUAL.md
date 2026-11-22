@@ -666,11 +666,49 @@ gravity too). A line at the top of the panel says what the last action did, or w
 
 ### 15.5 The mesh
 
-The Mesh step has the same settings as section 6 (resolution presets, tetrahedral or hex-dominant, advanced sizes, part sizing, wall
-layers, refinement boxes and cylinders). To inspect the result: **colour the mesh by** quality, **cell size** (a log scale, so the growth
-from the walls into the air shows) or **region** (each body; in a flow study the surface of the object and the far-field planes), **cut**
-through it along x, y or z, look at the cells **below a quality threshold** and **zoom to the worst** one. The web version also colours by
-aspect ratio, size jump and volume and shows a cell budget.
+The Mesh step has the same settings as section 6, in the same order: **Mesh type** (tetrahedral or hex-dominant, flow studies),
+**Resolution**, then the folded advanced options - **Advanced sizes and defeaturing**, **Part sizing**, **Refinement regions** and **Wall
+layers** - and **Generate mesh**.
+
+- **Refinement regions**: **＋ Box** and **＋ Cylinder** as before; each region now shows roughly how many cells it alone makes (in the
+  warning colour above three million), and a box has **Fit around part…** to put it round a part. In a flow study with rotating zones,
+  **＋ Wake behind rotating zones** adds a cylinder of zone-size cells two diameters downstream of each zone, and **＋ Tip-vortex rings**
+  adds a ring of fine cells along the path of the blade tips. Pressed again, they replace the earlier ones. Without a rotating zone the
+  two buttons are greyed and their tooltip says to add one in Setup.
+- **Statistics**: a table with the cells, nodes, near-wall and bulk size, minimum and mean quality, poor cells, the largest
+  non-orthogonality and skewness (when known), the defeatured faces, and for a hex-dominant mesh the share of hexahedra, prisms and
+  polyhedra, the largest aspect ratio and the share of the wall that got layers; then the time it took.
+- **Colour the mesh by** quality, **Cell size**, **Region**, **Aspect ratio**, **Size jump** (the largest size ratio to a neighbour) or
+  **Cell volume**. A hex-dominant mesh is shown by quality and region only (the other buttons are greyed and say why). Under the buttons,
+  the **cell budget** shows, for each band of cell sizes, the share of the cells and of the volume, with remarks when a size jump or a
+  fine region uses too many cells.
+- Under the quality check (**Show cells below**, **Zoom to worst**) the verdict lists, in words, what the web version checks: poorly
+  shaped cells, how many cells lie across the thinnest part and the narrowest air gap, the estimated wall y+ of a flow, and a coarse CFD
+  mesh. **Next: solve →** goes on.
+- **Mesh sensitivity** (once the study is solved and converged): **Run mesh-sensitivity check** re-meshes one preset finer, solves again
+  and compares the key results; **Three-level check (GCI)** uses two finer meshes and gives the grid-convergence index of each result.
+  The last check's table and verdict are shown here (and on the Results checks).
+
+### 15.5a Solving
+
+The Solve step follows the web version:
+
+- **Solver**: which solver runs and whether its program is found. If OpenFOAM (flow studies) or CalculiX (when chosen for a structural
+  study) is missing, **Install OpenFOAM** / **Install CalculiX** download it into the workbench folder with a progress bar and **Cancel
+  installation**; **Other ways to install** lists the alternatives and **Re-check** looks again. Without OpenFOAM the main button becomes
+  **Write OpenFOAM case (OpenFOAM not installed)**.
+- Flow studies: **Max iterations** (steady runs), **CPU cores** (**Auto (n)** or a number; one core where parallel runs are not set up),
+  **Start from** (uniform flow, or the solution of another study of the same kind, e.g. a steady run before a transient propeller run),
+  and the **Expected run time**.
+- While a run is going: **Stop and keep results** (flow runs: the solver writes the current solution) and **Cancel**. The progress shows
+  the latest residuals and a residual chart, as well as the solver's messages.
+- After a run: **Continue the last run for N more iterations** (steady), **Continue the run to … s, saving every … s** (a finished transient
+  run; the suggestion is one more turn of the fastest rotating zone) or **Resume** (a stopped transient run).
+- **Write OpenFOAM case only** and **Save case (.zip)…** (the case folder as a zip file).
+- **Advanced (OpenFOAM)** (Expert mode): the numerics (convection scheme, correctors, relaxation, Courant number, solver tolerance) with
+  **Reset all to defaults**, and the **Case files**: **Show case files** writes the case as the next run would and lists its dictionaries;
+  pressing one opens it in an editor under the list with **Save** (your version is used on every run, marked ✎), **Revert to generated**
+  and **Close**.
 
 ### 15.6 The Claude assistant in the window
 
@@ -688,12 +726,7 @@ These are in the web version (use it for them; a study opens in both):
 - Dragging the air volume's orange handles in the 3D view (type the sizes in the window instead).
 - Symmetry planes; detecting and editing rotors and moving zones; the flow-condition form (fluid, turbulence model, steady or transient)
   beyond the settings generated for each study type.
-- CAD edits of the model (holes, fillets, patterns ...) and the air-volume editor with its size presets.
-- Dragging a symmetry plane, a rotor disc or a zone with the mouse in the 3D view (type the values in the Setup panel instead).
-- Continue or extend a finished run, the number of cores, starting from another solution, and the advanced OpenFOAM numerics and case
-  files viewer.
-- The time bar and MP4 export for transient results; the modal spectrum, flutter and sweep plots; the mesh sensitivity and three-level checks.
-- Wake and tip-vortex refinement that is made automatically for rotors.
+- The time bar and MP4 export for transient results; the modal spectrum, flutter and sweep plots.
 
 `docs/QT_PARITY.md` lists every control of the web version and its state in the desktop version.
 

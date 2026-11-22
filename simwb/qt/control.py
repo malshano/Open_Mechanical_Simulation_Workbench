@@ -599,8 +599,8 @@ class Control(QObject):
         R("mesh.preset", "Choose the mesh resolution: quick, coarse, medium, fine, very_fine.", {"preset": (S, "preset", True)},
           lambda preset: (self._click(f"mesh.preset.{preset}"), {"preset": preset})[1])
         R("mesh.generate", "Generate (or regenerate) the mesh; a job (use wait).", {}, lambda: (self._click("mesh.generate"), {"started": True})[1])
-        R("mesh.view", "How the mesh is shown: colour by quality | size | region; cut through it along x, y, z or off.",
-          {"color": (S, "quality|size|region", False), "cut": (S, "x|y|z|off", False), "position": (N, "cut position 0..1", False)},
+        R("mesh.view", "How the mesh is shown: colour by quality | size | region | aspect | growth | volume; cut through it along x, y, z or off.",
+          {"color": (S, "quality|size|region|aspect|growth|volume", False), "cut": (S, "x|y|z|off", False), "position": (N, "cut position 0..1", False)},
           lambda color=None, cut=None, position=None: self._mesh_view(color, cut, position))
         # ---- solve and results
         def mesh_poor(on=True, threshold=None):
@@ -775,6 +775,8 @@ class Control(QObject):
         R("dock.show", "Show or hide a dock: outline, step, assistant, log.", {"name": (S, "dock", True), "visible": (B, "default true", False)},
           lambda name, visible=True: self._dock(name, visible))
         R("jobs.status", "Running jobs and the latest job of each kind for the open study.", {}, self._jobs)
+        from .jobs import register as _mesh_solve_actions        # (the Mesh and Solve steps' own actions: simwb/qt/jobs.py)
+        _mesh_solve_actions(self)
 
     def _register_setup(self, setup_panel):
         """Symmetry planes, rotors, moving zones, inlet / outlet and the end time of the Setup step: each drives the panel's own controls."""

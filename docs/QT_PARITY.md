@@ -74,24 +74,24 @@ plus the toolbar and application bar. Status: ✅ done in the Qt app · 🟡 par
 | Mesh type (tet / hex-dominant), resolution presets, generate | ✅ (tet / hex-dominant, presets, generate) | solve-mesh |
 | Advanced sizes and defeaturing | ✅ | solve-mesh |
 | Part sizing (per part size), delete | ✅ | solve-mesh |
-| Refinement regions: box, cylinder, wake behind rotating zones, tip-vortex rings, delete | 🟡 (box and cylinder; no automatic wake or tip-vortex rings) | solve-mesh |
+| Refinement regions: box, cylinder, wake behind rotating zones, tip-vortex rings, delete | ✅ (box, cylinder, wake, tip-vortex rings, fit around part, cell estimate) | solve-mesh |
 | Wall layers (prism / inflation): number, growth ratio | ✅ | solve-mesh |
-| Statistics (cells, nodes, near-wall/bulk size, quality, non-orthogonality, skewness, hex share ...) | 🟡 (cells, nodes, sizes, quality, verdict in words; hex share and layers; no skewness table) | solve-mesh |
-| Colour the mesh by quality / cell size / region | ✅ (new, not in the web version before) | - |
+| Statistics (cells, nodes, near-wall/bulk size, quality, non-orthogonality, skewness, hex share ...) | ✅ (the web version's table, row for row) | solve-mesh |
+| Colour the mesh by quality / cell size / aspect ratio / size jump / volume / region; cell budget | ✅ (all six; the cell budget under them) | solve-mesh |
 | Cut through the mesh | ✅ | - |
 | Cell quality histogram; show cells below a threshold; zoom to worst | ✅ (histogram, verdict, show cells below a threshold, zoom to the worst) | solve-mesh |
-| Mesh-sensitivity check, three-level (GCI) check; mesh verdict | ⬜ | solve-mesh / results |
+| Mesh-sensitivity check, three-level (GCI) check; mesh verdict | ✅ (verdict in words as the web version; the check and GCI with their table in the Mesh step) | solve-mesh / results |
 
 ## 4 Solve
 
 | Web feature | Qt | Owner |
 |---|---|---|
-| Run, progress, status, log | ✅ (Run first on the step, progress, state, Run again after a finished run) | solve-mesh |
-| Solver selection, software used per step, install OpenFOAM / CalculiX, re-check | 🟡 (solver and the software behind each step, folded; no install buttons) | solve-mesh |
-| Cores (Auto / 1..N), initialise from another study, uniform flow | ⬜ | solve-mesh |
-| Advanced (OpenFOAM) numerics: schemes, limits, reset to defaults, revert to generated, save | ⬜ | solve-mesh |
-| Continue run, extend a transient run, resume, Stop and keep results, Cancel | ⬜ | solve-mesh |
-| Write OpenFOAM case only; case files viewer; download case zip | 🟡 (button; no case file viewer or zip download) | solve-mesh |
+| Run, progress, status, log | ✅ (Run first on the step, progress, state, residuals and their chart, Run again after a finished run) | solve-mesh |
+| Solver selection, software used per step, install OpenFOAM / CalculiX, re-check | ✅ (install with progress and Cancel, other ways, Re-check) | solve-mesh |
+| Cores (Auto / 1..N), initialise from another study, uniform flow | ✅ (also Max iterations and the expected run time) | solve-mesh |
+| Advanced (OpenFOAM) numerics: schemes, limits, reset to defaults, revert to generated, save | ✅ | solve-mesh |
+| Continue run, extend a transient run, resume, Stop and keep results, Cancel | ✅ | solve-mesh |
+| Write OpenFOAM case only; case files viewer; download case zip | ✅ (case files editor in the panel; Save case (.zip)…) | solve-mesh |
 | Solver output (latest lines) + full log | ✅ (also in the Output dock) | solve-mesh |
 | View results → | ✅ | solve-mesh |
 

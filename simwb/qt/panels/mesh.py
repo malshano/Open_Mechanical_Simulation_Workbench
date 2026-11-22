@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QDoubleValidator
-from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSlider
+from PySide6.QtWidgets import QButtonGroup, QCheckBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSlider, QWidget
+
+from ... import project as P
 
 from .. import mode, theme
 from ..charts import QualityHist
 from ..forms import fmt_num
 from ..ids import wid
+from ..meshtools import Budget, MeshCheck, StatsGrid, mesh_notes, stats_rows
 from .common import _h, _muted, _Panel, _seg
 from .mesh_adv import MeshAdvanced
 
@@ -40,6 +43,15 @@ def verdict(q: dict, stats: dict | None = None) -> tuple:
 
 class MeshPanel(_Panel):
     PRESETS = [("quick", "Quick"), ("coarse", "Coarse"), ("medium", "Medium"), ("fine", "Fine"), ("very_fine", "Very fine")]
+    COLORS = [("quality", "Quality", "Colour each cell by its shape quality (1 ideal, 0 flat or degenerate)"),
+              ("size", "Cell size", "Colour each cell by its size (edge length in mm, logarithmic): where the cells are fine and where coarse"),
+              ("region", "Region", "Colour the cells by what they belong to: each body, the object's surface and the far field"),
+              ("aspect", "Aspect ratio", "Colour each cell by its aspect ratio (longest edge / smallest height; 1.22 is a regular "
+                                         "tetrahedron): slivers and needles stand out"),
+              ("growth", "Size jump", "Colour each cell by the largest size ratio to a neighbour (1 = same size; a smooth mesh stays "
+                                      "below about 1.5)"),
+              ("volume", "Cell volume", "Colour each cell by its volume (mm³)")]
+    TET_ONLY = ("size", "aspect", "growth", "volume")
 
     def __init__(self, engine, parent=None):
         super().__init__(engine, parent)
@@ -68,14 +80,55 @@ class MeshPanel(_Panel):
         self.gen.setObjectName("primary")
         self.gen.clicked.connect(self._generate)
         self.v.addWidget(self.gen)
+        self.stale_note = wid(QLabel(""), "mesh.stale")
+        self.stale_note.setWordWrap(True)
+        self.v.addWidget(self.stale_note)
+        self.stats_h = _h("Statistics")
+        self.v.addWidget(self.stats_h)
         self.stats = wid(_muted(), "mesh.stats")
         self.v.addWidget(self.stats)
-        self.verdict = wid(QLabel(""), "mesh.verdict")
-        self.verdict.setWordWrap(True)
-        self.v.addWidget(self.verdict)
-        self.v.addWidget(_h("Cell quality"))
+        self.grid = wid(StatsGrid(), "mesh.stats.table")
+        self.v.addWidget(self.grid)
+        self.cut_h = _h("Cut through the mesh")
+        self.v.addWidget(self.cut_h)
+        w, self.cut_grp, self.cut_btns = _seg([("", "Off"), ("x", "X"), ("y", "Y"), ("z", "Z")], "", prefix="mesh.cut")
+        for k, b in self.cut_btns.items():
+            b.clicked.connect(lambda _=False, k=k: self._set(axis=k))
+            b.setToolTip("No cut: the outside of the mesh" if not k else f"Cut the mesh across the {k.upper()} axis (move the cut with the slider)")
+        self.cut_box = w
+        self.v.addWidget(w)
+        self.slider = wid(QSlider(Qt.Horizontal), "mesh.cut_position")
+        self.slider.setRange(0, 1000)
+        self.slider.setValue(500)
+        self.slider.setToolTip("Where the cut is, from one end of the mesh to the other")
+        self.slider.valueChanged.connect(lambda x: self._set(frac=x / 1000))
+        self.v.addWidget(self.slider)
+        self.cut_hint = _muted("A cut shows the cells inside: the air around the object, where the object was cut out of it, "
+                               "and how the cells grow with distance (colour by Cell size).")
+        self.v.addWidget(self.cut_hint)
+        self.hist_h = _h("Cell quality")
+        self.v.addWidget(self.hist_h)
         self.hist = QualityHist()
         self.v.addWidget(self.hist)
+        self.color_h = _h("Colour the mesh by")
+        self.v.addWidget(self.color_h)
+        self.color_btns, self.color_grp = {}, QButtonGroup(self)
+        self.color_grp.setExclusive(True)
+        self.color_rows = []
+        for row in (self.COLORS[:3], self.COLORS[3:]):
+            w, _grp, btns = _seg([(k, t) for k, t, _ in row], "quality", prefix="mesh.color")
+            for (k, _t, tip), b in zip(row, btns.values()):
+                _grp.removeButton(b)
+                self.color_grp.addButton(b)
+                b.setToolTip(tip)
+                b.clicked.connect(lambda _=False, k=k: self._set(color=k))
+                self.color_btns[k] = b
+            self.color_rows.append(w)
+            self.v.addWidget(w)
+        self.color_note = wid(_muted(""), "mesh.color.note")
+        self.v.addWidget(self.color_note)
+        self.budget = wid(Budget(), "mesh.budget")
+        self.v.addWidget(self.budget)
         row = QHBoxLayout()
         self.poor_chk = wid(QCheckBox("Show cells below"), "mesh.poor.on")
         self.poor_chk.setToolTip("Show only the cells below this quality, on the model, to see where the mesher struggles (thin gaps, small faces)")
@@ -93,28 +146,32 @@ class MeshPanel(_Panel):
         row.addWidget(self.poor_edit)
         row.addWidget(self.poor_zoom)
         row.addStretch(1)
-        self.v.addLayout(row)
+        self.poor_row = QWidget()
+        self.poor_row.setLayout(row)
+        row.setContentsMargins(0, 0, 0, 0)
+        self.v.addWidget(self.poor_row)
         self.poor_info = wid(_muted(), "mesh.poor.info")
         self.v.addWidget(self.poor_info)
-        self.v.addWidget(_h("Colour the mesh by"))
-        w, self.color_grp, self.color_btns = _seg([("quality", "Quality"), ("size", "Cell size"), ("region", "Region")], "quality",
-                                                  prefix="mesh.color")
-        for k, b in self.color_btns.items():
-            b.clicked.connect(lambda _=False, k=k: self._set(color=k))
-        self.v.addWidget(w)
-        self.v.addWidget(_h("Cut through the mesh"))
-        w, self.cut_grp, self.cut_btns = _seg([("", "Off"), ("x", "X"), ("y", "Y"), ("z", "Z")], "", prefix="mesh.cut")
-        for k, b in self.cut_btns.items():
-            b.clicked.connect(lambda _=False, k=k: self._set(axis=k))
-        self.v.addWidget(w)
-        self.slider = wid(QSlider(Qt.Horizontal), "mesh.cut_position")
-        self.slider.setRange(0, 1000)
-        self.slider.setValue(500)
-        self.slider.valueChanged.connect(lambda x: self._set(frac=x / 1000))
-        self.v.addWidget(self.slider)
-        self.v.addWidget(_muted("A cut shows the cells inside: the air around the object, where the object was cut out of it, "
-                                "and how the cells grow with distance (colour by Cell size)."))
+        self.verdict = wid(QLabel(""), "mesh.verdict")
+        self.verdict.setWordWrap(True)
+        self.v.addWidget(self.verdict)
+        self.notes = wid(QLabel(""), "mesh.verdict.notes")
+        self.notes.setWordWrap(True)
+        self.notes.setTextFormat(Qt.RichText)
+        self.v.addWidget(self.notes)
+        self.next = wid(QPushButton("Next: solve →"), "mesh.next")
+        self.next.setObjectName("primary")
+        self.next.setToolTip("Go on to step 4, Solve")
+        self.next.clicked.connect(lambda: self.win.go("solve"))
+        self.v.addWidget(self.next)
+        self.check_h = _h("Mesh sensitivity")
+        self.check_h.setToolTip("Solves the study again on a finer mesh and compares the key results: how much they still change with the mesh")
+        self.v.addWidget(self.check_h)
+        self.check = MeshCheck(self)
+        self.v.addWidget(self.check)
         self.v.addStretch(1)
+        self._budget_key = None
+        self.hex = False
 
     # ------------------------------------------------------------------ choices
     def _set(self, **kw):
@@ -140,12 +197,15 @@ class MeshPanel(_Panel):
     def _generate(self):
         try:
             self.engine.generate_mesh()
+            self.engine.changed.emit()
             self.stats.setText("Meshing…")
         except Exception as e:  # noqa: BLE001
             self._fail(e)
 
     def _poor_toggled(self, on):
         self.poor_on = on
+        self.poor_zoom.setEnabled(on)
+        self.poor_zoom.setToolTip("Look at the poorest cell" if on else "Switch on 'Show cells below' first")
         self.changed.emit()
 
     def _poor_thr(self):
@@ -168,7 +228,22 @@ class MeshPanel(_Panel):
         return w
 
     def request(self):
-        return self.axis or None, self.frac, self.color, (self.poor_thr if self.poor_on else None)
+        color = self.color
+        if self.hex and color in self.TET_ONLY:              # (the hex-dominant mesh is shown by its quality only)
+            color = "quality"
+        return self.axis or None, self.frac, color, (self.poor_thr if self.poor_on else None)
+
+    def mesh_check(self, levels: int):
+        """The mesh-sensitivity check: one level finer (levels=1) or the three-level grid-convergence check (levels=2); a job."""
+        try:
+            j = self.engine.project().mesh_check(levels=levels)
+        except Exception as e:  # noqa: BLE001
+            self._fail(e)
+            raise
+        self.engine.message.emit("Three-level mesh check started" if levels == 2 else
+                                 "Mesh check started (re-meshing one level finer and re-solving)", False)
+        self.engine.changed.emit()
+        return j
 
     # ------------------------------------------------------------------ what the panel shows
     def refresh(self, st):
@@ -193,7 +268,9 @@ class MeshPanel(_Panel):
         self.adv.setVisible(not mode.simple())              # (Simple mode: the presets only)
         s = m.get("stats")
         t = theme.tokens()
-        if s and m.get("status") in ("ready", "stale"):
+        have = bool(s) and m.get("status") in ("ready", "stale")
+        self.hex = bool(s and s.get("method") == "hex")
+        if have:
             q = s["quality"]
             extra = ""
             if s.get("method") == "hex" and s.get("cell_types"):
@@ -207,22 +284,75 @@ class MeshPanel(_Panel):
                 sizes = (f"near-wall {fmt_num(round(s['sizes']['near_wall'] * 1000, 3))} mm, "
                          f"bulk {fmt_num(round(s['sizes']['body'] * 1000, 3))} mm")
             self.stats.setText(f"<b>{s['cells']:,}</b> cells · {s['nodes']:,} nodes · {sizes}{extra}<br>quality: min {q['min']:.2f}, mean {q['mean']:.2f}, "
-                               f"{q['n_poor']} poor cells" + ("<br><i>The setup changed: regenerate.</i>" if m["status"] == "stale" else ""))
+                               f"{q['n_poor']} poor cells")
+            self.grid.set_rows(stats_rows(st), theme.effective())
             tone, words = verdict(q, s)
             col = {"ok": t["ok_text"], "warn": t["warn_text"], "bad": t["bad_text"]}[tone]
             self.verdict.setStyleSheet(f"color: {col}; font-weight: 600;")
             self.verdict.setText(("✓ " if tone == "ok" else "⚠ ") + words)
+            _tone, warn, info = mesh_notes(st)
+            html = "".join(f"<div style='color:{t['warn_text']}'>⚠ {w}</div>" for w in warn) + \
+                "".join(f"<div style='color:{t['muted']}'>{x}</div>" for x in info)
+            self.notes.setText(html)
+            self.notes.setProperty("api_text", " | ".join(warn + info))
             self.hist.set_counts(q.get("histogram"))
             self.gen.setText("Regenerate mesh")
         else:
-            self.stats.setText("No mesh yet." if m.get("status") != "running" else "Meshing…")
+            self.stats.setText("No mesh yet: choose a resolution and press Generate mesh." if m.get("status") != "running" else "Meshing…")
+            self.grid.set_rows([])
             self.verdict.setText("")
+            self.notes.setText("")
+            self.notes.setProperty("api_text", "")
             self.hist.set_counts([])
             self.gen.setText("Generate mesh")
-        self.poor_zoom.setEnabled(bool(s))
+        j = P.JOBS.latest(self.engine.pid, "mesh") if self.engine.pid else None
+        running = bool(j and j.status == "running")
+        geo = st["geometry"].get("status") == "ready"
+        self.gen.setEnabled(not running)                    # (without geometry it stays pressable: the click says what is missing)
+        self.gen.setToolTip("Meshing is running" if running else "Make the cells of the model with these settings" if geo
+                            else "Not yet: import the geometry first (step 1, Geometry)")
+        if running:
+            self.gen.setText("Meshing…")
+        stale = m.get("status") == "stale"
+        self.stale_note.setVisible(stale)
+        self.stale_note.setText("⚠ The setup changed since this mesh was made: regenerate it." if stale else "")
+        self.stale_note.setStyleSheet(f"color: {t['warn_text']};")
+        for w in (self.stats_h, self.grid, self.hist_h, self.hist, self.poor_row, self.poor_info, self.next, self.notes):
+            w.setVisible(have)
+        tips = {c: tip for c, _l, tip in self.COLORS}
+        for k in self.TET_ONLY:
+            b = self.color_btns[k]
+            b.setEnabled(not self.hex)
+            b.setToolTip(tips[k] if not self.hex else
+                         "Not for a hex-dominant mesh: it is shown by its cell quality only (these metrics need the tetrahedral mesh)")
+        self.color_btns[self.request()[2] if self.color in self.color_btns else "quality"].setChecked(True)
+        self.color_note.setVisible(have and self.hex)
+        self.color_note.setText("The hex-dominant mesh is shown by its cell quality and its regions only." if self.hex else "")
+        self._budget(st, have)
+        jc = P.JOBS.latest(self.engine.pid, "check") if self.engine.pid else None
+        ck = bool(jc and jc.status == "running")
+        show_check = (have and st["solve"].get("status") in ("done", "stale")) or bool(st.get("mesh_check"))
+        self.check_h.setVisible(show_check)
+        self.check.setVisible(show_check)
+        if show_check:
+            self.check.refresh(st, ck, t)
+        self.poor_zoom.setEnabled(bool(s) and self.poor_on)
+        self.poor_zoom.setToolTip("Look at the poorest cell" if self.poor_on else "Switch on 'Show cells below' first")
         self.slider.setEnabled(bool(self.axis))
-        n = self.view.overlay_info if self.view is not None else {}
-        if self.poor_on and s:
-            self.poor_info.setText(f"Cells below {fmt_num(self.poor_thr)}: {s['quality']['n_poor'] if self.poor_thr == 0.1 else 'see the view'}")
-        else:
-            self.poor_info.setText("")
+        if not (self.poor_on and s):
+            self.poor_info.setText("")          # (when they are shown, the window writes how many cells are below the threshold)
+
+    def _budget(self, st, have):
+        """The cell budget of a tetrahedral mesh (computed once per mesh)."""
+        s = st["mesh"].get("stats") or {}
+        key = (self.engine.pid, s.get("cells"), s.get("seconds"), self.hex, theme.effective()) if have else None
+        if key == self._budget_key:
+            return
+        self._budget_key = key
+        d = None
+        if have and not self.hex:
+            try:
+                d = self.engine.project().mesh_metrics()
+            except Exception:  # noqa: BLE001
+                d = None
+        self.budget.set_data(d, theme.tokens())

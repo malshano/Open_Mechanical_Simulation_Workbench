@@ -6,8 +6,10 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QDoubleValidator
 from PySide6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget
 
+from .. import theme
 from ..forms import ParamForm, fmt_num
 from ..ids import wid
+from ..meshtools import fit_box, region_cells, tip_rings, wake_regions
 from .common import Section, _h, _muted, clear_layout
 
 M = 1000.0         # metres -> mm
@@ -53,7 +55,8 @@ class MeshAdvanced(QWidget):
     def refresh(self, st):
         m = st["mesh"]
         sig = repr([st["study"], m.get("size_max"), m.get("size_min"), m.get("defeature"), m.get("refinements"), m.get("regions"), m.get("layers"),
-                    [(b["id"], b["name"]) for b in st["body_list"]]])
+                    [(b["id"], b["name"]) for b in st["body_list"]], st.get("moving_zones"), st.get("flow_dir"), m.get("method"),
+                    theme.effective()])
         if sig == self._sig:
             return
         self._sig = sig
@@ -97,6 +100,8 @@ class MeshAdvanced(QWidget):
     def _parts(self, st, m):
         refs = m.get("refinements") or []
         s = self._sec(f"Part sizing ({len(refs)})", "mesh.parts", bool(refs))
+        s.body.addWidget(_muted("A cell size on the surface of a part, growing to the surrounding size within about ten cells: cheaper "
+                                "than a box round the part."))
         names = {b["id"]: b["name"] for b in st["body_list"]}
         for i, r in enumerate(refs):
             row = QHBoxLayout()
@@ -174,6 +179,8 @@ class MeshAdvanced(QWidget):
     def _regions(self, st, m):
         regs = m.get("regions") or []
         s = self._sec(f"Refinement regions ({len(regs)})", "mesh.regions", bool(regs))
+        s.body.addWidget(_muted("Boxes or cylinders of finer cells (bodies of influence), e.g. round a propeller, in a wake or a gap; the "
+                                "cells grow smoothly to the surrounding size outside them."))
         for i, r in enumerate(regs):
             card = _item()
             cv = QVBoxLayout(card)
@@ -202,6 +209,21 @@ class MeshAdvanced(QWidget):
                           {**vals, "size": r["size"] * M}, f"mesh.region.{i}.param")
             f.changed.connect(lambda k, v, i=i, f=f: self._region_edit(i, values=f.values()))
             cv.addWidget(f)
+            n, txt, big = region_cells(r)
+            est = wid(QLabel(txt), f"mesh.region.{i}.cells")
+            est.setWordWrap(True)
+            est.setStyleSheet(f"color: {theme.tokens()['warn_text' if big else 'muted']};")
+            est.setToolTip("A rough count of the cells this region alone makes (tetrahedra of the region's cell size)")
+            cv.addWidget(est)
+            if r.get("shape") != "cylinder":
+                fit = wid(QComboBox(), f"mesh.region.{i}.fit")
+                fit.addItem("Fit around part…", None)
+                for b in st["body_list"]:
+                    if b["role"] == "solid":
+                        fit.addItem(b["name"], b["id"])
+                fit.setToolTip("Put this box round a part (15 % of its size clear of it on every side)")
+                fit.activated.connect(lambda k, i=i, fit=fit: fit.itemData(k) is not None and self._region_fit(i, fit.itemData(k)))
+                cv.addWidget(fit)
             s.body.addWidget(card)
         row = QHBoxLayout()
         for key, label in (("box", "＋ Box"), ("cyl", "＋ Cylinder")):
@@ -212,7 +234,35 @@ class MeshAdvanced(QWidget):
             row.addWidget(b)
         row.addStretch(1)
         s.body.addLayout(row)
+        if st["study"] == "external_aero":                 # (regions made from the rotating zones of a flow study)
+            zones = bool(st.get("moving_zones")) and bool(st.get("flow_dir"))
+            row = QHBoxLayout()
+            for key, label, tip in (
+                    ("wake", "＋ Wake behind rotating zones",
+                     "A cylinder of zone-size cells downstream of each rotating zone (two diameters long), to carry the wake and its tip vortices"),
+                    ("tips", "＋ Tip-vortex rings",
+                     "A ring of fine cells along the path of the blade-tip vortices (0.65-1.0 zone radius, from the zone into the wake, one "
+                     "radius long): resolves the tip vortices without refining the whole wake. Use with the DES flow model.")):
+                b = wid(QPushButton(label), f"mesh.region.add_{key}")
+                b.setObjectName("ghostBorder")
+                b.setEnabled(zones)
+                b.setToolTip(tip if zones else "Not yet: add a rotating (moving) zone in Setup first - these regions follow the zones")
+                b.clicked.connect(lambda _=False, k=key: self._region_add(k))
+                row.addWidget(b)
+            row.addStretch(1)
+            s.body.addLayout(row)
+            if not zones:
+                s.body.addWidget(_muted("Wake and tip-vortex regions are made from the rotating zones: add one in Setup to use them."))
         self.v.addWidget(s)
+
+    def _region_fit(self, i, body_id):
+        try:
+            b = next(b for b in self.engine.state()["body_list"] if b["id"] == body_id)
+            regs = self._regions_state()
+            regs[i]["min"], regs[i]["max"] = fit_box(b["bbox"])
+            self._save_regions(regs)
+        except Exception as e:  # noqa: BLE001
+            self.panel._fail(e)
 
     def _regions_state(self):
         return [dict(r) for r in (self.engine.state()["mesh"].get("regions") or [])]
@@ -229,6 +279,13 @@ class MeshAdvanced(QWidget):
             h = [(bb[k + 3] - bb[k]) / 2 for k in range(3)]
             size = max((self.engine.state()["mesh"].get("size_max") or 0.01) / 3, 1e-4)
             n = len(self._regions_state()) + 1
+            if kind in ("wake", "tips"):
+                st = self.engine.state()
+                self._save_regions(wake_regions(st) if kind == "wake" else tip_rings(st))
+                self.panel.engine.message.emit("Wake regions added downstream of the rotating zones (zone cell size, two diameters long)"
+                                               if kind == "wake" else "Tip-vortex rings added behind the rotating zones (cells of 1/50 of the "
+                                               "zone radius)", False)
+                return
             if kind == "box":
                 r = {"name": f"region{n}", "min": [c[k] - 1.2 * h[k] for k in range(3)], "max": [c[k] + 1.2 * h[k] for k in range(3)], "size": size}
             else:
@@ -270,7 +327,11 @@ class MeshAdvanced(QWidget):
     def _layers(self, m):
         ly = m.get("layers") or {}
         s = self._sec("Wall layers (prism / inflation)", "mesh.layers", bool(ly.get("n")))
-        s.body.addWidget(_muted("Thin layers of cells along the walls, for the boundary layer (added by OpenFOAM before the run). 0 layers = off."))
+        s.body.addWidget(_muted("Thin cells stacked on the walls to resolve the boundary layer (friction, separation, y+). 0 layers = off. "
+                                + ("They are made together with the hex-dominant mesh (snappyHexMesh); the statistics report how much of the "
+                                   "wall got them." if m.get("method") == "hex" else
+                                   "OpenFOAM adds them before the run (snappyHexMesh, layer-only); where the space is too tight it leaves "
+                                   "them out, and the run log reports the coverage.")))
         f = ParamForm([{"key": "n", "label": "number of layers", "unit": "", "default": 0, "min": 0, "max": 20},
                        {"key": "growth", "label": "growth ratio", "unit": "", "default": 1.2, "min": 1.0, "max": 2.0},
                        {"key": "first", "label": "first layer thickness (0 = automatic)", "unit": "mm", "default": 0.0, "min": 0.0}],
