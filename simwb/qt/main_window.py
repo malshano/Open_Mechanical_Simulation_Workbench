@@ -64,6 +64,7 @@ class MainWindow(QMainWindow):
         self._geo_key = None
         self._fit_key = None
         self.hidden_bodies: set = set()
+        self.hidden_parts: set = set()           # parts (by name) of a flow study hidden in the 3D view
 
         # ---- the panels of the steps
         self.panels = {"geometry": GeometryPanel(engine), "setup": SetupPanel(engine), "mesh": MeshPanel(engine),
@@ -383,6 +384,7 @@ class MainWindow(QMainWindow):
     def _on_opened(self, pid: str):
         self.show_home(not pid)
         self.hidden_bodies = set()
+        self.hidden_parts = set()
         self.view.set_hidden_bodies(set())
         self.logdock.load(pid)
         self.statusBar().clearMessage()
@@ -452,6 +454,11 @@ class MainWindow(QMainWindow):
         """Hide or show one part in the 3D view (the eye of the web version)."""
         (self.hidden_bodies.discard if bid in self.hidden_bodies else self.hidden_bodies.add)(bid)
         self.view.set_hidden_bodies(self.hidden_bodies)
+        self._refresh_all()
+
+    def toggle_part(self, name: str):
+        """Hide or show one part of a flow study in the 3D view (its faces are left out of the drawing)."""
+        (self.hidden_parts.discard if name in self.hidden_parts else self.hidden_parts.add)(name)
         self._refresh_all()
 
     def _air_toggled(self, on: bool):
@@ -670,12 +677,15 @@ class MainWindow(QMainWindow):
                 built = (self.engine.project().geo_dir / "faces.json").stat().st_mtime_ns
             except OSError:
                 built = 0
-            key = (self.engine.pid, st["geometry"].get("status"), st["geometry"].get("updated"), built)
+            key = (self.engine.pid, st["geometry"].get("status"), st["geometry"].get("updated"), built, tuple(sorted(self.hidden_parts)))
             if key != self._geo_key:
                 self._geo_key = key
                 kinds = AIR_KINDS.get(st["study"], ())
                 on = self._air_pref.get(self.engine.pid, st["study"] == "cht_enclosure")
-                self.view.set_geometry(self.engine.project().faces() if st["geometry"].get("status") == "ready" else [], kinds, on)
+                faces = self.engine.project().faces() if st["geometry"].get("status") == "ready" else []
+                if self.hidden_parts:
+                    faces = [f for f in faces if f.get("part") not in self.hidden_parts]
+                self.view.set_geometry(faces, kinds, on)
                 self.chk_air.blockSignals(True)
                 self.chk_air.setChecked(on)
                 self.chk_air.blockSignals(False)

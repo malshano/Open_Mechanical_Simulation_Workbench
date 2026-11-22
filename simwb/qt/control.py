@@ -694,6 +694,7 @@ class Control(QObject):
           lambda visible=True: (win.view.viewbar.edges.setChecked(bool(visible)), {"edges": win.view.edges_on})[1])
         from .panels import geometry as _geometry
         _geometry.register_actions(self)                       # (geometry.* : orientation, rings, align a face)
+        _geometry.register_more_actions(self)                  # (geometry.* : CAD edits, air volume, parts)
         def view_drag(x0, y0, x1, y1, shift=False, steps=8):
             """A real mouse drag on the 3D view (Qt events to the interactor), needs the OpenGL window."""
             from PySide6.QtCore import QPoint, Qt as _Qt

@@ -14,6 +14,8 @@ from ..ids import wid
 from .common import _h, _muted, _Panel, clear_layout
 from ..align import AlignController
 from ..forms import fmt_num
+from ..airvolume import AirVolumeBox
+from ..cadedits import CadEditsBox
 from ..orient import OrientController, _item, _plain
 
 SCALES = [(1.0, "×1 (STL/OBJ: mm)"), (0.001, "×0.001"), (25.4, "inch → mm  ×25.4"), (100.0, "×100"), (1000.0, "×1000")]
@@ -34,6 +36,8 @@ class GeometryPanel(_Panel):
         self._st = None
         self.orient = OrientController(self)
         self.align = AlignController(self)
+        self.cad = CadEditsBox(self)
+        self.air = AirVolumeBox(self)
         self.target_note = ""
         self.holder = QVBoxLayout()
         self.holder.setSpacing(10)
@@ -123,7 +127,8 @@ class GeometryPanel(_Panel):
         g = st["geometry"]
         busy = any((j or {}).get("status") == "running" for j in (st.get("jobs") or {}).values())
         o, al = self.orient, self.align
-        sig = repr([self.target_note, o.target, st["study"], g.get("status"), g.get("rotation"), g.get("original_name"), g.get("error"), busy,
+        sig = repr([st.get("edits"), self.cad.op, self.cad.open, self.cad.notice, self.air.notice, self.air.key, self.air.dirty, st.get("domain"),
+                    sorted(self.win.hidden_parts) if self.win is not None else [], g.get("translation"), self.target_note, o.target, st["study"], g.get("status"), g.get("rotation"), g.get("original_name"), g.get("error"), busy,
                     [(b["id"], b["name"], b["role"]) for b in st["body_list"]], al.describe(),
                     o.R is not None and o.R.round(6).tolist(), o.shift.round(7).tolist(), [(s_["kind"], s_["axis"], str(np.round(s_["value"], 3))) for s_ in o.steps],
                     o.rings_on,
@@ -139,6 +144,10 @@ class GeometryPanel(_Panel):
         if g.get("status") == "ready":
             self._file_card(st, g, busy)
             self._bodies(st)
+            self.cad.build(self.holder, st, busy)
+            if st["study"] == "external_aero":
+                self._parts(st)
+            self.air.build(self.holder, st, busy)
         else:
             self._import_card(spec, busy)
         nxt = wid(QPushButton("Next: setup →"), "geometry.next")
@@ -238,6 +247,27 @@ class GeometryPanel(_Panel):
                 self.orient.turn(axis, float(degrees))
         except Exception as e:  # noqa: BLE001
             self._fail(e)
+
+    # ---- the parts of a flow study (its solids are parts of the air volume's boundary, not bodies of their own)
+    def _parts(self, st):
+        parts = self.engine.project().parts()
+        if not parts:
+            return
+        self.holder.addWidget(_h("Parts"))
+        self.holder.addWidget(_muted("Hide a part to see what is behind it (it stays in the model)."))
+        for i, p in enumerate(parts):
+            card = _item()
+            head = QHBoxLayout(card)
+            head.setContentsMargins(10, 6, 10, 6)
+            head.addWidget(QLabel(f"<b>{p['name']}</b>"), 1)
+            head.addWidget(_muted(" × ".join(fmt_num(x) for x in p["size_mm"]) + " mm"))
+            hid = p["name"] in self.win.hidden_parts
+            eye = wid(QPushButton("Show" if hid else "Hide"), f"geometry.part.{i}.eye")
+            eye.setObjectName("ghostBorder")
+            eye.setToolTip("Hide or show this part in the 3D view")
+            eye.clicked.connect(lambda _=False, n=p["name"]: self.win.toggle_part(n))
+            head.addWidget(eye)
+            self.holder.addWidget(card)
 
     # ---- the parts
     def _bodies(self, st):
@@ -455,3 +485,71 @@ def register_actions(ctl):
     R("geometry.align_mode", "For a curved face: use its average direction or the normal at the click.",
       {"mode": (S, "average|point", True), "reference": (B, "for the reference face instead of the picked one", False)}, align_mode)
     R("geometry.align_end", "Leave the alignment (Done).", {}, align_end)
+
+
+def register_more_actions(ctl):
+    """CAD edits, the air volume and the parts of the Geometry step as control-API actions (the same calls the buttons make)."""
+    win, R = ctl.win, ctl._reg
+    S, N, B = "string", "number", "boolean"
+
+    def gp():
+        if not ctl.engine.pid:
+            raise ValueError("No study is open")
+        win.go("geometry")
+        ctl._settle()
+        return win.panels["geometry"]
+
+    def cad_edit(action, edit=None, number=None):
+        p = gp()
+        job = p.cad.edit(action, edit, None if number is None else int(number))
+        return {"job": job.to_dict(log_tail=0), "edits": [e["text"] for e in ctl.engine.project().cad_edits()]}
+    R("geometry.cad_edit", "Change the CAD edits of the model (what the CAD edits buttons do): add (edit: {op, ...}), remove (number), undo (the last), "
+      "clear; a job (use wait). The geometry is kept as it was if the edit does not work.",
+      {"action": (S, "add|remove|undo|clear", True), "edit": ("object", "for add: the edit, e.g. {op: 'hole', body, at: [x,y,z], direction, diameter_mm}", False),
+       "number": (N, "for remove: the edit's number in the list", False)}, cad_edit)
+
+    def air(shape=None, flow_axis=None, span_axis=None, sizes=None, apply=False, fit=False, show_all=False, preset=None, mode=None, body=None):
+        p = gp()
+        a = p.air
+        if mode:
+            return {"job": a.set_mode(mode).to_dict(log_tail=0)}
+        if body is not None:
+            return {"job": a.set_body(int(body)).to_dict(log_tail=0)}
+        if preset:
+            return {"job": a.preset(preset).to_dict(log_tail=0)}
+        if shape:
+            return {"job": a.set_shape(shape).to_dict(log_tail=0)}
+        if flow_axis:
+            return {"job": a.set_flow(flow_axis).to_dict(log_tail=0)}
+        if span_axis:
+            return {"job": a.set_span(span_axis).to_dict(log_tail=0)}
+        if fit:
+            return {"job": a.fit().to_dict(log_tail=0)}
+        if show_all:
+            a.show_all()
+            return {"air_visible": win.chk_air.isChecked()}
+        a.spec(ctl.engine.state())
+        for k, mm in (sizes or {}).items():
+            a.set_size(k, float(mm))
+        if apply:
+            return {"job": a.apply().to_dict(log_tail=0)}
+        return {"draft": a.draft, "dirty": a.dirty}
+    R("geometry.air_volume", "The air volume of a flow or cooling study: shape (box|c_domain|cylinder), flow_axis (+x ...), span_axis, sizes {key: mm} "
+      "typed into the draft (box: min.0 max.0 min.1 max.1 min.2 max.2; c_domain: radius downstream span_min span_max; cylinder: radius upstream "
+      "downstream), apply, fit (Fit to parts), show_all, preset (minimal|compact|standard|large), mode (body|auto_box) and body (index) for a "
+      "cooling study. Jobs: use wait.",
+      {"shape": (S, "box|c_domain|cylinder", False), "flow_axis": (S, "+x|-x|+y|-y|+z|-z", False), "span_axis": (S, "x|y|z", False),
+       "sizes": ("object", "{key: mm}", False), "apply": (B, "send the typed sizes", False), "fit": (B, "Fit to parts", False),
+       "show_all": (B, "Show all", False), "preset": (S, "minimal|compact|standard|large", False), "mode": (S, "body|auto_box", False),
+       "body": (N, "index of the body that is the air", False)}, air)
+
+    def part(name, hidden=None):
+        p = gp()
+        names = [x["name"] for x in ctl.engine.project().parts()]
+        n = next((x for x in names if x.lower() == name.lower()), None) or next((x for x in names if name.lower() in x.lower()), None)
+        if n is None:
+            raise ValueError(f"No such part. Parts: {names}")
+        if hidden is None or (n in win.hidden_parts) != bool(hidden):
+            win.toggle_part(n)
+        return {"hidden_parts": sorted(win.hidden_parts)}
+    R("geometry.part", "Hide or show a part of a flow study in the 3D view.", {"name": (S, "part name", True), "hidden": (B, "default: toggle", False)}, part)

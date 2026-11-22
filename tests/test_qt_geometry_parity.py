@@ -393,3 +393,126 @@ def test_a_hovered_air_wall_does_not_stay_lit_when_the_air_volume_is_hidden(aero
     assert c.win.view.hover_id == wall and c.win.view.mark_actors
     c.do("view.air_box", {"visible": False})
     assert c.win.view.hover_id == -1                                                 # (its highlight is as large as the air volume)
+
+
+# ============================================================ CAD edits
+def test_cad_edits_are_listed_added_undone_and_removed(plate):
+    c = plate
+    assert not c.widget_do("geometry.cad.undo")["enabled"] and "no edits" in c.widget_do("geometry.cad.undo")["tooltip"].lower()
+    assert not c.widget_do("geometry.cad.clear")["enabled"]
+    n0 = c.engine.state()["face_count"]
+    c.widget_do("geometry.cad.toggle", "click")                                       # the add form
+    c.widget_do("geometry.cad.op", "set", "Drill a hole")
+    pr = c.engine.project()
+    bb = pr.parts()[0]
+    for k, vals in (("at", (50, 30, 3)), ("direction", (0, 0, -1))):
+        for ax, v in zip("xyz", vals):
+            c.widget_do(f"geometry.cad.f.{k}.{ax}", "set", str(v))
+    c.widget_do("geometry.cad.f.diameter_mm", "set", "6")
+    c.widget_do("geometry.cad.add", "click")
+    wait(c)
+    edits = c.engine.project().cad_edits()
+    assert len(edits) == 1 and edits[0]["op"] == "hole" and edits[0]["edit"]["diameter_mm"] == 6
+    assert c.widget_do("geometry.cad.edit.1")["value"].startswith("hole")
+    assert c.engine.state()["face_count"] > n0                                        # the hole has faces
+    assert c.widget_do("geometry.cad.undo")["enabled"] and c.widget_do("geometry.cad.clear")["enabled"]
+    c.widget_do("geometry.cad.undo", "click")
+    wait(c)
+    assert not c.engine.project().cad_edits() and c.engine.state()["face_count"] == n0
+    r = c.do("geometry.cad_edit", {"action": "add", "edit": {"op": "move", "by": [5, 0, 0]}})["result"]
+    wait(c)
+    r = c.do("geometry.cad_edit", {"action": "add", "edit": {"op": "move", "by": [0, 5, 0]}})["result"]
+    wait(c)
+    assert len(c.engine.project().cad_edits()) == 2 and c.widget_do("geometry.cad.remove.1")["enabled"]
+    c.widget_do("geometry.cad.remove.1", "click")                                     # the first goes, the second is replayed alone
+    wait(c)
+    assert [e["edit"]["by"] for e in c.engine.project().cad_edits()] == [[0, 5, 0]]
+    c.widget_do("geometry.cad.clear", "click")
+    wait(c)
+    assert not c.engine.project().cad_edits()
+
+
+def test_a_cad_edit_that_cannot_be_made_says_why_and_the_model_stays(plate):
+    c = plate
+    c.widget_do("geometry.cad.toggle", "click")
+    c.widget_do("geometry.cad.op", "set", "Add a box")
+    c.widget_do("geometry.cad.f.name", "set", "Block")
+    c.widget_do("geometry.cad.f.min.x", "set", "0")
+    c.widget_do("geometry.cad.f.min.y", "set", "0")
+    c.widget_do("geometry.cad.f.min.z", "set", "0")
+    c.widget_do("geometry.cad.f.size.x", "set", "10")
+    c.widget_do("geometry.cad.f.size.y", "set", "10")
+    c.widget_do("geometry.cad.f.size.z", "set", "-5")                                 # a negative size
+    c.widget_do("geometry.cad.add", "click")
+    box = c.widget_do("geometry.cad.notice")
+    assert box["visible"] and "did not work" in str(c.state()["panels"]["geometry"]["geometry.cad.notice"])
+    assert not c.engine.project().cad_edits()
+
+
+# ============================================================ the air volume
+def test_the_air_volume_editor_shape_sizes_apply_fit_and_show_all(aero):
+    c = aero
+    sp = c.engine.state()["geometry"]["info"]["domain"]["spec"]
+    assert sp["shape"] == "box" and c.widget_do("geometry.air.shape")["value"]["text"].startswith("Box")
+    assert not c.widget_do("geometry.air.apply")["enabled"] and "size" in c.widget_do("geometry.air.apply")["tooltip"].lower()
+    c.widget_do("geometry.air.shape", "set", "Cylinder along the flow")
+    wait(c)
+    sp = c.engine.state()["geometry"]["info"]["domain"]["spec"]
+    assert sp["shape"] == "cylinder" and c.widget_do("geometry.air.size.radius")["visible"]
+    names = [w["name"] for w in c.engine.project().air_walls()]
+    assert any(n.startswith("cylinder end, upstream") for n in names) and any(n.startswith("cylinder end, downstream") for n in names)
+    assert any("cylinder wall" in n for n in names)                                      # the curved wall is listed too (by a point of it)
+    r0 = sp["radius"]
+    c.widget_do("geometry.air.size.radius", "set", str(r0 * 1000 * 1.5))
+    assert c.widget_do("geometry.air.apply")["enabled"]
+    c.widget_do("geometry.air.apply", "click")
+    wait(c)
+    assert c.engine.state()["geometry"]["info"]["domain"]["spec"]["radius"] == pytest.approx(r0 * 1.5, rel=1e-6)
+    c.widget_do("geometry.air.fit", "click")
+    wait(c)
+    assert c.engine.state()["geometry"]["info"]["domain"]["spec"]["radius"] == pytest.approx(r0, rel=1e-6)
+    c.widget_do("geometry.air.shape", "set", "Box")
+    wait(c)
+    assert not c.win.chk_air.isChecked()
+    c.widget_do("geometry.air.showall", "click")
+    assert c.win.chk_air.isChecked() and c.win.view.air_on                              # (shown, translucent, and fitted)
+
+
+def test_the_domain_size_presets_and_fit_with_these(aero):
+    c = aero
+    for name, vals in (("minimal", (1, 2, 1)), ("compact", (3, 6, 3)), ("standard", (5, 10, 5)), ("large", (8, 16, 8))):
+        assert c.widget_do(f"geometry.air.preset.{name}")["enabled"]
+    c.widget_do("geometry.air.preset.compact", "click")
+    wait(c)
+    assert c.engine.state()["domain"]["farfield"] == {"upstream": 3, "downstream": 6, "side": 3}
+    assert c.widget_do("geometry.air.ff.upstream")["value"] == "3"
+    c.widget_do("geometry.air.ff.side", "set", "4")
+    c.widget_do("geometry.air.ff.apply", "click")
+    wait(c)
+    assert c.engine.state()["domain"]["farfield"]["side"] == 4
+
+
+def test_a_cooling_study_chooses_between_a_body_and_an_air_box(ctl):
+    c = ctl
+    c.do("study.example", {"study": "cht_enclosure"})
+    wait(c)
+    assert c.widget_do("geometry.air.mode")["visible"]
+    mode = c.engine.state()["domain"].get("enclosure_mode") or "body"
+    if mode == "body":
+        assert c.widget_do("geometry.air.body")["visible"] and not c.widgets("geometry.air.shape")["widgets"]
+        c.widget_do("geometry.air.mode", "set", "Create an air box around the parts")
+        wait(c)
+    assert c.engine.state()["domain"]["enclosure_mode"] == "auto_box" and c.widget_do("geometry.air.shape")["visible"]
+    assert c.widget_do("geometry.air.flow")["visible"]
+
+
+# ============================================================ the parts of a flow study
+def test_a_part_of_a_flow_study_can_be_hidden(aero):
+    c = aero
+    n = c.win.view.geometry_info["faces"]
+    assert c.widget_do("geometry.part.0.eye")["text"] == "Hide"
+    c.widget_do("geometry.part.0.eye", "click")
+    assert c.win.hidden_parts and c.widget_do("geometry.part.0.eye")["text"] == "Show"
+    assert c.win.view.geometry_info["faces"] < n                                        # (its faces are not drawn)
+    c.widget_do("geometry.part.0.eye", "click")
+    assert not c.win.hidden_parts and c.win.view.geometry_info["faces"] == n
