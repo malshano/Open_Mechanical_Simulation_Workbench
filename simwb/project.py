@@ -905,12 +905,18 @@ class Project:
         air = f.get("kind") in ("farfield", "enclosure")
         if air and not reference:
             raise ValueError(f"Face {face_id} belongs to the air volume, not to the model: select a face of a part")
-        if f.get("interface") and not reference:
-            raise ValueError(f"Face {face_id} is a contact face between two parts: select an outer face")
         roles = {b["id"]: b["role"] for b in self.bodies()}
         vols = f.get("volumes") or []
-        volume = vols[0] if (len(vols) > 1 and f.get("interface")) else None
-        solid = True if air or f.get("interface") else roles.get((vols or [None])[0]) == "solid"
+        solid_vols = [v for v in vols if roles.get(v) == "solid"]
+        # a face between a part and the air that is a body of the file (a cooling study's duct) is an outer face of the part;
+        # only a face between two parts is a contact face
+        contact = len(solid_vols) > 1
+        if contact and not reference:
+            raise ValueError(f"Face {face_id} is a contact face between two parts: select an outer face")
+        volume = None
+        if len(vols) > 1:
+            volume = solid_vols[0] if solid_vols else vols[0]
+        solid = True if air or len(vols) > 1 else roles.get((vols or [None])[0]) == "solid"
         res = orient.surface_direction(f, fm, solid=solid, point=point, volume=volume)
         if res is None:
             raise ValueError(f"Cannot tell which way face {face_id} points")
@@ -922,7 +928,7 @@ class Project:
             n = pn
         out = {"face": int(face_id), "normal": n.tolist(), "point": res["point"].tolist(), "area_m2": f["area"],
                "nearest": orient.nearest_axis(n), "kind": "wall" if air else "face", "curved": bool(res["curved"]),
-               "coherence": round(res["coherence"], 4), "contact": bool(f.get("interface")), "role": f.get("domain_role"),
+               "coherence": round(res["coherence"], 4), "contact": contact, "role": f.get("domain_role"),
                "average_defined": res["normal"] is not None}
         if pn is not None:
             out.update(point_normal=pn.tolist(), point_nearest=orient.nearest_axis(pn), click=res["click"].tolist())

@@ -586,3 +586,25 @@ def test_the_gizmo_sits_on_the_parts_not_on_the_duct_that_is_the_air(ctl):
     w, h = g._size()
     x, y, _ = g.project(g.c)
     assert 0 < x < w and 0 < y < h                                                     # the gizmo is in the picture
+
+
+def test_a_face_between_a_part_and_the_duct_that_is_the_air_can_be_aligned(ctl):
+    """(The heatsink's fins are faces between the heatsink and the air body: they were refused as 'contact faces'.)"""
+    c = ctl
+    c.do("study.example", {"study": "cht_enclosure"})
+    wait(c)
+    pr = c.engine.project()
+    roles = {b["id"]: b["role"] for b in pr.bodies()}
+    fin = next(f for f in pr.faces() if f.get("interface") and f["surface_type"] == "Plane" and sorted(roles[v] for v in f["volumes"]) == ["fluid", "solid"]
+               and f["area"] > 1e-4)
+    d = pr.align_info(fin["id"])
+    body = next(b for b in pr.bodies() if b["id"] in fin["volumes"] and b["role"] == "solid")
+    assert np.dot(np.array(d["normal"]), np.array(fin["centroid"]) - np.array(body["centroid"])) > 0      # out of the part, into the air
+    both = [f for f in pr.faces() if sorted(roles.get(v) for v in f["volumes"]) == ["solid", "solid"]]
+    assert both
+    with pytest.raises(ValueError, match="contact face between two parts"):
+        pr.align_info(both[0]["id"])                                                    # (a real contact face between two parts is still refused ...)
+    assert pr.ref_info(both[0]["id"])["contact"]                                          # ... but can be the plane to lay a face against
+    c.widget_do("geometry.align.start", "click")
+    c.do("geometry.align_pick", {"face": fin["id"]})
+    assert c.do("geometry.state")["result"]["align"]["face"] == fin["id"]
