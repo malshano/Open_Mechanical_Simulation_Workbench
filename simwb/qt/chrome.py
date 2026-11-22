@@ -123,7 +123,7 @@ def _switch(win, i):
             win.engine.save() if win.engine.pid else None
             win.engine.open_id(pid)
     except Exception as e:  # noqa: BLE001
-        QMessageBox.warning(win, "Cannot open it", str(e))
+        win.toasts.error(f"Cannot open it: {e}")
 
 
 def running():

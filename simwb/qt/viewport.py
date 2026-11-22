@@ -33,7 +33,7 @@ from .banner import Banner
 from .gizmo import RotateGizmo
 from .legend import Legend
 from .picking import FaceIndex, locator_for, long_segment
-from .viewtools import ViewBar
+from .viewtools import SectionBar, ViewBar
 
 # SIMWB_NO_GL=1: no OpenGL window (automated tests, machines without a display). The pipeline is built and described exactly the
 # same; only the drawing and the pictures are left out.
@@ -83,6 +83,9 @@ class Viewport(QWidget):
         lay.addWidget(self.legend)
         self.viewbar = ViewBar(self)
         lay.insertWidget(0, self.viewbar)
+        self.secbar = SectionBar(self)         # (Mesh and Results: a cut through the model; the window's shell links it to the step's panel)
+        self.secbar.setVisible(False)
+        lay.insertWidget(1, self.secbar)
         self.rw = None if headless else self.iren.GetRenderWindow()
         if self.rw is not None:
             self.rw.SetAlphaBitPlanes(1)  # (depth peeling needs an alpha channel and no multisampling)

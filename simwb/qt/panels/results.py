@@ -759,9 +759,6 @@ class ResultsPanel(_Panel):
             self.tab_btns["summary"].click()
         self.deform_box.setVisible(any(f["name"] == "Total deformation" or f["name"].startswith("Mode ") for f in infos))
         self.section_box.setVisible(not flow)
-        if flow and not self.section_btns[""].isChecked():          # (a flow is cut with the contour planes of the Flow tab)
-            self.section_btns[""].setChecked(True)
-            self._section_changed()
         if flow and infos and self._sec_pid != self.engine.pid:
             self._sec_pid = self.engine.pid           # (a flow result opens with one contour plane through the middle: the air box would hide the object)
             self.flow.set_planes([{"axis": "y", "frac": 0.5}], emit=False)

@@ -503,6 +503,9 @@ class Control(QObject):
                      "gl": view.rw is not None},
             "docks": {d.objectName().removeprefix("dock."): d.isVisible() for d in win.findChildren(QDockWidget)},
             "jobs_running": jobs,
+            "shell": {"toasts": win.toasts.listing(), "section": win.shell.section_state(), "hover": win.shell.hover_text,
+                      "hint": win.view.banner.text(), "status_job": win.shell.job_msg.full if win.shell.current else "",
+                      "probe": {"checked": win.view.viewbar.probe.isChecked(), "enabled": win.view.viewbar.probe.isEnabled()}},
             "assistant": {"busy": a.busy, "login": a.who.text(), "status": a.status.text(),
                           "messages": len(a.log.get(a.pid or "", [])), "last": a.log.get(a.pid or "", [])[-3:]},
             "log": {"errors": self.log.counts["error"], "warnings": self.log.counts["warning"], "last_id": self.log.n},
@@ -795,7 +798,6 @@ class Control(QObject):
         # ---- assistant
         R("assistant.ask", "Type a question into the assistant as the user would (it answers asynchronously: see assistant.transcript).",
           {"text": (S, "message", True)}, lambda text: (need_study(), win.assistant.ask(text), {"sent": True})[2])
-        R("assistant.stop", "Stop the assistant's current answer.", {}, lambda: (win.assistant.bridge.stop(win.assistant.pid), {"stopped": True})[1])
         R("assistant.new_chat", "Start a fresh conversation.", {}, lambda: (win.assistant.new_chat(), {"ok": True})[1])
         R("assistant.transcript", "The conversation of the open study.", {"last": (N, "how many messages (default 20)", False)},
           lambda last=20: {"busy": win.assistant.busy, "messages": [{"role": r, "text": t} for r, t in win.assistant.log.get(win.assistant.pid or "", [])[-int(last):]]})
@@ -807,6 +809,8 @@ class Control(QObject):
         R("jobs.status", "Running jobs and the latest job of each kind for the open study.", {}, self._jobs)
         from .jobs import register as _mesh_solve_actions        # (the Mesh and Solve steps' own actions: simwb/qt/jobs.py)
         _mesh_solve_actions(self)
+        from .shell import register as _shell_actions            # (toasts, status bar Cancel, Probe, section bar, hover, hint, assistant commands)
+        _shell_actions(self)
 
     def _register_setup(self, setup_panel):
         """Symmetry planes, rotors, moving zones, inlet / outlet and the end time of the Setup step: each drives the panel's own controls."""
