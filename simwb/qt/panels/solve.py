@@ -68,11 +68,9 @@ class SolvePanel(_Panel):
         self.note = wid(QLabel(""), "solve.note")
         self.note.setWordWrap(True)
         self.v.addWidget(self.note)
-        # ---- the solver and its software
-        self.v.addWidget(_h("Solver"))
+        # ---- the solver and its software (added to the panel below the progress, see the end of __init__: Run comes first)
         self.solver_box = QVBoxLayout()
         self.solver_box.setSpacing(6)
-        self.v.addLayout(self.solver_box)
         self.foam_status = wid(QLabel(""), "solve.foam.status")
         self.foam_status.setWordWrap(True)
         self.install_foam = _btn("Install OpenFOAM", "solve.install.openfoam",
@@ -105,7 +103,7 @@ class SolvePanel(_Panel):
         for x in (self.foam_status, self.install_row, self.foam_help, self.ccx_status, self.ccx_row, self.inst_msg, self.inst_bar,
                   _row(self.inst_cancel, self.recheck_btn)):
             swl.addWidget(x)
-        self.v.addWidget(sw)
+        self._sw_block = sw
         self._poll = QTimer(self)
         self._poll.setInterval(1500)
         self._poll.timeout.connect(self._install_poll)
@@ -210,6 +208,9 @@ class SolvePanel(_Panel):
         self.chart = wid(J.ResidualChart(), "solve.residuals.chart")
         self.chart.setVisible(False)
         self.v.addWidget(self.chart)
+        self.v.addWidget(_h("Solver"))                       # (below the run, its progress and its state: the run leads the step)
+        self.v.addLayout(self.solver_box)
+        self.v.addWidget(self._sw_block)
         # ---- advanced OpenFOAM: numerics and case files
         self.adv = Section("Advanced (OpenFOAM)", "solve.advanced", expanded=False)
         self.adv.body.addWidget(_muted("For experienced users. The defaults are chosen for each study; change these only when a run will not "
