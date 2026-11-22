@@ -4,7 +4,7 @@ Same things as the web version's top bar. Every control has an id (chrome.*) and
 from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt, QTimer
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QResizeEvent
 from PySide6.QtWidgets import (QApplication, QComboBox, QHBoxLayout, QMenu, QMessageBox, QPushButton, QSizePolicy, QToolButton, QWidget)
 
 from .. import project as P
@@ -61,7 +61,7 @@ def install(win, bar):
                                         win.engine.settings.setValue("mode", "simple" if s else "expert"), _on_mode(win)))
     win.jobs_btn = wid(QToolButton(), "chrome.jobs")
     win.jobs_btn.setPopupMode(QToolButton.InstantPopup)
-    win.jobs_btn.setToolTip("Jobs running in all studies: stop them here")
+    win.jobs_btn.setToolTip("Jobs running in all studies: stop them here (the status bar also has Cancel for the study you are in)")
     win.jobs_menu = QMenu(win.jobs_btn)
     win.jobs_btn.setMenu(win.jobs_menu)
     win.jobs_menu.aboutToShow.connect(lambda: _fill_jobs(win))
@@ -70,7 +70,7 @@ def install(win, bar):
     chat.setCheckable(True)
     chat.setChecked(True)
     chat.setObjectName("ghostBorder")
-    chat.setToolTip("Show or hide the Claude assistant")
+    chat.setToolTip("Show or hide the Claude assistant (Ctrl+K: write to Claude)")
     chat.toggled.connect(lambda on: win.dock_chat.setVisible(on) if not win._at_home else None)
     win.dock_chat.visibilityChanged.connect(lambda v: chat.setChecked(v) if not win._at_home else None)
     cr.addWidget(chat)
@@ -123,7 +123,7 @@ def _switch(win, i):
             win.engine.save() if win.engine.pid else None
             win.engine.open_id(pid)
     except Exception as e:  # noqa: BLE001
-        QMessageBox.warning(win, "Cannot open it", str(e))
+        win.toasts.error(f"Cannot open it: {e}")
 
 
 def running():
@@ -132,7 +132,13 @@ def running():
 
 def _count(win):
     n = len(running())
-    win.jobs_btn.setText(f"⚙ Jobs ({n})" if n else "⚙ Jobs")
+    text = f"⚙ Jobs ({n})" if n else "⚙ Jobs"
+    if win.jobs_btn.text() != text:
+        win.jobs_btn.setText(text)
+        corner = getattr(win, "_chrome_corner", None)
+        if corner is not None:                              # (the corner is as wide as its parts now: Simple / Expert are not squeezed)
+            corner.updateGeometry()
+            QApplication.sendEvent(win.menuBar(), QResizeEvent(win.menuBar().size(), win.menuBar().size()))   # (the bar places its corner again)
 
 
 def _fill_jobs(win):

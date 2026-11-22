@@ -10,16 +10,18 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDockWid
                                QInputDialog, QLabel, QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton, QScrollArea,
                                QStackedWidget, QStatusBar, QToolBar, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
+from .. import __version__
 from .. import project as P
 from .. import studies
 from .assistant import AssistantPanel, ChatBridge
-from . import chrome, theme
+from . import chrome, shell, theme
 from .engine import Engine
 from .home import HomePage
 from .logdock import LogDock
 from .ids import wid
 from .panels import GeometryPanel, MeshPanel, ResultsPanel, SetupPanel, SolvePanel
 from .viewport import Viewport
+from .viewtools import KEYS
 
 # the faces that make up the air box of a study (drawn translucent, with a toggle), and whether it is shown at first (the far field of
 # a flow study is big: off; the enclosure of a cooling study is part of the model: on)
@@ -53,7 +55,6 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1100, 700)
         self.view = wid(Viewport(), "view.canvas")
         wid(self.view.legend, "view.legend")
-        self.view.faceHovered.connect(self._hover_tip)
         self.home = wid(HomePage(), "home.page")
         self.center = QStackedWidget()
         self.center.addWidget(self.home)
@@ -88,7 +89,7 @@ class MainWindow(QMainWindow):
         self.dock_tree = self._dock("Outline", self.tree, Qt.LeftDockWidgetArea, "outline")
         self.dock_panel = self._dock("Step", self.stack, Qt.LeftDockWidgetArea, "step")
         self.splitDockWidget(self.dock_tree, self.dock_panel, Qt.Vertical)
-        self.assistant = AssistantPanel(bridge)
+        self.assistant = AssistantPanel(bridge, settings=engine.settings)
         self.assistant.toolDone.connect(lambda *_: self.engine.changed.emit())
         self.dock_chat = self._dock("Claude assistant", self.assistant, Qt.RightDockWidgetArea, "assistant")
         self.logdock = LogDock()
@@ -117,6 +118,7 @@ class MainWindow(QMainWindow):
             a.setObjectName(f"step.{k}")
             a.setCheckable(True)
             a.setChecked(k == self.step)
+            a.setShortcut(QKeySequence(f"Alt+{i}"))
             a.triggered.connect(lambda _=False, k=k: self.go(k))
             grp.addAction(a)
             tb.addAction(a)
@@ -127,7 +129,7 @@ class MainWindow(QMainWindow):
         self.act_air = _Shown(self.chk_air)
         self._air_pref: dict = {}
         chrome.install(self, tb)
-        sb = QStatusBar()
+        sb = shell.ToastStatusBar(self)
         self.setStatusBar(sb)
         self.lbl_saved = wid(QLabel(""), "status.saved")
         self.lbl_path = wid(QLabel(""), "status.path")
@@ -138,6 +140,7 @@ class MainWindow(QMainWindow):
         sb.addWidget(self.lbl_path, 1)
         sb.addPermanentWidget(self.progress)
         sb.addPermanentWidget(self.lbl_saved)
+        shell.install(self)               # (toasts, the job part of the status bar, Probe / section in the 3D view's bar, hover tip, hint bar)
 
         self._menus()
         self.home.newStudy.connect(lambda k: self._try(lambda: self.new_from_card(k)))
@@ -152,7 +155,7 @@ class MainWindow(QMainWindow):
         engine.opened.connect(self._on_opened)
         engine.changed.connect(self._on_changed)
         engine.job.connect(self._on_job)
-        engine.message.connect(lambda t, bad: self.statusBar().showMessage(t, 8000))
+        engine.message.connect(lambda t, bad: self.toasts.error(t) if bad else self.statusBar().showMessage(t, 8000))
         engine.saved.connect(lambda t: self.lbl_saved.setText(f"Saved {t}"))
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setSingleShot(True)
@@ -199,10 +202,12 @@ class MainWindow(QMainWindow):
         self.act_close = act(f, "&Close study", self.engine.close_study, None, "file.close")
         act(f, "E&xit", self.close, "Ctrl+Q", "file.exit")
         v = mb.addMenu("&View")
-        for name, key in (("Isometric", "iso"), ("Front (+Y)", "+y"), ("Side (+X)", "+x"), ("Top (+Z)", "+z")):
+        for name, key, k2 in (("Isometric", "iso", "iso"), ("Look along X (again: from the other side)", "+x", "x"),
+                              ("Look along Y (again: from the other side)", "+y", "y"), ("Look along Z (again: from the other side)", "+z", "z")):
             a = QAction(name, self)
             a.setObjectName(f"view.{key}")
-            a.triggered.connect(lambda _=False, k=key: self.view.set_view(k))
+            a.setShortcut(QKeySequence(KEYS[k2]))
+            a.triggered.connect(lambda _=False, k=k2: self.view.viewbar.look(k))
             v.addAction(a)
         a = QAction("Fit to window", self)
         a.setObjectName("view.fit")
@@ -228,7 +233,8 @@ class MainWindow(QMainWindow):
             self.theme_actions[key] = a
         theme.bus.changed.connect(lambda _: self._on_theme())
         h = mb.addMenu("&Help")
-        act(h, "&About", lambda: QMessageBox.about(self, "About", "Mechanical Simulation Workbench (Qt)\nOpen source, GPLv3."), None, "help.about")
+        act(h, "&About", lambda: self.toasts.show(f"Mechanical Simulation Workbench {__version__} (desktop). Open source, GPLv3.", "info", 9),
+            None, "help.about")
         self._gate()
 
     def _gate(self):
@@ -240,7 +246,7 @@ class MainWindow(QMainWindow):
         try:
             fn()
         except Exception as e:  # noqa: BLE001
-            QMessageBox.warning(self, "Cannot do that", str(e))
+            self.toasts.error(f"Cannot do that: {e}")                      # (a notice, not a box that waits for a click)
 
     # ------------------------------------------------------------------ cases
     def _save_dir(self) -> str:
@@ -337,6 +343,7 @@ class MainWindow(QMainWindow):
     def save(self):
         t = self.engine.save()
         self.statusBar().showMessage(f"Saved at {t} in {self.engine.project().dir}", 6000)
+        self.toasts.ok(f"Saved at {t}")
 
     def _ask_results(self) -> bool | None:
         b = QMessageBox(self)
@@ -390,6 +397,7 @@ class MainWindow(QMainWindow):
         self.statusBar().clearMessage()
         self._geo_key = None
         self.assistant.set_project(pid)
+        self.shell.sync_jobs()
         self._gate()
         self._title()
         self.view.clear_overlay()
@@ -404,24 +412,9 @@ class MainWindow(QMainWindow):
         self._refresh_timer.start(80)     # (bursts of changes make one redraw)
 
     def _on_job(self, ev: dict):
-        j = ev.get("job") or {}
         self.panels["solve"].on_job(ev)
         self.logdock.on_job(ev)
-        running = j.get("status") == "running"
-        self.progress.setVisible(running)
-        if running:
-            self.progress.setValue(int(float(j.get("progress", 0)) * 1000))
-            self.statusBar().showMessage(f"{j.get('kind', '')}: {j.get('message', '')}")
-        elif j.get("status") in ("failed",):
-            import logging
-
-            msg = str(j.get("error") or j.get("message"))
-            logging.getLogger("simwb.qt").warning("The job failed: %s", msg)
-            box = QMessageBox(QMessageBox.Warning, "The job failed", msg, QMessageBox.Ok, self)
-            box.setAttribute(Qt.WA_DeleteOnClose)
-            box.open()                                                     # (does not stop the program: a test or script goes on)
-        elif j.get("status") == "done":
-            self.statusBar().showMessage(f"{j.get('kind', '')} done", 6000)
+        self.shell.job_event(ev)          # (progress, message and Cancel in the status bar; a toast when it finished or failed)
 
     def set_theme(self, choice: str):
         """Dark, light or the system's theme; remembered for the next start."""
@@ -440,15 +433,6 @@ class MainWindow(QMainWindow):
             self._refresh_all()        # (some text carries its colours: tiles, the legend's hints)
         else:
             self.home.set_recent(self.engine.recent())
-
-    def _hover_tip(self, fid: int):
-        """The face under the pointer, in the status bar (the web version showed it as a tooltip)."""
-        if fid < 0 or not self.engine.pid:
-            self.statusBar().clearMessage()
-            return
-        f = self.engine.project().face_map().get(fid)
-        if f:
-            self.statusBar().showMessage(f"Face {fid}: {f.get('surface_type', '')}, {f.get('area', 0) * 1e6:.1f} mm\u00b2")
 
     def toggle_body(self, bid: int):
         """Hide or show one part in the 3D view (the eye of the web version)."""
@@ -496,7 +480,7 @@ class MainWindow(QMainWindow):
             mark, tip = marks[k]
             a = self.step_actions[k]
             a.setText(f"{i}  {label}" + (f"  {mark}" if mark else ""))
-            a.setToolTip(tip or label)
+            a.setToolTip(f"{tip or label} (Alt+{i})")
             a.setStatusTip(tip or label)
 
     def _refresh_all(self):
@@ -509,6 +493,7 @@ class MainWindow(QMainWindow):
         for p in self.panels.values():
             p.refresh(st)
         self.update_view()
+        self.shell.sync(st, force=True)
 
     # ------------------------------------------------------------------ steps
     def go(self, step: str):
@@ -522,6 +507,7 @@ class MainWindow(QMainWindow):
         self.assistant.set_context(step)
         self._select_step_node()
         self.update_view()
+        self.shell.sync()
 
     def _tree_clicked(self, item, _col=0):
         s = item.data(0, Qt.UserRole)

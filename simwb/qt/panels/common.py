@@ -258,6 +258,10 @@ class _Panel(QWidget):
     def _fail(self, e: Exception):
         import logging
 
+        toasts = getattr(getattr(self, "win", None), "toasts", None)
+        if toasts is not None:                                             # (a toast: it fades by itself and is logged; no box to click away)
+            toasts.error(f"Cannot do that: {e}")
+            return
         logging.getLogger("simwb.qt").warning("Cannot do that: %s", e)
         box = QMessageBox(QMessageBox.Warning, "Cannot do that", str(e), QMessageBox.Ok, self)
         box.setAttribute(Qt.WA_DeleteOnClose)

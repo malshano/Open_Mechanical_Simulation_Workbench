@@ -43,9 +43,12 @@ class Banner(QFrame):
         self.setStyleSheet(f"QFrame#viewBanner {{ background: {t['panel2']}; border-top: 1px solid {t['line']}; }}")
         self.label.setStyleSheet(f"background: {t['panel2']};")
 
-    def set(self, key: str, text: str, priority: int = 0, button: str | None = None, on_click=None):
-        """Ask for the bar with this text (and a button) under the name `key`."""
-        self._items[key] = (priority, text, button, on_click)
+    def set(self, key: str, text: str, priority: int = 0, button: str | None = None, on_click=None, tip: str | None = None):
+        """Ask for the bar with this text (and a button, with its tooltip) under the name `key`."""
+        item = (priority, text, button, on_click, tip)
+        if self._items.get(key) == item:
+            return
+        self._items[key] = item
         self._refresh()
 
     def clear(self, key: str):
@@ -57,13 +60,13 @@ class Banner(QFrame):
             self.setVisible(False)
             self._cb = None
             return
-        _, text, button, cb = max(self._items.values(), key=lambda v: v[0])
+        _, text, button, cb, tip = max(self._items.values(), key=lambda v: v[0])
         self.label.setText(text)
         self.label.setToolTip(text)
         self.button.setVisible(bool(button))
         if button:
             self.button.setText(button)
-            self.button.setToolTip("Stop picking the plane: the face and any previewed turn stay")
+            self.button.setToolTip(tip or "Stop picking the plane: the face and any previewed turn stay")
         self._cb = cb
         self.setVisible(True)
 

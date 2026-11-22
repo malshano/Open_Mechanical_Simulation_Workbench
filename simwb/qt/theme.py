@@ -132,6 +132,10 @@ QPushButton#toggle:checked:hover {{ background: {t['accent_hi']}; }}
 QPushButton#ghostBorder {{ background: transparent; border: 1px solid {t['line_strong']}; }}
 QPushButton#ghostBorder:hover {{ border-color: {t['accent']}; background: {t['accent_soft']}; }}
 QPushButton#viewbtn {{ padding: 3px 10px; font-size: 12px; }}
+QPushButton#viewbtn:focus {{ padding: 2px 9px; }}
+QPushButton#viewbtn:checked {{ background: {t['accent']}; border-color: {t['accent']}; color: {t['on_accent']}; font-weight: 600; }}
+QPushButton#viewbtn:checked:hover {{ background: {t['accent_hi']}; }}
+QPushButton#viewbtn:disabled {{ color: {t['disabled']}; background: {t['panel2']}; border: 1px solid {t['line']}; }}
 
 QCheckBox {{ spacing: 8px; }}
 QCheckBox::indicator {{ width: 16px; height: 16px; border: 1.5px solid {t['line_strong']}; border-radius: 4px; background: {t['panel']}; }}
@@ -168,6 +172,7 @@ QAbstractSpinBox::up-button:hover, QAbstractSpinBox::down-button:hover {{ backgr
 QAbstractSpinBox::up-arrow {{ image: url({ic['up']}); width: 10px; height: 10px; }}
 QAbstractSpinBox::down-arrow {{ image: url({ic['down']}); width: 10px; height: 10px; }}
 QTextBrowser {{ background: {t['panel']}; border: 0; }}
+QTextBrowser:focus {{ border: 2px solid {t['focus']}; }}
 
 QTreeWidget, QListWidget, QTableWidget {{ background: {t['panel']}; border: 0; outline: 0; }}
 QTreeWidget::item, QListWidget::item {{ padding: 3px 2px; }}
@@ -191,6 +196,7 @@ QSlider::sub-page:horizontal {{ background: {t['accent']}; border-radius: 2px; }
 QSlider::handle:horizontal {{ background: {t['accent']}; width: 14px; margin: -6px 0; border-radius: 7px; border: 2px solid {t['panel']}; }}
 QSlider::handle:horizontal:hover {{ background: {t['accent_hi']}; }}
 QSlider:focus {{ border: 1px solid {t['focus']}; }}
+QSlider::handle:horizontal:focus {{ border: 2px solid {t['focus']}; }}
 QSlider::handle:horizontal:disabled {{ background: {t['disabled']}; }}
 QToolTip {{ background: {t['panel2']}; color: {t['ink']}; border: 1px solid {t['line_strong']}; padding: 5px; }}
 

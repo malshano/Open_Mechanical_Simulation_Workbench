@@ -8,7 +8,6 @@ plus the toolbar and application bar. Status: ✅ done in the Qt app · 🟡 par
 
 > **Last reviewed:** after the fifth critic round of the Qt interface (overall 5.4 / 7). Rows marked ✅ have tests in `tests/test_qt_*.py`;
 > 🟡 rows say what is missing. After merging the four porting branches (Setup, Mesh and Solve, Results, Geometry) the remaining gaps are small:
-> the application shell (Claude Code button and `/` commands, Cancel in the status bar, probe in the 3D view's bar, selection hint, toasts),
 > dragging the air volume, a symmetry plane, rotors and zones with the mouse, and the web version's symbols for each kind of condition.
 
 ## Application bar, view toolbar, status
@@ -20,18 +19,18 @@ plus the toolbar and application bar. Status: ✅ done in the Qt app · 🟡 par
 | Simple / Expert mode (hides advanced settings) | ✅ (remembered; hides advanced settings and the Mesh advanced options) | setup |
 | Jobs menu (all running jobs, stop them) | ✅ (running jobs, Stop) | solve-mesh |
 | Claude assistant: chat, login, new chat, suggestions | ✅ | - |
-| Claude: Stop button, Claude Code button (terminal), `/login /logout /status /help`, history after reload | ⬜ (Stop button only while busy) | - |
+| Claude: Stop button, Claude Code button (terminal), `/login /logout /status /help`, history after reload | ✅ (Stop always shown, Claude Code, `/login /logout /status /ask /version /help` run in the chat, the chat is kept per study and read again after a restart, busy per study; the assistant itself cannot press Claude Code or sign in) | viewtools |
 | Close button (stops all jobs) | ✅ | solve-mesh |
 | View buttons Iso, X, Y, Z, Fit (toolbar) | ✅ (in the 3D view's own bar) | viewtools |
 | Edges toggle | ✅ | viewtools |
 | Air box toggle (translucent) | ✅ | - |
-| Section: axis, slider, value, play sweep, Hide air | 🟡 (Results > Display tab and the Mesh cut; not in the 3D view's toolbar; no play sweep) | viewtools |
-| Probe, Picture (PNG with legend) buttons | 🟡 (Picture ✅; Probe is on the Results > Probe tab, not in the toolbar) | viewtools / results |
-| Hover tooltip with face info, selection hint banner | 🟡 (hover highlight and tooltips; no selection-hint banner) | viewtools |
+| Section: axis, slider, value, play sweep, Hide air | ✅ (second bar of the 3D view on Mesh and Results: Off/X/Y/Z, slider, value in mm, play, Hide air; it drives the panel's own controls; flow results too. Not ported: the section on the CAD faces of the Geometry step) | viewtools |
+| Probe, Picture (PNG with legend) buttons | ✅ (both in the 3D view's bar; Probe is greyed with a reason outside Results) | viewtools / results |
+| Hover tooltip with face info, selection hint banner | ✅ (tooltip: face, kind, part, area, condition; hint bar with Done / Cancel for faces, symmetry plane, centre of rotation, probe, line) | viewtools |
 | Colour legend (round ticks, log) | ✅ | - |
 | Orientation triad | ✅ | - |
-| Status bar: study, mesh, solve state, job progress bar + Cancel | 🟡 (study, type, mesh, solution, path in the tooltip; progress in Jobs; no Cancel here) | solve-mesh |
-| Toasts, dialogs | 🟡 | - |
+| Status bar: study, mesh, solve state, job progress bar + Cancel | ✅ (job message, progress bar and Cancel) | viewtools |
+| Toasts, dialogs | ✅ (toasts replace the boxes that only inform: saved, copied, job done or failed, errors, About; real questions stay dialogs; keys on every view button; focus ring) | viewtools |
 | Faces picked in the 3D view (click, hover highlight, multi-select) | ✅ (click, Ctrl-add, hover highlight; picks through the air box) | viewtools |
 
 ## 1 Geometry

@@ -745,7 +745,13 @@ def _check_paths(action: str, args: dict) -> dict:
     return args
 
 
+_ACTIONS_NOT_FOR_A_MODEL = {"assistant.command", "assistant.claude_code"}      # (the claude command line: sign in and out; Claude Code in a terminal, which has no tool limits)
+
+
 def ui_do(pr, a):
+    if a["action"] in _ACTIONS_NOT_FOR_A_MODEL:
+        raise ValueError(f"The action '{a['action']}' is not operated through the assistant (it signs in or out of the account, or opens an "
+                         f"unrestricted terminal). The person uses the button.")
     args = _check_paths(a["action"], a.get("args") or {})
     return _ui("do", {"action": a["action"], "args": args})
 
@@ -754,7 +760,7 @@ def ui_widgets(pr, a):
     return _ui("widgets", {"filter": a.get("filter"), "visible_only": bool(a.get("visible_only"))})
 
 
-_NOT_FOR_A_MODEL = {"file.exit", "chrome.close", "assistant.login", "assistant.logout"}   # (quit; sign in and out of the account)
+_NOT_FOR_A_MODEL = {"file.exit", "chrome.close", "assistant.login", "assistant.logout", "assistant.claude_code"}   # (quit; sign in and out of the account)
 
 
 def ui_widget(pr, a):
