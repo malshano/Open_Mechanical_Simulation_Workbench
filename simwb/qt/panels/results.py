@@ -691,6 +691,7 @@ class ResultsPanel(_Panel):
         d = self.line_data
         text = "distance_m\tvalue\n" + "\n".join(f"{s:.6g}\t{'' if v is None else f'{v:.6g}'}" for s, v in zip(d["s"], d["values"]))
         QGuiApplication.clipboard().setText(text)
+        self.win.toasts.ok("Line data copied: paste it into a spreadsheet")
         return text
 
     def clear_probes(self):

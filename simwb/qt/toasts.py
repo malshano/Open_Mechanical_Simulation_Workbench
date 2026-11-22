@@ -1,8 +1,8 @@
 """Toasts: small notices over the corner of the window that do not wait for a click ("Saved", "Mesh ready", "Cannot do that: ...").
 
 They replace the message boxes that only inform: a box in the way of the work, to be closed before the next click, for a thing that needs no
-answer. A toast appears at the bottom right, stays a few seconds (an error longer; resting the pointer on it keeps it), fades away and can be
-closed with its x at once. They stack (the newest at the bottom, at most five), and every one is also written to the log, so nothing is lost
+answer. A toast appears at the top right, under the bars, stays a few seconds (an error longer; resting the pointer on it keeps it), fades away and can be
+closed with its x at once. They stack (at most five), and every one is also written to the log, so nothing is lost
 when it fades. Real questions (close while a job runs, include the results?) stay dialogs."""
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import itertools
 import logging
 import time
 
-from PySide6.QtCore import QEvent, QObject, QPropertyAnimation, Qt, QTimer
+from PySide6.QtCore import QEvent, QObject, QPoint, QPropertyAnimation, Qt, QTimer
 from PySide6.QtWidgets import (QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget)
 
 from . import theme
@@ -49,6 +49,8 @@ class Toast(QFrame):
         row.addWidget(self.label, 1)
         row.addWidget(self.close_btn, 0, Qt.AlignTop)
         self.setAccessibleName(f"{kind}: {text}")
+        self.label.setFixedWidth(WIDTH - 12 - 6 - 8 - 26 - 4)
+        self.setFixedHeight(max(40, self.label.heightForWidth(self.label.width()) + 16))     # (a wrapped label: the height is told, not guessed)
         self.fx = QGraphicsOpacityEffect(self)
         self.fx.setOpacity(1.0)
         self.setGraphicsEffect(self.fx)
@@ -166,14 +168,11 @@ class ToastHost(QObject):
 
     def _place(self):
         w = self.win
-        self.box.setFixedWidth(WIDTH)
-        self.box.adjustSize()
-        h = self.box.sizeHint().height()
-        bottom = w.height() - 16
-        sb = getattr(w, "statusBar", None)
-        if callable(sb) and sb().isVisible():
-            bottom -= sb().height()
-        self.box.setGeometry(w.width() - WIDTH - 16, max(8, bottom - h), WIDTH, h)
+        h = sum(t.height() for t in self.items) + self.lay.spacing() * max(0, len(self.items) - 1)
+        self.box.setFixedSize(WIDTH, max(h, 1))
+        cw = w.centralWidget() if callable(getattr(w, "centralWidget", None)) else None
+        top = (cw.mapTo(w, QPoint(0, 0)).y() if cw is not None else 0) + 10         # (top right, under the bars: the message box and Send stay free)
+        self.box.setGeometry(w.width() - WIDTH - 16, top, WIDTH, h)
 
     def eventFilter(self, obj, ev):  # noqa: N802
         if obj is self.win and ev.type() in (QEvent.Resize, QEvent.Show) and self.items:

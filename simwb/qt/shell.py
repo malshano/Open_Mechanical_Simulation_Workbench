@@ -12,7 +12,8 @@ from __future__ import annotations
 
 from PySide6.QtCore import QObject, QPoint, Qt, QTimer
 from PySide6.QtGui import QCursor
-from PySide6.QtWidgets import QLabel, QPushButton, QToolTip
+from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtWidgets import QLabel, QPushButton, QStatusBar, QToolTip
 
 from .. import project as P
 from .. import studies
@@ -50,6 +51,21 @@ class ElideLabel(QLabel):
         self._fit()
 
 
+class ToastStatusBar(QStatusBar):
+    """The status bar: a message that stays a while (an outcome: "Video saved", "Exported to ...") is also shown as a toast, so it is seen
+    even when the eye is on the 3D view; the short running notes ("Video: picture 3 of 40") are not."""
+
+    def __init__(self, win):
+        super().__init__(win)
+        self.win = win
+
+    def showMessage(self, text: str, timeout: int = 0):  # noqa: N802
+        super().showMessage(text, timeout)
+        toasts = getattr(self.win, "toasts", None)
+        if toasts is not None and text and timeout >= 8000:
+            toasts.show(text, "warn" if text.startswith(("Cannot", "Could not")) else "info")
+
+
 class Shell(QObject):
     def __init__(self, win):
         super().__init__(win)
@@ -69,6 +85,24 @@ class Shell(QObject):
         t = QTimer(self)
         t.timeout.connect(self.sync)
         t.start(250)
+        # keys: Ctrl+K takes the cursor to the Claude message box; Esc answers the hint bar (Done / Cancel), else closes the newest toast
+        QShortcut(QKeySequence("Ctrl+K"), win, activated=self.focus_assistant)
+        QShortcut(QKeySequence("Esc"), win, activated=self.escape)
+
+    def focus_assistant(self):
+        w = self.win
+        if w._at_home:
+            return
+        w.dock_chat.show()
+        w.assistant.input.setFocus()
+
+    def escape(self):
+        """Esc: finish what the hint bar asks about (Done / Cancel), or else close the newest toast."""
+        b = self.win.view.banner
+        if b.isVisible() and b.button.isVisible() and b.button.isEnabled():
+            b.button.click()
+        elif self.toasts.items:
+            self.toasts.close_one(-1)
 
     # ------------------------------------------------------------------ the status bar: job message, progress, Cancel
     def _build_status(self):
@@ -521,6 +555,9 @@ def register(ctl):
         a.set_project(a.pid)                          # (what a restarted window does: the kept conversation is read again)
         return {"messages": len(a.log.get(a.pid, []))}
     R("assistant.reload", "Read the kept conversation of the open study again, as a restarted window does.", {}, reload)
+    R("assistant.focus", "Ctrl+K: put the cursor in the Claude message box (shows the assistant if it is hidden).", {},
+      lambda: (sh().focus_assistant(), {"focus": win.assistant.input.hasFocus()})[1])
+    R("ui.escape", "Press Esc: finish what the hint bar asks about, or close the newest toast.", {}, lambda: (sh().escape(), {"toasts": win.toasts.listing()})[1])
     R("ui.shortcuts", "The keyboard shortcuts of the shell and what they do.", {}, lambda: {"shortcuts": shortcut_table(win)})
 
 

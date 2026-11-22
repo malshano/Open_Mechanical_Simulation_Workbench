@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDockWid
                                QInputDialog, QLabel, QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton, QScrollArea,
                                QStackedWidget, QStatusBar, QToolBar, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
+from .. import __version__
 from .. import project as P
 from .. import studies
 from .assistant import AssistantPanel, ChatBridge
@@ -128,7 +129,7 @@ class MainWindow(QMainWindow):
         self.act_air = _Shown(self.chk_air)
         self._air_pref: dict = {}
         chrome.install(self, tb)
-        sb = QStatusBar()
+        sb = shell.ToastStatusBar(self)
         self.setStatusBar(sb)
         self.lbl_saved = wid(QLabel(""), "status.saved")
         self.lbl_path = wid(QLabel(""), "status.path")
@@ -232,7 +233,8 @@ class MainWindow(QMainWindow):
             self.theme_actions[key] = a
         theme.bus.changed.connect(lambda _: self._on_theme())
         h = mb.addMenu("&Help")
-        act(h, "&About", lambda: QMessageBox.about(self, "About", "Mechanical Simulation Workbench (Qt)\nOpen source, GPLv3."), None, "help.about")
+        act(h, "&About", lambda: self.toasts.show(f"Mechanical Simulation Workbench {__version__} (desktop). Open source, GPLv3.", "info", 9),
+            None, "help.about")
         self._gate()
 
     def _gate(self):
@@ -379,7 +381,6 @@ class MainWindow(QMainWindow):
         if path:
             out = self.engine.export_zip(path, keep)
             self.statusBar().showMessage(f"Exported to {out}", 8000)
-            self.toasts.ok(f"Exported to {out}")
 
     def import_zip(self):
         path, _ = QFileDialog.getOpenFileName(self, "Import a study file", "", "Study file (*.zip)")
@@ -479,7 +480,7 @@ class MainWindow(QMainWindow):
             mark, tip = marks[k]
             a = self.step_actions[k]
             a.setText(f"{i}  {label}" + (f"  {mark}" if mark else ""))
-            a.setToolTip(tip or label)
+            a.setToolTip(f"{tip or label} (Alt+{i})")
             a.setStatusTip(tip or label)
 
     def _refresh_all(self):

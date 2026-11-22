@@ -44,7 +44,7 @@ from .ids import of as wid_of
 # controls that open a modal dialog: they cannot be driven (the dialog would wait for a person); use the named action instead
 MODAL = {
     "file.open_folder": "study.open_folder", "file.save_as": "study.save_as", "file.export": "study.export",
-    "file.import": "study.import", "geometry.import": "geometry.import", "help.about": None,
+    "file.import": "study.import", "geometry.import": "geometry.import",
     "home.open_folder": "study.open_folder", "home.import": "study.import", "viewbar.picture": "view.picture",
     "chrome.close": None, "results.export.report": "results.export", "results.export.csv": "results.export", "results.export.vtk": "results.export",
     "results.time.record": "results.video",
