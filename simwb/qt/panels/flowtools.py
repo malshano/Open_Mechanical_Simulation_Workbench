@@ -5,7 +5,8 @@ object is drawn in grey under them. Plain widgets with ids (results.flow.*), so 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFrame, QHBoxLayout, QLabel, QPushButton, QSlider, QSpinBox,
+from PySide6.QtGui import QDoubleValidator
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSlider, QSpinBox,
                                QVBoxLayout, QWidget)
 
 from ..ids import wid
@@ -96,6 +97,7 @@ class FlowTools(QWidget):
         self.vol_style = self._combo("results.flow.volume.style", [("map", "Colour map"), ("smoke", "Smoke")],
                                      "Colour map: the colours of the scale. Smoke: one colour that thickens where the value is high")
         v.addLayout(self._row("Look", self.vol_style))
+        self.vol_scale = self._scale(v, "results.flow.volume.scale", "the cloud")
         # ---- vector arrows
         v.addWidget(_h("Vector arrows"))
         v.addWidget(_muted("Arrows of the flow on a plane, pointing the way the air moves, coloured by speed."))
@@ -115,6 +117,7 @@ class FlowTools(QWidget):
         self.vec_n.setToolTip("Arrows across the region")
         self.vec_n.valueChanged.connect(lambda *_: self._emit())
         v.addLayout(self._row("Arrows across", self.vec_n))
+        self.vec_scale = self._scale(v, "results.flow.vectors.scale", "the arrows")
         # ---- particle paths
         v.addWidget(_h("Particle paths"))
         v.addWidget(_muted("Paths of particles carried by the flow (streamlines), coloured by speed."))
@@ -139,6 +142,13 @@ class FlowTools(QWidget):
         self.par_steps.setToolTip("Steps along each path: more = longer paths")
         self.par_steps.valueChanged.connect(lambda *_: self._emit())
         v.addLayout(self._row("Length", self.par_steps))
+        self.par_anim = self._check("results.flow.streams.animate", "Animate the particles",
+                                    "Dots carried along the paths with a short tail, as the air moves (the web version's animated particles)")
+        self.par_anim.setChecked(True)
+        v.addWidget(self.par_anim)
+        self.par_speed = self._slider("results.flow.streams.speed", 1, 40, 10, "Playback speed of the dots (1× in the middle)")
+        v.addLayout(self._row("Dot speed", self.par_speed))
+        self.par_scale = self._scale(v, "results.flow.streams.scale", "the paths")
         v.addStretch(1)
         self.iso_k.valueChanged.connect(lambda _=0: self._iso_note())
 
@@ -150,7 +160,7 @@ class FlowTools(QWidget):
     def _names_now(self) -> list:
         return [f["name"] for f in self.infos]
 
-    def add_plane(self, field=None, axis="y", frac=0.5, opacity=1.0, emit=True):
+    def add_plane(self, field=None, axis="y", frac=0.5, opacity=1.0, emit=True, range=None):  # noqa: A002
         names = self._names_now()
         if field is None:
             field = "Velocity" if "Velocity" in names else (names[0] if names else "")
@@ -159,7 +169,8 @@ class FlowTools(QWidget):
         if axis not in ("x", "y", "z"):
             raise ValueError("axis must be x, y or z")
         self.planes.append({"field": field, "axis": axis, "frac": min(max(float(frac), 0.0), 1.0),
-                            "opacity": min(max(float(opacity), 0.1), 1.0)})
+                            "opacity": min(max(float(opacity), 0.1), 1.0),
+                            "range": (float(range[0]), float(range[1])) if range and float(range[1]) > float(range[0]) else None})
         self._rebuild_planes()
         if emit:
             self._emit()
@@ -177,7 +188,8 @@ class FlowTools(QWidget):
         self.planes = []
         for p in planes or []:
             p = dict(p)
-            self.add_plane(p.get("field"), p.get("axis", "y"), p.get("frac", p.get("position", 0.5)), p.get("opacity", 1.0), emit=False)
+            self.add_plane(p.get("field"), p.get("axis", "y"), p.get("frac", p.get("position", 0.5)), p.get("opacity", 1.0), emit=False,
+                           range=p.get("range"))
         self._rebuild_planes()
         if emit:
             self._emit()
@@ -254,9 +266,24 @@ class FlowTools(QWidget):
             op.setToolTip("Opacity: lower to see the object and the other tools behind the plane")
             op.valueChanged.connect(lambda val, i=i: self._plane_set(i, "opacity", val / 100.0))
             cv.addLayout(self._row("Opacity", op))
+            sc = self._scale(cv, f"results.flow.plane.{n}.scale", f"plane {n}", emit=False)
+            if p.get("range"):
+                sc["auto"].blockSignals(True)
+                sc["auto"].setChecked(False)
+                sc["auto"].blockSignals(False)
+                for e, val in ((sc["lo"], p["range"][0]), (sc["hi"], p["range"][1])):
+                    e.setEnabled(True)
+                    e.setText(f"{val:g}")
+            for w_ in (sc["auto"], sc["lo"], sc["hi"]):
+                (w_.toggled if w_ is sc["auto"] else w_.editingFinished).connect(lambda *_, i=i, sc=sc: self._plane_range(i, sc))
             self.planes_box.addWidget(card)
-            self._plane_rows.append({"card": card, "field": field, "axis": btns, "pos": pos, "pos_label": pos_label, "opacity": op})
+            self._plane_rows.append({"card": card, "field": field, "axis": btns, "pos": pos, "pos_label": pos_label, "opacity": op, "scale": sc})
             self._pos_label(i)
+
+    def _plane_range(self, i: int, sc: dict):
+        if i < len(self.planes):
+            self.planes[i]["range"] = self._scale_value(sc)
+            self._emit()
 
     def _plane_set(self, i: int, key: str, value):
         if i < len(self.planes) and self.planes[i].get(key) != value:
@@ -264,6 +291,77 @@ class FlowTools(QWidget):
             if key in ("frac", "axis"):
                 self._pos_label(i)
             self._emit()
+
+    # ------------------------------------------------------------------ the colour range of each tool
+    def _scale(self, layout, id_: str, what: str, emit: bool = True) -> dict:
+        """Automatic (the range of the data, or of nearly all the flow) or a range of its own: a tick box and two boxes."""
+        row = QHBoxLayout()
+        auto = wid(QCheckBox("Automatic colour range"), id_ + ".auto")
+        auto.setChecked(True)
+        auto.setToolTip(f"The colours of {what} run over the range of the data; untick to type a range of your own")
+        lo, hi = wid(QLineEdit(), id_ + ".lo"), wid(QLineEdit(), id_ + ".hi")
+        for e, t in ((lo, "Lowest value of the colour range"), (hi, "Highest value of the colour range")):
+            e.setValidator(QDoubleValidator(e))
+            e.setEnabled(False)
+            e.setToolTip(t + " (untick Automatic to type it)")
+            e.setMaximumWidth(80)
+            if emit:
+                e.editingFinished.connect(lambda: self._emit())
+        auto.toggled.connect(lambda on: (lo.setEnabled(not on), hi.setEnabled(not on), self._emit() if emit else None))
+        row.addWidget(auto)
+        row.addStretch(1)
+        row.addWidget(QLabel("from"))
+        row.addWidget(lo)
+        row.addWidget(QLabel("to"))
+        row.addWidget(hi)
+        layout.addLayout(row)
+        return {"auto": auto, "lo": lo, "hi": hi}
+
+    @staticmethod
+    def _scale_value(sc: dict):
+        """None (automatic) or (lo, hi) typed in."""
+        if sc["auto"].isChecked():
+            return None
+        try:
+            lo, hi = float(sc["lo"].text()), float(sc["hi"].text())
+        except ValueError:
+            return None
+        return (lo, hi) if hi > lo else None
+
+    def show_range(self, key, lo: float, hi: float):
+        """The range a tool is drawn over (shown in its boxes while they are automatic). key: volume | vectors | streams | plane index."""
+        sc = {"volume": self.vol_scale, "vectors": self.vec_scale, "streams": self.par_scale}.get(key)
+        if sc is None and isinstance(key, int) and key < len(self._plane_rows):
+            sc = self._plane_rows[key]["scale"]
+        if sc is not None and sc["auto"].isChecked():
+            for e, v in ((sc["lo"], lo), (sc["hi"], hi)):
+                e.blockSignals(True)
+                e.setText(f"{v:.4g}")
+                e.blockSignals(False)
+
+    def set_scale(self, key, lo=None, hi=None):
+        """Give a tool a colour range of its own (lo, hi), or automatic again (no lo / hi). key: volume | vectors | streams | plane number (1..)."""
+        if isinstance(key, int) or str(key).isdigit():
+            i = int(key) - 1
+            if not 0 <= i < len(self._plane_rows):
+                raise ValueError(f"There is no plane {key}")
+            sc = self._plane_rows[i]["scale"]
+        else:
+            sc = {"volume": self.vol_scale, "vectors": self.vec_scale, "streams": self.par_scale}.get(key)
+            if sc is None:
+                raise ValueError("key must be volume, vectors, streams or a plane number")
+        if lo is None or hi is None:
+            sc["auto"].setChecked(True)
+            return None
+        if not float(hi) > float(lo):
+            raise ValueError("the range must run from a lower to a higher value")
+        q, self._quiet = self._quiet, True
+        sc["auto"].setChecked(False)
+        sc["lo"].setText(f"{float(lo):g}")
+        sc["hi"].setText(f"{float(hi):g}")
+        self._quiet = q
+        self._emit()
+        return (float(lo), float(hi))
 
     # ------------------------------------------------------------------ small builders
     def _combo(self, id_: str, items: list, tip: str) -> QComboBox:
@@ -338,9 +436,11 @@ class FlowTools(QWidget):
                 "iso": {"on": self.iso_on.isChecked() and self.iso_box.isVisibleTo(self), "k": self.iso_k.value(), "color": self.iso_color.currentText(),
                         "gap": self.iso_gap.value(), "smooth": self.iso_smooth.value()},
                 "volume": {"on": self.vol_on.isChecked(), "field": self.vol_field.currentText(), "density": self.vol_density.value() / 10.0,
-                           "style": self.vol_style.currentData()},
-                "vectors": {"on": self.vec_on.isChecked(), "axis": axis, "frac": self.vec_pos.value() / 1000.0, "n": self.vec_n.value()},
-                "streams": {"on": self.par_on.isChecked(), "n": self.par_n.value(), "seed": self.par_seed.currentData(), "steps": self.par_steps.value()},
+                           "style": self.vol_style.currentData(), "range": self._scale_value(self.vol_scale)},
+                "vectors": {"on": self.vec_on.isChecked(), "axis": axis, "frac": self.vec_pos.value() / 1000.0, "n": self.vec_n.value(),
+                            "range": self._scale_value(self.vec_scale)},
+                "streams": {"on": self.par_on.isChecked(), "n": self.par_n.value(), "seed": self.par_seed.currentData(), "steps": self.par_steps.value(),
+                            "animate": self.par_anim.isChecked(), "speed": self.par_speed.value() / 10.0, "range": self._scale_value(self.par_scale)},
                 "planes": [dict(p) for p in self.planes]}
 
     def any_on(self) -> bool:

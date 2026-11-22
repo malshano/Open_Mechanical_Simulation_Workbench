@@ -223,3 +223,75 @@ def add_volume(view, p: dict, tab, window, density: float = 5.0, style: str = "m
 
 def table(cmap: str, reverse: bool, bands: int):
     return colormaps.table(cmap, 256, reverse, bands)
+
+
+class ParticleDots:
+    """Dots carried along the particle paths (the web version's animated particles): each dot starts at a random place on its path and steps
+    along it about 25 path steps a second times `speed`, back to its start at the end. Driven by a Qt timer; it stops by itself when its
+    actor is no longer drawn (the overlay was cleared)."""
+
+    def __init__(self, view, p: dict, tab, lo: float, hi: float, speed: float = 1.0, size: float = 5.0):
+        from PySide6.QtCore import QTimer
+
+        n, steps = int(p["n"]), int(p["steps"])
+        P = _arr(p["paths"], np.float32).reshape(n, steps, 3).astype(np.float64)
+        S = _arr(p["speed"], np.float32).reshape(n, steps).astype(np.float64)
+        cnt = np.isfinite(P[:, :, 0]).sum(1)
+        keep = cnt >= 2
+        self.P, self.S, self.cnt = P[keep], S[keep], cnt[keep]
+        self.view, self.speed = view, max(float(speed), 0.05)
+        self.phase = np.random.default_rng(1).uniform(0, 1, len(self.cnt)) * self.cnt
+        self.t = 0.0
+        self.pd = vtkPolyData()
+        self.points = vtkPoints()
+        self.pd.SetPoints(self.points)
+        m = vtkPolyDataMapper()
+        m.SetInputData(self.pd)
+        m.SetLookupTable(_lut(tab, lo, hi))
+        m.UseLookupTableScalarRangeOn()
+        m.SetScalarRange(lo, hi)
+        m.SetColorModeToMapScalars()
+        m.SetScalarModeToUsePointData()
+        self.actor = vtkActor()
+        self.actor.SetMapper(m)
+        pr = self.actor.GetProperty()
+        pr.SetPointSize(float(size))
+        pr.SetRenderPointsAsSpheres(True)
+        pr.SetLighting(False)
+        self.actor.PickableOff()
+        view.ren.AddActor(self.actor)
+        view.overlay_actors.append(self.actor)
+        self.frames = 0
+        self.step(0.0)
+        self.timer = QTimer(view)
+        self.timer.setInterval(40)
+        self.timer.timeout.connect(lambda: self.step(0.04))
+        self.timer.start()
+
+    def positions(self):
+        j = (np.floor(self.phase + self.t * 25.0 * self.speed).astype(np.int64)) % np.maximum(self.cnt, 1)
+        k = np.arange(len(self.cnt))
+        return self.P[k, j], self.S[k, j]
+
+    def step(self, dt: float):
+        if dt and self.actor not in self.view.overlay_actors:      # (no longer drawn: stop)
+            self.timer.stop()
+            return
+        self.t += dt
+        self.frames += 1
+        pts, sp = self.positions()
+        self.points.SetData(numpy_to_vtk(np.ascontiguousarray(pts), deep=True))
+        verts = vtkCellArray()
+        n = len(pts)
+        verts.SetData(numpy_to_vtkIdTypeArray(np.arange(n + 1, dtype=np.int64), deep=True),
+                      numpy_to_vtkIdTypeArray(np.arange(n, dtype=np.int64), deep=True))
+        self.pd.SetVerts(verts)
+        s = numpy_to_vtk(np.ascontiguousarray(sp), deep=True)
+        s.SetName("speed")
+        self.pd.GetPointData().SetScalars(s)
+        self.pd.Modified()
+        if dt:
+            self.view.render()
+
+    def stop(self):
+        self.timer.stop()
