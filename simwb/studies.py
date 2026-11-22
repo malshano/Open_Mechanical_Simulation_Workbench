@@ -5,6 +5,8 @@ Temperatures exposed to the user are in degC; solvers convert where needed.
 """
 from __future__ import annotations
 
+from . import materials
+
 P = lambda key, label, unit, default, **kw: {"key": key, "label": label, "unit": unit, "default": default, **kw}  # noqa: E731
 
 STUDIES = {
@@ -334,9 +336,10 @@ STUDIES = {
             P("emissivity", "Surface emissivity", "-", 0.85, min=0.01, max=1, show_if={"radiation": "on"},
               help="All part and wall surfaces: ~0.85-0.95 painted, anodised, plastic, PCB; ~0.05-0.1 bare "
                    "polished aluminium or copper. Openings radiate like the room (1)."),
-            P("fluid", "Coolant", "", "air", options=["air"],
-              help="The fluid around the parts. Only air is available in this study; it sets density, viscosity "
-                   "and conductivity. Nothing to adjust."),
+            P("fluid", "Coolant", "", "air", options=["air"], fluid_kinds=("gas", "liquid"),
+              help="The fluid around the parts: a gas (air, nitrogen, helium) or a liquid (water, coolant ...), or one you added in "
+                   "the materials library. It sets density, viscosity, specific heat and conductivity. A liquid is a forced flow "
+                   "(Air flow: fan, i.e. a pump or inlet) with a constant density: natural convection needs a gas."),
             P("turbulence", "Flow model", "", "auto",
               options=["auto", "laminar", "kOmegaSST", "kOmega", "kEpsilon", "realizableKE", "SpalartAllmaras"],
               help="auto: chosen from the Reynolds number of the fin channels (laminar below ~2300)."),
@@ -413,9 +416,9 @@ STUDIES = {
         "body_roles": ["fluid"],
         "body_params": [],
         "settings": [
-            P("fluid", "Fluid", "", "air", options=["air", "water"],
-              help="The fluid the body moves through: air for drones and vehicles, water for submerged bodies. "
-                   "It sets density and viscosity, so forces and the Reynolds number."),
+            P("fluid", "Fluid", "", "air", options=["air", "water"], fluid_kinds=("gas", "liquid"),
+              help="The fluid the body moves through: air for drones and vehicles, water or another liquid for submerged bodies, "
+                   "or a fluid you added in the materials library. It sets density and viscosity, so forces and the Reynolds number."),
             P("turbulence", "Flow model", "", "kOmegaSST", options=["kOmegaSST", "kOmega", "kEpsilon", "realizableKE", "SpalartAllmaras", "kOmegaSSTDDES", "laminar"],
               help="Turbulence model. k-omega SST (RANS) is the standard choice for bodies in a flow; DES resolves "
                    "vortices and wakes in a transient run."),
@@ -586,7 +589,15 @@ OPTION_HELP = {
     },
     "fluid": {
         "air": "Air at about 20-25 °C and 1 atm.",
+        "nitrogen": "Nitrogen gas at about 20 °C and 1 atm.",
+        "helium": "Helium gas at about 20 °C and 1 atm (light, conducts heat well).",
         "water": "Water at about 20 °C (incompressible).",
+        "seawater": "Seawater (35 g/kg salt) at about 20 °C.",
+        "glycol_50": "A 50 % ethylene glycol and water coolant at about 20 °C.",
+        "ethanol": "Ethanol at about 20 °C.",
+        "transformer_oil": "Mineral transformer oil at about 20 °C.",
+        "engine_oil": "Unused engine oil at about 20 °C (very viscous: the flow stays laminar).",
+        "glycerin": "Glycerin at about 20 °C (very viscous).",
     },
     "air_box_shape": {},
 }
@@ -665,6 +676,25 @@ def _attach_help():
 
 
 _attach_help()
+
+
+def sync_fluids():
+    """The fluid choices of every study from the materials library (the built-in fluids and the user's own), in place: the lists are shared
+    with everything that validates or shows them."""
+    for st in STUDIES.values():
+        for prm in st["settings"]:
+            if prm["key"] != "fluid" or "fluid_kinds" not in prm:
+                continue
+            keys = materials.fluid_keys(prm["fluid_kinds"])
+            prm["options"][:] = keys
+            prm["option_labels"] = {k: materials.FLUIDS[k]["label"] for k in keys}
+            fl = materials.FLUIDS
+            prm["option_help"] = {k: OPTION_HELP["fluid"].get(k) or (
+                f"{'Your own fluid' if fl[k].get('custom') else 'Fluid'}: density {fl[k]['rho']:g} kg/m3, viscosity {fl[k]['mu']:g} Pa s.") for k in keys}
+
+
+materials.on_change.append(sync_fluids)
+sync_fluids()
 
 def study(name: str) -> dict:
     if name not in STUDIES:

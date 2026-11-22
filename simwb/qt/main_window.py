@@ -79,6 +79,7 @@ class MainWindow(QMainWindow):
             sc.setFrameShape(QScrollArea.NoFrame)
             sc.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)      # (panels wrap their text; nothing scrolls sideways)
             sc.setWidget(self.panels[k])
+            self._keep_scroll(self.panels[k], sc)
             self.stack.addWidget(sc)
             self.panels[k].changed.connect(self.update_view)
 
@@ -163,6 +164,57 @@ class MainWindow(QMainWindow):
         self._title()
 
     # ------------------------------------------------------------------ building
+    @staticmethod
+    def _keep_scroll(panel, scroll):
+        """A panel draws itself again from scratch on every change, and what appears above the control you used (a new card, a notice that a
+        job is running) pushes it down the screen: you have to scroll to find it again. Like a browser's scroll anchoring, the control you
+        just used (the one with the keyboard focus; else the first one in view) is remembered and, once the new layout has settled, the
+        panel is scrolled so that the same control is where it was on the screen."""
+        from PySide6.QtWidgets import QApplication, QWidget
+        orig = panel.refresh
+        kinds = ("QPushButton", "QLabel", "QLineEdit", "QComboBox", "QCheckBox", "QRadioButton", "QSlider")
+
+        def key_of(w):
+            name = w.objectName()
+            text = w.text() if hasattr(w, "text") and callable(w.text) else ""
+            return (type(w).__name__, name if "." in name else "", "" if "." in name else str(text)[:60])
+
+        def same(k):
+            return [w for w in panel.findChildren(QWidget) if type(w).__name__ == k[0] and key_of(w) == k]
+
+        def top_of(w, vp):
+            from PySide6.QtCore import QPoint
+            return w.mapTo(vp, QPoint(0, 0)).y()
+
+        def refresh(st, _orig=orig, _scroll=scroll):
+            bar, vp = _scroll.verticalScrollBar(), _scroll.viewport()
+            keep, anchor = bar.value(), None
+            if keep:
+                w = QApplication.focusWidget()
+                if w is None or not panel.isAncestorOf(w) or type(w).__name__ not in kinds or not w.isVisible():
+                    vis = [x for x in panel.findChildren(QWidget) if type(x).__name__ in kinds and x.isVisible() and 0 <= top_of(x, vp) < vp.height()]
+                    w = min(vis, key=lambda x: top_of(x, vp)) if vis else None
+                if w is not None:
+                    k = key_of(w)
+                    same_old = same(k)
+                    anchor = (k, same_old.index(w) if w in same_old else 0, top_of(w, vp))
+            _orig(st)
+            if not keep:
+                return
+
+            def settle(b=bar, v=keep, an=anchor):
+                if an is not None:
+                    ws = same(an[0])
+                    if ws:
+                        w = ws[min(an[1], len(ws) - 1)]
+                        b.setValue(b.value() + top_of(w, vp) - an[2])
+                        return
+                if b.value() != v and b.maximum() >= v:
+                    b.setValue(v)
+            for ms in (0, 40, 150, 400):
+                QTimer.singleShot(ms, settle)
+        panel.refresh = refresh
+
     def _dock(self, title, widget, area, name=""):
         d = QDockWidget(title, self)
         d.setObjectName(f"dock.{name}" if name else title)

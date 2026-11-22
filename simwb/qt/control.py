@@ -596,9 +596,21 @@ class Control(QObject):
         R("step.go", "Show a step: geometry, setup, mesh, solve or results.", {"step": (S, "step name", True)}, go)
         R("geometry.import", "Import a CAD file (STEP, STL, OBJ) into the open study; a job.", {"path": (S, "absolute path", True)},
           lambda path: (need_study(), {"job": eng.import_step(path).to_dict(log_tail=0)})[1])
-        R("setup.material", "Set the material of a body (through the same combo box a person uses).",
+        R("setup.material", "Set the material of a body, or the fluid of the fluid region (through the same combo box a person uses).",
           {"body_id": (N, "body id", True), "material": (S, "material key or its label", True)},
           lambda body_id, material: self._material(int(body_id), material))
+        R("setup.materials", "The materials library: every solid and fluid with its key, label, whether you added it (custom) and its values.", {},
+          lambda: self._materials_list())
+        R("setup.material_add", "Add a material of your own to the library. kind: solid (label, rho kg/m3, cp J/kg/K, k W/m/K, E Pa, nu, Sy Pa optional) or "
+          "fluid (label, phase gas|liquid, rho, mu Pa s, cp, k, Pr and beta optional, M kg/kmol for gases). Returns its key.",
+          {"kind": (S, "solid | fluid", True), "label": (S, "name", True), "phase": (S, "fluids: gas | liquid", False), "rho": (N, "kg/m3", False),
+           "cp": (N, "J/kg/K", False), "k": (N, "W/m/K", False), "E": (N, "Pa (solids)", False), "nu": (N, "Poisson (solids)", False),
+           "Sy": (N, "Pa (solids, optional)", False), "mu": (N, "Pa s (fluids)", False), "Pr": (N, "fluids, optional", False),
+           "beta": (N, "1/K, fluids, optional", False), "M": (N, "kg/kmol, gases", False)},
+          lambda kind, label, **f: self._material_add(kind, label, **f))
+        R("setup.material_remove", "Remove a material you added (a built-in one, or one a study uses, is refused).",
+          {"kind": (S, "solid | fluid", True), "key": (S, "material key", True)}, lambda kind, key: self._material_remove(kind, key))
+        R("setup.materials_open", "Open the materials library dialog.", {}, lambda: (win.panels["setup"].open_library(), {"open": True})[1])
         # ---- mesh
         R("mesh.preset", "Choose the mesh resolution: quick, coarse, medium, fine, very_fine.", {"preset": (S, "preset", True)},
           lambda preset: (self._click(f"mesh.preset.{preset}"), {"preset": preset})[1])
@@ -961,6 +973,32 @@ class Control(QObject):
             if ref in (b["id"], b["name"]):
                 return b["id"]
         raise ValueError(f"No boundary condition '{ref}'. Have: {[b['name'] for b in self.engine.state().get('bcs') or []]}")
+
+    def _materials_list(self):
+        from .. import materials
+        return {"solids": [{"key": k, "label": m["label"], "custom": bool(m.get("custom")), "rho": m["rho"], "k": m["k"], "E": m["E"]}
+                           for k, m in materials.SOLIDS.items()],
+                "fluids": [{"key": k, "label": m["label"], "custom": bool(m.get("custom")), "phase": m.get("kind", "gas"), "rho": m["rho"],
+                            "mu": m["mu"]} for k, m in materials.FLUIDS.items()], "warning": materials.LOAD_WARNING}
+
+    def _material_add(self, kind, label, **f):
+        from .. import materials
+        f = {k: v for k, v in f.items() if v is not None}
+        if kind == "solid":
+            key = materials.add_solid(label=label, **f)
+        elif kind == "fluid":
+            f["kind"] = f.pop("phase", None) or "liquid"
+            key = materials.add_fluid(label=label, **f)
+        else:
+            raise ValueError("kind must be 'solid' or 'fluid'")
+        self.engine.changed.emit()
+        return {"key": key, "label": (materials.SOLIDS if kind == "solid" else materials.FLUIDS)[key]["label"]}
+
+    def _material_remove(self, kind, key):
+        from .. import materials
+        materials.remove_custom(kind, key)
+        self.engine.changed.emit()
+        return {"removed": key}
 
     def _material(self, body_id, material):
         need = self._index().get(f"setup.material.{body_id}")

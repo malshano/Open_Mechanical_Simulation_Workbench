@@ -157,6 +157,27 @@ Delete a study: the trash icon in the study menu or in the recent list. This del
 7. The **Readiness** list (and the **Messages** tab) says what is still missing.
 8. **About this simulation** and the small texts under each option explain every choice in plain language.
 
+### 5.1a Materials and fluids
+
+Every part has a **Material** drop-down in *Parts & materials*, and the fluid region has a **Fluid** drop-down in the same place. The last
+entry of each drop-down, **＋ Add a material…** or **＋ Add a fluid…**, adds one of your own. The **Materials…** button next to the heading opens
+the library: two tabs, *Solids (parts)* and *Fluids (liquids and gases)*, with the values of every material.
+
+- **Solids** (steel, aluminium, copper, plastics, titanium ...): density, specific heat, conductivity, Young's modulus, Poisson's ratio,
+  and a yield strength (empty for a brittle material).
+- **Fluids**: gases (air, nitrogen, helium) and liquids (water, seawater, a 50 % glycol coolant, ethanol, transformer oil, engine oil,
+  glycerin), all at about 20 °C. A **gas** follows the perfect-gas law in the compressible runs; a **liquid** has a constant density.
+  External aerodynamics (a body moving through the fluid) and the cooling study take any of them. A liquid in the cooling study is a
+  forced flow (Air flow: fan, that is a pump or an inlet): natural convection needs a gas, and the readiness list says so.
+- **Add** opens a form. *Start from* copies the values of a material that is like yours; then change what differs. Viscosity is in mPa·s
+  (the same number as centipoise: water 1.0). The Prandtl number is worked out from the other values when left empty. A wrong value is
+  refused with the reason, and the form stays open.
+- **Your own materials** are saved with your workspace and kept inside every study that uses them, so a study sent to someone else opens with
+  its materials. In the library you can **Change…**, **Copy as new…** and **Remove** them; the built-in ones cannot be changed (copy one
+  instead) and one that a study uses cannot be removed.
+- Claude can do the same: the tools `add_material` and `remove_material`, and the window actions `setup.materials`, `setup.material_add`,
+  `setup.material_remove`.
+
 ### 5.2 Boundary conditions per study
 
 | Study | Condition ids (as labelled in the GUI) | Default for unassigned faces |

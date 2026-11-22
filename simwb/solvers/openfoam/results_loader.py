@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 
 from ...results import ResultSet
-from ... import studies
+from ... import materials, studies
 from ... import symmetry as sym
 from ...studies import AXES
 from .foamio import exists as foam_exists, read_field, read_polymesh
@@ -625,7 +625,7 @@ def _load_cht(case, project, meta):
             pf = cf["p"][own] if pf is None else pf
             Uf = pv.get("U", {}).get(p["name"])
             Uf = cf["U"][own] if Uf is None else Uf
-            rho = pf / (8314.46 / fl["M"] * (Tf + 273.15)) if fl.get("M") else fl["rho"]
+            rho = pf / (8314.46 / fl["M"] * (Tf + 273.15)) if (fl.get("M") and materials.is_gas(fl)) else fl["rho"]
             p0 = pf + 0.5 * rho * (Uf ** 2).sum(1)
             w = np.abs(f)
             m += float(f.sum())
@@ -646,7 +646,7 @@ def _load_cht(case, project, meta):
         p0in, p0out = patch_avg("p", meta["inlet_patches"]), patch_avg("p", meta["outlet_patches"])
         psin, psout = p0in, p0out
         flow = sum(i["flow_m3s"] for i in meta["inlets"])
-        mdot = flow * 1e5 / (8314.46 / fl["M"] * (Tin + 273.15))
+        mdot = flow * (1e5 / (8314.46 / fl["M"] * (Tin + 273.15)) if materials.is_gas(fl) else fl["rho"])
     else:
         mdot = -m_in
     # enthalpy flux leaving minus entering (cp constant): heat carried away by the air

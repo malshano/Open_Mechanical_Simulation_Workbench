@@ -85,8 +85,8 @@ def _icons(t: dict, name: str) -> dict:
 def stylesheet(t: dict, ic: dict) -> str:
     return f"""
 * {{ font-family: "{t['font']}", "Inter", sans-serif; font-size: 13px; color: {t['ink']}; }}
-QMainWindow, QDialog {{ background: {t['bg']}; }}
 QWidget {{ background: transparent; }}
+QMainWindow, QDialog, QMessageBox, QInputDialog, QFileDialog {{ background: {t['bg']}; }}
 QScrollArea, QScrollArea > QWidget > QWidget {{ background: {t['panel']}; }}
 QDockWidget {{ titlebar-close-icon: none; font-weight: 600; }}
 QDockWidget::title {{ background: {t['panel2']}; padding: 8px 12px; border-bottom: 1px solid {t['line']}; }}

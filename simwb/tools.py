@@ -53,6 +53,10 @@ def list_options(pr, a):
         "solid_materials": {k: (f"{v['label']} (E={v['E'] / 1e9:g} GPa, density={v['rho']:g} kg/m3"
                                 + (f", yield {v['Sy'] / 1e6:g} MPa)" if v.get("Sy") else ", no yield strength)")
                                 if mech else f"{v['label']} (k={v['k']} W/mK)") for k, v in materials.SOLIDS.items()},
+        "fluids": {k: f"{v['label']} ({v.get('kind', 'gas')}: density {v['rho']:g} kg/m3, viscosity {v['mu']:g} Pa s)"
+                   for k, v in materials.FLUIDS.items()},
+        "your_own_materials": {"solids": [k for k in materials.SOLIDS if materials.is_custom("solid", k)],
+                               "fluids": [k for k in materials.FLUIDS if materials.is_custom("fluid", k)]},
         "studies": {k: v["label"] for k, v in studies.STUDIES.items()},
         "example_step_files": sorted(x.name for x in P.EXAMPLES.glob("*.step")),
     }
@@ -98,6 +102,25 @@ REMOTE_GUI = None  # set by mcp_server
 
 def set_body(pr, a):
     return pr.set_body(a["body_id"], material=a.get("material"), heat_W=a.get("heat_W"), name=a.get("name"))
+
+
+def add_material(pr, a):
+    kind = a.get("kind")
+    fields = {k: v for k, v in a.items() if k != "kind"}
+    if kind == "solid":
+        key = materials.add_solid(**fields)
+    elif kind == "fluid":
+        fields["kind"] = fields.pop("phase", None) or "liquid"       # (the tool's 'kind' says solid or fluid; the fluid's own is gas or liquid)
+        key = materials.add_fluid(**fields)
+    else:
+        raise ValueError("kind must be 'solid' or 'fluid'")
+    return {"key": key, "material": (materials.SOLIDS if kind == "solid" else materials.FLUIDS)[key],
+            "use_it": "set_body (material=key) for a solid; set_settings (fluid=key) for a fluid"}
+
+
+def remove_material(pr, a):
+    materials.remove_custom(a.get("kind"), a.get("key"))
+    return f"Removed {a.get('key')} from your materials. Studies that use it keep their own copy."
 
 
 def add_bc(pr, a):
@@ -463,6 +486,13 @@ TOOLS = [
     ("set_body", "Set material (id from list_options), heat generated [W] and/or display name of a solid body.",
      {"type": "object", "properties": {"body_id": INT, "material": STR, "heat_W": NUM, "name": STR},
       "required": ["body_id"]}, set_body),
+    ("add_material", "Add your own material to the library (saved; every study can then use it). kind 'solid': label, k [W/m/K], rho [kg/m3], "
+                     "cp [J/kg/K], E [Pa], nu, Sy [Pa, optional]. kind 'fluid': label, phase 'gas' or 'liquid', rho [kg/m3], mu [Pa s], cp [J/kg/K], k [W/m/K], Pr, beta [1/K] (optional), M [kg/kmol, gases]. "
+                     "Returns the key to use with set_body / set_settings.",
+     {"type": "object", "properties": {"kind": STR, "label": STR, "phase": STR, "k": NUM, "rho": NUM, "cp": NUM, "E": NUM, "nu": NUM,
+                                       "Sy": NUM, "mu": NUM, "Pr": NUM, "beta": NUM, "M": NUM}, "required": ["kind", "label"]}, add_material),
+    ("remove_material", "Remove one of the materials you added (built-in ones cannot be removed). kind 'solid' or 'fluid', key from list_options.",
+     {"type": "object", "properties": {"kind": STR, "key": STR}, "required": ["kind", "key"]}, remove_material),
     ("add_boundary_condition", "Create a boundary condition on faces. A face can only be in one boundary "
                                "condition (it is moved). params use the keys/units from list_options; "
                                "temperatures in degC.",
@@ -814,7 +844,7 @@ UI_TOOLS = [
 ]
 TOOLS += UI_TOOLS
 
-PROJECT_FREE = {"list_projects", "create_project", "openfoam_status", "install_openfoam", "list_options"} | {t[0] for t in UI_TOOLS} | {"ui_eval"}
+PROJECT_FREE = {"list_projects", "create_project", "openfoam_status", "install_openfoam", "list_options", "add_material", "remove_material"} | {t[0] for t in UI_TOOLS} | {"ui_eval"}
 PROJECT_OPTIONAL = {"list_options"}  # project-free, but uses the project when one is given
 
 MCP_EXTRA = [

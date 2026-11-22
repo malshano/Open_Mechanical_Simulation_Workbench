@@ -189,3 +189,12 @@ def test_the_3d_view_and_legend_follow_the_theme(ctl):
     t = theme.LIGHT
     assert contrast.ratio(t["vp_text"], t["vp_bottom"]) >= 3       # the axis labels stay readable on it
     ctl.do("theme.set", {"mode": "dark"})
+
+
+def test_dialogs_keep_their_background_the_widget_rule_must_not_win():
+    """Qt style sheets: of two rules with the same weight the later one wins, and every dialog is a widget. With 'QWidget { background:
+    transparent }' after the dialog rule, message boxes had no background at all (dark text on black in the light theme)."""
+    import inspect
+    from simwb.qt import theme
+    src = inspect.getsource(theme.stylesheet)
+    assert src.index("QWidget {{ background: transparent; }}") < src.index("QMainWindow, QDialog, QMessageBox")

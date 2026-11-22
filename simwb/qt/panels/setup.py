@@ -10,11 +10,11 @@ from __future__ import annotations
 import json
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget
 
 from ... import materials
 from .. import bcs as bcmarks
-from .. import mode, theme
+from .. import materialsui, mode, theme
 from .. import rotors as rotmod
 from .. import symmetry as symmod
 from ..forms import ParamForm, fmt_num
@@ -156,7 +156,7 @@ class SetupPanel(_Panel):
         sig = json.dumps([st["study"], st.get("bcs"), [(b["id"], b["name"], b.get("material"), b.get("material_is_default"), b.get("heat_W"))
                           for b in st["body_list"]], st.get("settings"), st.get("checks"), self.active, theme.effective(), hidden,
                           st.get("symmetry"), st.get("rotors"), st.get("moving_zones"), (st.get("domain") or {}).get("enclosure_mode"),
-                          st["geometry"].get("updated"), busy, self.sym.draft, self.sym.picking, self.axis_pick, self.rot.oblique],
+                          st["geometry"].get("updated"), busy, self.sym.draft, self.sym.picking, self.axis_pick, self.rot.oblique, materials.VERSION],
                          default=str, sort_keys=True) + str(mode.simple())
         if sig == self._sig:
             self.draw_marks()
@@ -202,7 +202,17 @@ class SetupPanel(_Panel):
 
     # ---- parts & materials
     def _parts(self, st, spec):
-        self.holder.addWidget(_h("Parts & materials"))
+        head = QWidget()
+        hl = QHBoxLayout(head)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.addWidget(_h("Parts & materials"), 1)
+        lib = wid(QPushButton("Materials…"), "setup.materials.open")
+        lib.setObjectName("ghostBorder")
+        lib.setToolTip("The materials library: every solid and fluid you can choose, and the ones you added")
+        lib.clicked.connect(self.open_library)
+        hl.addWidget(lib)
+        self.holder.addWidget(head)
+        fluid_param = next((p for p in spec.get("settings") or [] if p["key"] == "fluid" and p.get("options")), None)
         for b in st["body_list"]:
             card = _item()
             v = QVBoxLayout(card)
@@ -225,8 +235,31 @@ class SetupPanel(_Panel):
                 hl.clicked.connect(lambda _=False, bid=b["id"]: self._select_body(bid))
                 head.addWidget(hl)
             v.addLayout(head)
-            if b["role"] != "solid":
-                v.addWidget(_muted("Air (the fluid region): no material to choose."))
+            if b["role"] != "solid" and fluid_param is None:
+                v.addWidget(_muted("The fluid region: this study has no fluid to choose."))
+            elif b["role"] != "solid":
+                row = QHBoxLayout()
+                row.addWidget(QLabel("Fluid"))
+                cb = wid(QComboBox(), f"setup.material.{b['id']}")
+                cb.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+                cb.setMinimumContentsLength(10)
+                names = fluid_param.get("option_labels") or {}
+                for k in fluid_param["options"]:
+                    cb.addItem(names.get(k, k), k)
+                    f = materials.FLUIDS.get(k) or {}
+                    cb.setItemData(cb.count() - 1, f"{f.get('kind', 'gas').capitalize()}: density {fmt_num(f.get('rho', 0))} kg/m³, viscosity "
+                                   f"{fmt_num(f.get('mu', 0) * 1e3)} mPa·s, conductivity {fmt_num(f.get('k', 0))} W/(m·K)", Qt.ToolTipRole)
+                cb.addItem("＋ Add a fluid…", "__add__")
+                cur = (st.get("settings") or {}).get("fluid", fluid_param.get("default"))
+                cb.setCurrentIndex(max(cb.findData(cur), 0))
+                cb.setToolTip("The fluid the study is run in: a gas or a liquid, from the library (Materials…) or one you add here")
+                cb.currentIndexChanged.connect(lambda _=0, c=cb, prev=cur: self._fluid_chosen(c, prev))
+                row.addWidget(cb, 1)
+                v.addLayout(row)
+                f = materials.FLUIDS.get(cur) or {}
+                if f:
+                    v.addWidget(_muted(f"{f.get('kind', 'gas').capitalize()}: density {fmt_num(f['rho'])} kg/m³, viscosity {fmt_num(f['mu'] * 1e3)} mPa·s."
+                                       + (" Constant density." if f.get("kind") == "liquid" else "")))
             else:
                 row = QHBoxLayout()
                 row.addWidget(QLabel("Material"))
@@ -235,16 +268,20 @@ class SetupPanel(_Panel):
                 cb.setMinimumContentsLength(10)
                 for k, m in materials.SOLIDS.items():
                     cb.addItem(m["label"], k)
+                    cb.setItemData(cb.count() - 1, f"Density {fmt_num(m['rho'])} kg/m³, conductivity {fmt_num(m['k'])} W/(m·K), Young's modulus "
+                                   f"{fmt_num(m['E'] / 1e9)} GPa" + (f", yield {fmt_num(m['Sy'] / 1e6)} MPa" if m.get("Sy") else "")
+                                   + (" (yours)" if m.get("custom") else ""), Qt.ToolTipRole)
+                cb.addItem("＋ Add a material…", "__add__")
                 cb.setCurrentIndex(max(cb.findData(b.get("material")), 0))
-                cb.setToolTip("The material of this part (its stiffness, density, conductivity ...)")
-                cb.currentIndexChanged.connect(lambda _=0, c=cb, bid=b["id"]: self._set_material(bid, c.currentData()))
+                cb.setToolTip("The material of this part (its stiffness, density, conductivity ...); the last entry adds one of your own")
+                cb.currentIndexChanged.connect(lambda _=0, c=cb, bid=b["id"], prev=b.get("material"): self._material_chosen(bid, c, prev))
                 row.addWidget(cb, 1)
                 v.addLayout(row)
                 if b.get("material_is_default"):
                     v.addWidget(_muted(f"Default material ({b.get('material_label')}): confirm it or choose another."))
                     ok = wid(QPushButton(f"✓ Use {b.get('material_label')}"), f"setup.body.{b['id']}.use_default")
                     ok.setToolTip("Keep this material (it was only a default)")
-                    ok.clicked.connect(lambda _=False, bid=b["id"], c=cb: self._set_material(bid, c.currentData()))
+                    ok.clicked.connect(lambda _=False, bid=b["id"], c=cb: self._set_material(bid, c.currentData()) if c.currentData() != "__add__" else None)
                     v.addWidget(ok, 0, Qt.AlignLeft)
                 params = spec.get("body_params") or []
                 if params:
@@ -262,6 +299,43 @@ class SetupPanel(_Panel):
             self.engine.changed.emit()
         except Exception as e:  # noqa: BLE001
             self._fail(e)
+
+    def open_library(self):
+        """The materials library dialog (not blocking: the window stays usable)."""
+        d = getattr(self, "_library", None)
+        if d is None or not d.isVisible():
+            self._library = d = materialsui.LibraryDialog(self.win, on_change=self.engine.changed.emit)
+        d.refresh()
+        d.show()
+        d.raise_()
+        return d
+
+    def _new_material(self, kind: str, on_done):
+        """The add dialog; on_done(key) runs when the material was saved."""
+        def saved(key):
+            self.engine.changed.emit()
+            on_done(key)
+        return materialsui.open_material_dialog(kind, self.win, on_done=saved)
+
+    def _material_chosen(self, bid, cb, prev):
+        key = cb.currentData()
+        if key != "__add__":
+            self._set_material(bid, key)
+            return
+        cb.blockSignals(True)                                  # (the entry only opens the dialog: the choice goes back until a material is saved)
+        cb.setCurrentIndex(max(cb.findData(prev), 0))
+        cb.blockSignals(False)
+        self._new_material("solid", lambda k: self._set_material(bid, k))
+
+    def _fluid_chosen(self, cb, prev):
+        key = cb.currentData()
+        if key != "__add__":
+            self._setting("fluid", key)
+            return
+        cb.blockSignals(True)
+        cb.setCurrentIndex(max(cb.findData(prev), 0))
+        cb.blockSignals(False)
+        self._new_material("fluid", lambda k: self._setting("fluid", k))
 
     def _set_material(self, bid, key):
         try:

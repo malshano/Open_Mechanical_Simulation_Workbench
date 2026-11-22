@@ -474,6 +474,7 @@ class Project:
     def _load(self):
         pj = self.dir / "project.json"
         self.data = json.loads(pj.read_text())
+        materials.adopt(self.data.get("custom_materials"))        # (the materials the user added that this study uses: they travel with it)
         try:  # settings added to a study after the project was made: their defaults
             self.data["settings"] = {**studies.default_settings(self.data["study"]), **self.data.get("settings", {})}
         except Exception:  # noqa: BLE001
@@ -539,6 +540,11 @@ class Project:
     def save(self, quiet=False):
         with self._lock:
             self.data["updated"] = _now()
+            mine = materials.used_by(self.data)
+            if mine["solids"] or mine["fluids"]:
+                self.data["custom_materials"] = mine
+            else:
+                self.data.pop("custom_materials", None)
             try:
                 text = json.dumps(self.data, indent=1, allow_nan=False)
             except ValueError:
@@ -2495,6 +2501,18 @@ class Project:
                 warn(msg, "setup")
             for z in self.data.get("moving_zones") or []:
                 ok(f"Fan zone {z['name']}: {z['rpm']:g} rpm (MRF)", "setup")
+        if st == "external_aero":
+            ax = studies.AXES
+            fa, ua = self.data["settings"].get("forward_axis", "+x"), self.data["settings"].get("up_axis", "+z")
+            if fa in ax and ua in ax and abs(sum(a * b for a, b in zip(ax[fa], ax[ua]))) > 0.5:
+                err(f"The forward axis ({fa}) and the up axis ({ua}) are along the same line: set them to two different axes "
+                    "(Flow condition in the Setup step)", "setup")
+        if st == "cht_enclosure" and not materials.is_gas(materials.FLUIDS.get(self.data["settings"].get("fluid", "air"), {})):
+            lq = materials.FLUIDS.get(self.data["settings"].get("fluid", "air"), {}).get("label", "The coolant")
+            if self.data["settings"].get("air_flow") == "natural":
+                err(f"{lq} is a liquid: natural convection needs a gas. Set Air flow to 'fan' (a pump or an inlet) or choose a gas", "setup")
+            else:
+                warn(f"{lq} is a liquid: it is run as a forced flow with a constant density (no buoyancy)", "setup")
         if st == "cht_enclosure" and self.data["settings"].get("air_flow") == "natural":
             s = self.data["settings"]
             if s.get("gravity", "-z") == "off":
@@ -2608,7 +2626,10 @@ class Project:
 
         s = dict(self.data["settings"])
         s["speed"] = 1.0
-        return freestream_velocity(s)
+        try:
+            return freestream_velocity(s)
+        except ValueError:      # (forward and up along one line: the study must still open - the readiness check says what is wrong)
+            return np.array(studies.AXES.get(s.get("forward_axis", "+x"), (1.0, 0.0, 0.0)), float)
 
     # ------------------------------------------------------------------ mesh
     def hex_unsupported(self):

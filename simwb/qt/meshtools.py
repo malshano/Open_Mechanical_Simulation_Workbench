@@ -116,7 +116,9 @@ def mesh_notes(st: dict) -> tuple:
         se = st.get("settings") or {}
         V = max(float(se.get("speed") or 1), 1)
         L = float(((st.get("geometry") or {}).get("info") or {}).get("ref_length") or 0.1)
-        nu = 1.0e-6 if se.get("fluid") == "water" else 1.516e-5
+        from .. import materials
+        fl = materials.FLUIDS.get(se.get("fluid") or "air") or materials.FLUIDS["air"]
+        nu = fl["mu"] / fl["rho"]
         Re = V * L / nu
         cf = 0.0576 * Re ** -0.2
         yp = 0.2 * nw * V * math.sqrt(cf / 2) / nu

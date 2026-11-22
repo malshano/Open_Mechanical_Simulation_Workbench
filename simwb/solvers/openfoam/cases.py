@@ -1243,7 +1243,7 @@ regions
         turb = regime["suggested"]
 
     # ---- fluid constant
-    eos = "perfectGas" if s.get("fluid", "air") == "air" else "rhoConst"
+    eos = "perfectGas" if materials.is_gas(fl) else "rhoConst"
     eos_coeffs = "" if eos == "perfectGas" else f"    equationOfState {{ rho {fl['rho']}; }}\n"
     _w(case / "constant" / "air" / "thermophysicalProperties",
        header("dictionary", "thermophysicalProperties", "constant/air") + f"""
