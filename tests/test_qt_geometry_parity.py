@@ -608,3 +608,38 @@ def test_a_face_between_a_part_and_the_duct_that_is_the_air_can_be_aligned(ctl):
     c.widget_do("geometry.align.start", "click")
     c.do("geometry.align_pick", {"face": fin["id"]})
     assert c.do("geometry.state")["result"]["align"]["face"] == fin["id"]
+
+
+def test_a_ray_from_a_camera_inside_a_big_air_volume_reaches_the_far_wall(aero):
+    """(The 3D view cast its click ray between the near and far clipping planes, fitted to the model: it never reached the walls of a
+    box 50 times the wing's size, so clicking empty space during the plane pick hit nothing.)"""
+    from simwb.qt.picking import long_segment
+    c = aero
+    view = c.win.view
+    c.do("view.air_box", {"visible": True})
+    assert view._pick_box is not None
+    lo, hi = view._pick_box
+    assert (hi - lo).max() > 10                                                          # the air volume is metres across, the wing less than one
+    focal = np.array(view.camera()["focal_point"])
+    view.set_camera(position=(focal + np.array([1.0, -1.4, 0.9]) * 0.8).tolist(), focal_point=focal.tolist())   # the camera is INSIDE the air volume, on the wing
+    cam = np.array(view.camera()["position"])
+    assert all(lo < cam) and all(cam < hi)
+    d = (focal - cam) / np.linalg.norm(focal - cam)
+    # a ray as the viewport makes it: from the near plane to the far plane, fitted to the model (a few metres at most)
+    p0, p1 = cam + d * 0.1, cam + d * 3.0
+    far = [w for w in c.engine.project().air_walls()]
+    right = np.cross(d, [0, 0, 1])
+    right /= np.linalg.norm(right)
+    p0, p1 = cam + d * 0.1 + right * 0.3, cam + d * 3.0 + right * 0.3 * 30                  # (a ray that leaves the model's neighbourhood)
+    assert view.pick_ray(p0, p1) is None or not view.pick_ray(p0, p1)["air"]
+    q0, q1 = long_segment(p0, p1, lo, hi)
+    h = view.pick_ray(q0, q1)
+    assert h and h["air"] and h["face"] in {w["face"] for w in far}                       # the long ray reaches a wall of the air volume
+    # one wall for each direction of the picture
+    seen = set()
+    for dirv in (d, -d, right, -right, np.cross(right, d), -np.cross(right, d)):
+        o, e = long_segment(cam, cam + dirv * 3.0, lo, hi)
+        hh = view.pick_ray(o, e)
+        if hh and hh["air"]:
+            seen.add(hh["face"])
+    assert len(seen) >= 4                                                                   # different directions hit different walls

@@ -32,7 +32,7 @@ from . import colormaps, theme
 from .banner import Banner
 from .gizmo import RotateGizmo
 from .legend import Legend
-from .picking import FaceIndex, locator_for
+from .picking import FaceIndex, locator_for, long_segment
 from .viewtools import ViewBar
 
 # SIMWB_NO_GL=1: no OpenGL window (automated tests, machines without a display). The pipeline is built and described exactly the
@@ -138,6 +138,7 @@ class Viewport(QWidget):
         self._solid_parts: list = []
         self._air_parts: list = []
         self.hover_id = -1
+        self._pick_box = None               # the box round everything that can be picked, air volume included (rays are made long enough to reach it)
         self.last_hit = None
         self._ov = None
         self.hover_highlight = True
@@ -235,6 +236,8 @@ class Viewport(QWidget):
         """The pickable faces: those of the parts that are not hidden (a hidden part cannot be clicked), and the air box."""
         solid = [f for f in self._solid_parts if self._face_volume.get(f[0]) not in self.hidden_bodies]
         self.index.build(solid, self._air_parts)
+        allv = [np.asarray(f[1], float).reshape(-1, 3) for f in solid + list(self._air_parts) if len(f[1])]
+        self._pick_box = (np.vstack(allv).min(0), np.vstack(allv).max(0)) if allv else None
 
     def _apply_visibility(self):
         for k, a, e in zip(self.geo_keys, self.geo_actors, self.edge_actors):
@@ -509,6 +512,8 @@ class Viewport(QWidget):
             self.ren.DisplayToWorld()
             w = self.ren.GetWorldPoint()
             pts.append([w[0] / w[3], w[1] / w[3], w[2] / w[3]] if w[3] else list(w[:3]))
+        if self._pick_box is not None:            # (not only to the far clipping plane: the walls of a big air volume are farther than that)
+            return long_segment(pts[0], pts[1], *self._pick_box)
         return pts[0], pts[1]
 
     def world_to_screen(self, point):
