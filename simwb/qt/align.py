@@ -53,6 +53,7 @@ class AlignController:
         v = getattr(self.p, "view", None)
         if v is not None:
             v.gizmo.set_paused(getattr(self, "_pick", False) or getattr(self, "_ref_pick", False))
+            v.choose_air = bool(getattr(self, "_ref_pick", False))
 
     def _reset(self):
         self.pick = False                  # waiting for the face to turn
@@ -289,16 +290,18 @@ class AlignController:
 
     # ------------------------------------------------------------------ choosing a plane that is not a coordinate plane
     def _save_air(self):
-        """Show the air volume (translucent) while a reference is picked, so its walls can be clicked. The camera stays on the model."""
+        """Show the air volume (translucent, each wall in the colour of its axis, with its edges) while a reference is picked, and zoom out
+        to all of it so every wall can be seen and clicked; the camera goes back to where it was when the pick is over."""
         w = self.p.win
         if w is None or self.saved is not None or not w.act_air.isVisible():
             return
-        self.saved = {"air": bool(w.chk_air.isChecked())}
+        v = self.p.view
+        self.saved = {"air": bool(w.chk_air.isChecked()), "camera": v.camera(), "focus": v._focus}
+        v.set_focus(None)                                        # (the align steps keep the camera on the model: all of the air volume must be in view now)
         if not self.saved["air"]:
-            w.chk_air.blockSignals(True)                         # (the switch's own handler would zoom out to the whole air volume)
-            w.chk_air.setChecked(True)
-            w.chk_air.blockSignals(False)
-            self.p.view.set_air_visible(True)
+            w.chk_air.setChecked(True)                           # (the switch's own handler shows the air volume and zooms out to all of it)
+        else:
+            v.fit()
 
     def _restore_air(self):
         s, self.saved = self.saved, None
@@ -310,6 +313,10 @@ class AlignController:
             w.chk_air.setChecked(s["air"])
             w.chk_air.blockSignals(False)
             self.p.view.set_air_visible(s["air"])
+        cam = s.get("camera")
+        self.p.view._focus = s.get("focus")                       # (as stored: x0, x1, y0, y1, z0, z1)
+        if cam:
+            self.p.view.set_camera(cam.get("position"), cam.get("focal_point"), cam.get("view_up"), cam.get("view_angle"), cam.get("parallel"))
 
     def start_ref_pick(self):
         if not self.face:
@@ -321,7 +328,7 @@ class AlignController:
         pr = self.p.engine.project()
         self._wall_names = {w["face"]: w["name"] for w in pr.air_walls()}
         has_air = self.saved is not None or bool(self._wall_names)
-        self._banner("Now click the plane to align it to: a face of the model" + (" or a wall of the air volume (shown now; turn the view to reach another wall)" if has_air else "")
+        self._banner("Now click the plane to align it to: a face of the model" + (" or a wall of the air volume (shown now, each wall in the colour of its axis; where walls overlap you are asked which one)" if has_air else "")
                      + " - or choose a coordinate plane in the panel", "Done")
         self.p.scroll_top()
         self.p.rebuild()
@@ -488,6 +495,34 @@ class AlignController:
 
     def connect(self, view):
         view.faceHovered.connect(self.hovered)
+        view.airWallsUnder.connect(self.choose_wall)
+
+    def choose_wall(self, walls: list):
+        """A click where several walls of the air volume overlap on the screen: a menu at the pointer lists them, nearest first (hovering
+        one lights it in the view). The wall that is meant is often one seen through another, so the click does not decide alone."""
+        from PySide6.QtGui import QCursor
+        from PySide6.QtWidgets import QMenu
+        if not self.ref_pick:
+            return
+        v = self.p.view
+        names = getattr(self, "_wall_names", {})
+        m = QMenu(v.iren)
+        m.setObjectName("geometry.align.wall_menu")
+        head = m.addAction("Several walls are here - which one?")
+        head.setEnabled(False)
+        for fid, point, _d in walls:
+            a = m.addAction(f"Air volume: {names.get(fid, 'face ' + str(fid))}")
+            a.setData(fid)
+            a.triggered.connect(lambda _=False, f=fid, pt=point: self._wall_chosen(f, pt))
+        m.hovered.connect(lambda act: v._set_hover(int(act.data())) if act is not None and act.data() is not None else v._set_hover(-1))
+        m.aboutToHide.connect(lambda: v._set_hover(-1))
+        self._wall_menu = m                                       # (kept: a menu with no owner goes away at once)
+        m.popup(QCursor.pos())
+
+    def _wall_chosen(self, fid: int, point):
+        v = self.p.view
+        v.last_hit = {"kind": "face", "face": int(fid), "point": [float(x) for x in point], "t": 0.0, "air": True}
+        v.click_face(int(fid))
 
     def _try(self, fn):
         try:

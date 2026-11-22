@@ -68,6 +68,27 @@ class _Set:
         return best
 
 
+def _hits(self, p0, p1):
+    """Every face the segment p0 -> p1 crosses, nearest first, one entry per face: [(face id, point, distance from p0)]."""
+    if self.loc is None:
+        return []
+    pts, cells = vtkPoints(), vtkIdList()
+    if not self.loc.IntersectWithLine(list(map(float, p0)), list(map(float, p1)), 1e-9, pts, cells) or not pts.GetNumberOfPoints():
+        return []
+    a = np.asarray(p0, float)
+    best: dict = {}
+    for k in range(pts.GetNumberOfPoints()):
+        x = np.array(pts.GetPoint(k))
+        d = float(np.linalg.norm(x - a))
+        fid = int(self.ids[cells.GetId(k)])
+        if fid not in best or d < best[fid][2]:
+            best[fid] = (fid, [float(v) for v in x], d)
+    return sorted(best.values(), key=lambda h: h[2])
+
+
+_Set.hits = _hits
+
+
 def locator_for(pd: vtkPolyData) -> _Set:
     """A ray-pick index over any surface (the drawn result overlay): the 'face id' of a hit is the triangle's index."""
     s = _Set()

@@ -51,6 +51,9 @@ def _rgb(h: str):
     return tuple(int(h[i:i + 2], 16) / 255.0 for i in (1, 3, 5))
 
 
+AIR_WALL_RGB = ((230, 100, 100), (90, 185, 100), (90, 130, 230))     # (the walls of the air volume by the axis they face: x red, y green, z blue)
+
+
 class Viewport(QWidget):
     """One VTK render window. Methods return nothing; the engine's payloads go in, pictures come out.
 
@@ -65,6 +68,7 @@ class Viewport(QWidget):
       set_face_tints({id: '#rrggbb'}) - faces tinted by what they carry (a boundary condition's colour)
     """
     facePicked = Signal(int, bool)
+    airWallsUnder = Signal(list)         # a click on the air volume where several of its walls overlap: [(face id, point, distance)], nearest first
     faceHovered = Signal(int)
     pointPicked = Signal(float, float, float)
     selectionChanged = Signal(list)       # the selection after a click in face mode
@@ -120,6 +124,7 @@ class Viewport(QWidget):
         self.geo_actors: list = []
         self.air_actors: list = []          # the air box of a flow study: translucent, shown or hidden on request
         self.air_on = False
+        self.choose_air = False             # a real click on the air volume where its walls overlap asks which wall (set while a plane is picked)
         self._geo_shown = True
         self.overlay_actors: list = []
         self.bar = None
@@ -510,14 +515,22 @@ class Viewport(QWidget):
                 return {"kind": "surface", "cell": h[0], "point": h[1]}
         return None
 
+    def _px(self):
+        """(sx, sy, h): the render surface's pixels per window pixel and its height. VTK counts DEVICE pixels, Qt and the control API count
+        window pixels; on a 200 % screen (1414 x 1070 for a 707 x 535 widget) mixing them aimed every click at the wrong place."""
+        if self.rw is None:
+            return 1.0, 1.0, float(self.iren.height())
+        w, h = self.rw.GetSize()
+        return (w / max(self.iren.width(), 1)), (h / max(self.iren.height(), 1)), float(h)
+
     def screen_ray(self, x: float, y: float):
         """The world-space segment under the pixel (x, y) of the 3D view (origin top-left, as Qt reports it). Needs the window."""
         if self.rw is None:
             raise ValueError("The 3D view has no OpenGL window here (SIMWB_NO_GL): give a ray with pick_ray")
-        h = self.iren.height()
+        sx, sy, h = self._px()
         pts = []
         for z in (0.0, 1.0):
-            self.ren.SetDisplayPoint(float(x), float(h - 1 - y), z)
+            self.ren.SetDisplayPoint(float(x) * sx, h - 1.0 - float(y) * sy, z)
             self.ren.DisplayToWorld()
             w = self.ren.GetWorldPoint()
             pts.append([w[0] / w[3], w[1] / w[3], w[2] / w[3]] if w[3] else list(w[:3]))
@@ -532,7 +545,8 @@ class Viewport(QWidget):
         self.ren.SetWorldPoint(float(point[0]), float(point[1]), float(point[2]), 1.0)
         self.ren.WorldToDisplay()
         d = self.ren.GetDisplayPoint()
-        return [float(d[0]), float(self.iren.height() - 1 - d[1])]
+        sx, sy, h = self._px()
+        return [float(d[0]) / sx, (h - 1.0 - float(d[1])) / sy]
 
     def click_face(self, fid: int, add: bool = False):
         """What a click on a face does: tell the panels (facePicked) and, in face mode, change the selection (Ctrl/Shift adds or removes
@@ -550,9 +564,18 @@ class Viewport(QWidget):
         if fid >= 0:                               # (after the selection changed: a panel may then show another one, as the align step does)
             self.facePicked.emit(int(fid), bool(add))
 
-    def click_at(self, x: float, y: float, add: bool = False):
-        """A click at pixel (x, y) of the 3D view (as the mouse would): what is hit, or None."""
-        h = self.pick_ray(*self.screen_ray(x, y))
+    def click_at(self, x: float, y: float, add: bool = False, choose: bool = False):
+        """A click at pixel (x, y) of the 3D view (as the mouse would): what is hit, or None. With choose (a real mouse click) a click on
+        the see-through air volume where several walls overlap on the screen does not take the nearest one but offers all of them
+        (airWallsUnder): the wall that is meant is often one seen through another."""
+        seg = self.screen_ray(x, y)
+        h = self.pick_ray(*seg)
+        if choose and self.choose_air and h is not None and h.get("air"):
+            walls = self.index.air.hits(*seg)
+            if len(walls) > 1:
+                self.last_hit = h
+                self.airWallsUnder.emit(walls)
+                return h
         if h is None:
             self.click_face(-1, add)
             return None
@@ -578,12 +601,10 @@ class Viewport(QWidget):
             self.faceHovered.emit(int(fid))
 
     def _to_view(self, q):
-        """A mouse position as VTK reports it (device pixels, origin bottom-left) -> the window pixels of click_at / hover_at (origin top-left,
-        as Qt and the control API count). They differ by the display scaling: on a 200 % screen a real click used to be taken for a place
-        twice as far out (and mirrored with the wrong height), so the face under the mouse was never found."""
-        dpr = float(self.iren.devicePixelRatioF() or 1.0)
-        h_dev = float(self.rw.GetSize()[1]) if self.rw is not None else self.iren.height() * dpr
-        return q[0] / dpr, (h_dev - 1.0 - q[1]) / dpr
+        """A mouse position as VTK reports it (device pixels, origin bottom-left) -> the window pixels of click_at / hover_at (origin
+        top-left, as Qt and the control API count)."""
+        sx, sy, h = self._px()
+        return q[0] / sx, (h - 1.0 - q[1]) / sy
 
     # (the mouse: a press and release that hardly moved is a click, anything else is the camera being turned)
     def _on_press(self, obj, event):
@@ -617,7 +638,7 @@ class Viewport(QWidget):
         if abs(q[0] - p[0]) + abs(q[1] - p[1]) > 4:
             return
         add = bool(self.iren.GetControlKey() or self.iren.GetShiftKey())
-        self.click_at(*self._to_view(q), add)
+        self.click_at(*self._to_view(q), add, choose=True)
 
     def _on_move(self, obj, event):
         q = self.iren.GetEventPosition()
@@ -750,21 +771,30 @@ class Viewport(QWidget):
         self.render()
 
     def _air_box(self, faces: list):
-        pts, tris, off = [], [], 0
+        pts, tris, off, cols = [], [], 0, []
         for f in faces:
             m = f.get("mesh") or {}
             if not m.get("vertices"):
                 continue
             v = np.asarray(m["vertices"], float).reshape(-1, 3)
+            t = np.asarray(m["triangles"], np.int64).reshape(-1, 3)
             pts.append(v)
-            tris.append(np.asarray(m["triangles"], np.int64).reshape(-1, 3) + off)
+            tris.append(t + off)
             off += len(v)
+            ax = int(np.argmin(v.max(axis=0) - v.min(axis=0)))      # (a wall is flat: its thinnest direction is its normal)
+            cols.append(np.tile(np.array(AIR_WALL_RGB[ax], np.uint8), (len(t), 1)))
         if not pts:
             return
         pd = self._polydata(np.vstack(pts), np.vstack(tris))
+        rgb = numpy_to_vtk(np.ascontiguousarray(np.vstack(cols)), deep=True)
+        rgb.SetName("wall")
+        pd.GetCellData().SetScalars(rgb)
         body = self._actor(pd, color=(0.55, 0.75, 1.0))
+        body.GetMapper().SetColorModeToDirectScalars()      # (each wall in the colour of its axis: x red, y green, z blue, as the gizmo's)
+        body.GetMapper().SetScalarModeToUseCellData()
+        body.GetMapper().ScalarVisibilityOn()
         pr = body.GetProperty()
-        pr.SetOpacity(0.14)             # (see-through; depth peeling draws it in the right order from every side)
+        pr.SetOpacity(0.22)             # (see-through; depth peeling draws it in the right order from every side)
         pr.SetAmbient(0.9)
         pr.SetDiffuse(0.1)
         pr.SetSpecular(0.0)
@@ -781,9 +811,10 @@ class Viewport(QWidget):
         m.SetInputConnection(fe.GetOutputPort())
         edges = vtkActor()
         edges.SetMapper(m)
-        edges.GetProperty().SetColor(0.75, 0.88, 1.0)
-        edges.GetProperty().SetOpacity(0.7)
-        edges.GetProperty().SetLineWidth(1.5)
+        h = theme.tokens()["air_edge"]
+        edges.GetProperty().SetColor(*(int(h[i:i + 2], 16) / 255.0 for i in (1, 3, 5)))     # (the theme's colour: dark on the light theme, pale on the dark)
+        edges.GetProperty().SetOpacity(1.0)
+        edges.GetProperty().SetLineWidth(2.5 * self._px()[0])       # (in device pixels: 2.5 window pixels on any screen)
         for a in (body, edges):
             a.PickableOff()
             a.SetVisibility(self.air_on and self._geo_shown)
