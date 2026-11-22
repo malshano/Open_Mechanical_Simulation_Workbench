@@ -19,7 +19,7 @@ from .. import mode, theme
 from ..flow import FlowLayout
 from ..forms import ParamForm, fmt_num
 from ..ids import wid
-from .common import Section, _h, _muted, _Panel, clear_layout
+from .common import FlowLayout, Section, _h, _muted, _Panel, clear_layout
 
 PLACEHOLDER = "The solver's messages appear here while it runs."
 
@@ -190,7 +190,10 @@ class SolvePanel(_Panel):
         self.case.clicked.connect(self._case_only)
         self.zip = _btn("Save case (.zip)…", "solve.case_zip", "Save the OpenFOAM case folder of this study as a zip file")
         self.zip.clicked.connect(self._zip_dialog)
-        self.case_row = _row(self.case, self.zip)
+        self.case_row = QWidget()
+        _fl = FlowLayout(self.case_row)
+        _fl.addWidget(self.case)
+        _fl.addWidget(self.zip)
         self.v.addWidget(self.case_row)
         # ---- progress
         self.bar = wid(QProgressBar(), "solve.progress")
@@ -683,7 +686,7 @@ class SolvePanel(_Panel):
         self.note.setVisible(bool(notes))
         self.note.setStyleSheet(f"color: {t['warn_text']};")
         again = getattr(self, "done", False) and not self.running
-        self.btn.setText("Running…" if self.running else "Write OpenFOAM case (OpenFOAM not installed)" if no_foam
+        self.btn.setText("Running…" if self.running else "Write OpenFOAM case" if no_foam
                          else "↻  Run the simulation again" if again else "▶  Run the simulation")
         self.btn.setObjectName("ghostBorder" if again else "primary")              # (View results is then the one main button)
         self.btn.style().unpolish(self.btn)

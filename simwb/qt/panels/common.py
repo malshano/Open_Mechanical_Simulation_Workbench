@@ -20,10 +20,12 @@ class FlowLayout(QLayout):
     """A row of widgets that goes on to the next line when the panel is too narrow (Qt has no wrapping row of its own): the buttons of a
     card then never make the whole panel wider than its dock. Same calls as a QHBoxLayout: addWidget / addStretch is not needed."""
 
-    def __init__(self, parent=None, spacing: int = 6):
+    def __init__(self, parent=None, spacing: int = 6, vspacing: int | None = None, fill: bool = False):
         super().__init__(parent)
         self._items: list = []
+        self._fill = fill                  # (each line is stretched to the full width, as a row of a QHBoxLayout would be)
         self._sp = spacing
+        self._vsp = spacing if vspacing is None else vspacing
         self.setContentsMargins(0, 0, 0, 0)
 
     def addItem(self, item):  # noqa: N802
@@ -65,22 +67,34 @@ class FlowLayout(QLayout):
     def _layout(self, rect, test: bool) -> int:
         m = self.contentsMargins()
         x0, y0 = rect.x() + m.left(), rect.y() + m.top()
-        right = rect.right() - m.right()
-        x, y, line_h = x0, y0, 0
+        avail = max(rect.right() - m.right() - x0 + 1, 1)
+        lines, cur, cur_w = [], [], 0
         for it in self._items:
-            s = it.sizeHint()
-            if x > x0 and x + s.width() > right + 1:
-                x, y, line_h = x0, y + line_h + self._sp, 0
-            if not test:
-                it.setGeometry(QRect(QPoint(x, y), QSize(min(s.width(), max(right - x0 + 1, 1)), s.height())))
-            x += s.width() + self._sp
-            line_h = max(line_h, s.height())
-        return y + line_h - rect.y() + m.bottom()
+            w = it.sizeHint().width()
+            if cur and cur_w + self._sp + w > avail:
+                lines.append((cur, cur_w))
+                cur, cur_w = [], 0
+            cur_w += (self._sp if cur else 0) + w
+            cur.append(it)
+        if cur:
+            lines.append((cur, cur_w))
+        y = y0
+        for n, (line, total) in enumerate(lines):
+            extra = (avail - total) // len(line) if (self._fill and len(lines) >= 1) else 0
+            x, line_h = x0, max(i.sizeHint().height() for i in line)
+            for it in line:
+                w = min(it.sizeHint().width() + max(extra, 0), avail)
+                if not test:
+                    it.setGeometry(QRect(QPoint(x, y), QSize(w, it.sizeHint().height())))
+                x += w + self._sp
+            y += line_h + (self._vsp if n < len(lines) - 1 else 0)
+        return y - rect.y() + m.bottom()
 
 
 def _h(text: str) -> QLabel:
     lab = QLabel(text.upper())
     lab.setObjectName("h")
+    lab.setWordWrap(True)
     return lab
 
 
@@ -95,9 +109,12 @@ def _seg(labels: list, current: str, parent=None, prefix: str = ""):
     """A row of exclusive buttons [(key, label)] -> (widget, group, {key: button}). prefix: the API id of the row ("mesh.color"); each
     button is prefix.key (prefix.off for the empty key)."""
     box = QWidget(parent)
-    row = QHBoxLayout(box)
-    row.setContentsMargins(0, 0, 0, 0)
-    row.setSpacing(0)
+    if len(labels) > 2:
+        row = FlowLayout(box, 0, 4, fill=True)
+    else:
+        row = QHBoxLayout(box)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
     grp = QButtonGroup(box)
     grp.setExclusive(True)
     btns = {}
