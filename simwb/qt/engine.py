@@ -307,7 +307,7 @@ class Engine(QObject):
             ax = "xyz".index(pl.get("axis", "y"))
             pos = box[ax] + min(max(float(pl.get("frac", 0.5)), 0.0), 1.0) * (box[3 + ax] - box[ax])
             pay = memo(("plane", f, ax, round(pos, 9)), lambda f=f, ax=ax, pos=pos: resample.plane_payload(rs, f, ax, pos, box, 0))
-            planes.append({"payload": pay, "field": f, "axis": pl.get("axis", "y"), "pos": pos,
+            planes.append({"payload": pay, "field": f, "axis": pl.get("axis", "y"), "pos": pos, "range": pl.get("range"),
                            "opacity": min(max(float(pl.get("opacity", 1.0)), 0.1), 1.0)})
         if planes:
             out["planes"] = planes
