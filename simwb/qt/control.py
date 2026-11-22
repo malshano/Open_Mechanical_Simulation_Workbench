@@ -761,6 +761,14 @@ class Control(QObject):
         """Symmetry planes, rotors, moving zones, inlet / outlet and the end time of the Setup step: each drives the panel's own controls."""
         R, S, N, B = self._reg, "string", "number", "boolean"
 
+        def click(id):          # (a control just made by a rebuild is shown once the events have run)
+            self._settle()
+            self._click(id)
+
+        def put(id, value):
+            self._settle()
+            self._set(self._w(id), id, value)
+
         def on_setup():
             p = setup_panel()
             if self.win.step != "setup":
@@ -780,25 +788,25 @@ class Control(QObject):
             if action == "add":
                 if axis not in ("x", "y", "z"):
                     raise ValueError("axis must be x, y or z")
-                self._click(f"setup.sym.add_{axis}")
+                click(f"setup.sym.add_{axis}")
                 if position_mm is not None:
-                    self._set(self._w("setup.sym.draft.pos"), "setup.sym.draft.pos", str(position_mm))
+                    put("setup.sym.draft.pos", str(position_mm))
                 if keep in ("-", "+") and (p.sym.draft["keep"] > 0) != (keep == "+"):
-                    self._click("setup.sym.draft.flip")
+                    click("setup.sym.draft.flip")
                 if cut_parts is not None and self._index().get("setup.sym.draft.cut") is not None:
-                    self._set(self._w("setup.sym.draft.cut"), "setup.sym.draft.cut", bool(cut_parts))
-                self._click("setup.sym.draft.set")
+                    put("setup.sym.draft.cut", bool(cut_parts))
+                click("setup.sym.draft.set")
             elif action == "from_face":
                 if face is None:
                     raise ValueError("Give the face (a flat face id)")
-                self._set(self._w("setup.sym.from_face"), "setup.sym.from_face", True)
+                put("setup.sym.from_face", True)
                 self.win.view.click_face(int(face))
             elif action in ("flip", "remove"):
-                self._click(f"setup.sym.{sym_index(plane)}.{action}")
+                click(f"setup.sym.{sym_index(plane)}.{action}")
             elif action == "move":
-                self._set(self._w(f"setup.sym.{sym_index(plane)}.pos"), f"setup.sym.{sym_index(plane)}.pos", str(position_mm))
+                put(f"setup.sym.{sym_index(plane)}.pos", str(position_mm))
             elif action == "cut":
-                self._set(self._w(f"setup.sym.{sym_index(plane)}.cut"), f"setup.sym.{sym_index(plane)}.cut", bool(cut_parts))
+                put(f"setup.sym.{sym_index(plane)}.cut", bool(cut_parts))
             else:
                 raise ValueError("action must be add, from_face, flip, move, cut or remove")
             self._settle()
@@ -814,14 +822,14 @@ class Control(QObject):
         def rotors(action, index=None, radius_mm=None, thrust_N=None):
             p = on_setup()
             if action in ("detect", "add", "auto_thrust"):
-                self._click(f"setup.rotor.{action}")
+                click(f"setup.rotor.{action}")
             elif action == "delete":
-                self._click(f"setup.rotor.{int(index)}.delete")
+                click(f"setup.rotor.{int(index)}.delete")
             elif action == "set":
                 if radius_mm is not None:
-                    self._set(self._w(f"setup.rotor.{int(index)}.radius"), f"setup.rotor.{int(index)}.radius", str(radius_mm))
+                    put(f"setup.rotor.{int(index)}.radius", str(radius_mm))
                 if thrust_N is not None:
-                    self._set(self._w(f"setup.rotor.{int(index)}.thrust_N"), f"setup.rotor.{int(index)}.thrust_N", "" if thrust_N == "auto" else str(thrust_N))
+                    put(f"setup.rotor.{int(index)}.thrust_N", "" if thrust_N == "auto" else str(thrust_N))
             else:
                 raise ValueError("action must be detect, add, auto_thrust, delete or set")
             self._settle()
@@ -834,15 +842,15 @@ class Control(QObject):
         def zones(action, index=None, values=None, part=None):
             p = on_setup()
             if action == "add":
-                self._click("setup.zone.add")
+                click("setup.zone.add")
             elif action == "delete":
-                self._click(f"setup.zone.{int(index)}.delete")
+                click(f"setup.zone.{int(index)}.delete")
             elif action == "fit":
-                self._set(self._w(f"setup.zone.{int(index)}.fit"), f"setup.zone.{int(index)}.fit", str(part))
+                put(f"setup.zone.{int(index)}.fit", str(part))
             elif action == "set":
                 for k, v in (values or {}).items():
                     if k == "name":
-                        self._set(self._w(f"setup.zone.{int(index)}.name"), f"setup.zone.{int(index)}.name", str(v))
+                        put(f"setup.zone.{int(index)}.name", str(v))
                     else:
                         o = self._w(f"setup.zone.{int(index)}.{k}")
                         if isinstance(o, QComboBox):
@@ -863,7 +871,7 @@ class Control(QObject):
         def pick_axis(kind, index, face):
             p = on_setup()
             btn = f"setup.{'rotor' if kind == 'rotor' else 'zone'}.{int(index)}.pick_axis"
-            self._set(self._w(btn), btn, True)
+            put(btn, True)
             self.win.view.click_face(int(face))
             self._settle()
             return {"rotors": self.engine.state().get("rotors"), "moving_zones": self.engine.state().get("moving_zones"),
@@ -871,9 +879,9 @@ class Control(QObject):
         R("setup.pick_axis", "Centre a rotor or a moving zone on a cylindrical face (or the circular edge of a face): what ⌖ and a click do.",
           {"kind": (S, "rotor|zone", True), "index": (N, "number from 0", True), "face": (N, "face id", True)}, pick_axis)
         R("setup.auto_inlet_outlet", "Cooling studies: put the inlet and the outlet on the end faces of the air volume (the ✨ button).", {},
-          lambda: (self._click("setup.bc.auto_io"), {"bcs": [b["name"] for b in self.engine.state()["bcs"]], "status": setup_panel().status.text()})[1])
+          lambda: (click("setup.bc.auto_io"), {"bcs": [b["name"] for b in self.engine.state()["bcs"]], "status": setup_panel().status.text()})[1])
         R("setup.end_time_use", "Transient external flow with sliding zones: use the suggested end time.", {},
-          lambda: (self._click("setup.endtime.use"), {"end_time": self.engine.state()["settings"].get("end_time")})[1])
+          lambda: (click("setup.endtime.use"), {"end_time": self.engine.state()["settings"].get("end_time")})[1])
 
     def _example(self, study, example):
         spec = studies.STUDIES.get(study)

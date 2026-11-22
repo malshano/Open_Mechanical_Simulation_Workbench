@@ -94,7 +94,9 @@ class SetupPanel(_Panel):
         return bool(self.axis_pick or self.sym.picking)
 
     def _selection_changed(self, ids):
-        if self._picking_other():                       # (the click places a plane or a centre of rotation: see _face_picked)
+        if self._picking_other() or getattr(self, "_swallow", False):   # (the click placed a plane or a centre of rotation: _face_picked)
+            self._swallow = False
+            self.view.set_selection([])
             return
         self.last_selection = list(ids)
         if self.win is not None and self.win.step == "setup" and self.active:
@@ -108,9 +110,10 @@ class SetupPanel(_Panel):
         if self.win is None or self.win.step != "setup" or not self.engine.pid:
             return
         if self.sym.picking:
-            self.view.set_selection([])
+            self._swallow = True
             self.sym.from_face(fid)
         elif self.axis_pick:
+            self._swallow = True
             # (the point clicked, for the circular edge nearest to it, is known once the view has finished the click)
             QTimer.singleShot(0, lambda fid=fid: self._axis_face(fid))
 
