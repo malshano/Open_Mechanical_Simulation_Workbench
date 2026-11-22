@@ -2,7 +2,7 @@
 
 https://github.com/user-attachments/assets/729b3f70-68c9-4c16-a749-821662b5661a
 
-Import a STEP, STL or OBJ file → click faces to set boundary conditions → mesh → solve → inspect results, in the browser,
+Import a STEP, STL or OBJ file → click faces to set boundary conditions → mesh → solve → inspect results, in a desktop window,
 with a Claude assistant that can do the setup for you.
 
 | Study | Solver | Typical use |
@@ -44,7 +44,7 @@ computer only), `-Quiet`.
 ## Start
 
 Windows: the desktop icon made by the setup, or double-click **`run_workbench.bat`** in a source checkout (it
-creates a Python environment with Python 3.10+, then the browser opens at <http://127.0.0.1:8765>).
+creates a Python environment with Python 3.10+, then the desktop window opens).
 
 Manual: `python -m venv .venv && .venv\Scripts\pip install -r requirements.txt && .venv\Scripts\python -m simwb.server`
 
@@ -199,7 +199,8 @@ simwb/
   solvers/openfoam/cases.py      OpenFOAM case writers;  foamio.py polyMesh writer/reader
   solvers/openfoam/runner.py     OpenFOAM detection + execution;  results_loader.py
   agent.py / tools.py / mcp_server.py   Claude integration
-  server.py + web/    FastAPI backend and the browser GUI
+  server.py           FastAPI backend: the REST and tool API that the desktop window serves (and Claude connects to)
+  qt/                 the desktop application (Qt + VTK)
 examples/             example STEP files (python examples/make_examples.py regenerates them)
 tests/                pytest suite (python -m pytest tests)
 ```
@@ -218,5 +219,5 @@ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FI
 
 Simulation results are only as good as the model and the mesh: check them before you rely on them for design decisions.
 
-Third-party software, under its own licence: three.js and its controls in `simwb/web/vendor/` (MIT), gmsh (GPL-2.0-or-later),
+Third-party software, under its own licence: gmsh (GPL-2.0-or-later),
 OpenFOAM (GPL-3.0) and CalculiX (GPL), downloaded by the installer, and the Python packages in `requirements.txt`.

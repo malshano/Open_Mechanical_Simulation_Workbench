@@ -15,8 +15,8 @@ how_to_use_this_file_with_an_llm: >
 
 | Item | Value |
 |---|---|
-| What it is | A local application: import CAD, mark faces, mesh, solve, look at results. Like Ansys Workbench, but small. Two forms: the web version (a browser page) and, from 0.4.0 beta 1, a desktop version in its own window (section 15). |
-| Runs where | On your own computer. Web address: <http://127.0.0.1:8765>. Nothing is uploaded. |
+| What it is | A desktop application: import CAD, mark faces, mesh, solve, look at results. Like Ansys Workbench, but small. |
+| Runs where | On your own computer, in its own window. Nothing is uploaded. |
 | Input | STEP (preferred), STL or OBJ files. |
 | Studies | Heat transfer in solids, Static structural, Vibration (modal), Electronics cooling (CFD), External aerodynamics (CFD). |
 | Solvers | Built-in finite-element solvers (no install) and OpenFOAM (installed automatically on Windows). |
@@ -42,17 +42,15 @@ Terms used in this manual:
 
 ## 1. Install and start
 
-1. Windows: double-click `run_workbench.bat` in the workbench folder.
-2. The first start creates a Python environment (Python 3.10 or newer is needed), installs the packages and, for the flow studies, downloads OpenFOAM (about 200 MB) and the Microsoft MPI runtime (about 12 MB) into the workbench folder. No administrator rights are needed. It takes a few minutes.
-3. The browser opens at <http://127.0.0.1:8765>. If it does not, open that address yourself.
-4. To stop: click **Close** (top right). This stops the server and every running solver.
-
-The one-click setup (`Install SimWB.bat` or `SimWB-Setup.exe`) also installs Qt and VTK and makes a second icon, **Mechanical Simulation Workbench (beta desktop)**, that starts the desktop version (section 15).
+1. Windows: run `SimWB-Setup.exe` (one file) or unzip the release and double-click `Install SimWB.bat`. The setup puts everything in one folder (default `C:\SimWB`), downloads OpenFOAM and CalculiX, and makes one icon, **Mechanical Simulation Workbench**, on the desktop and in the Start menu. No administrator rights are needed.
+2. Double-click the icon: the window opens in front, in a few seconds.
+3. From a source checkout: double-click `run_workbench.bat`. The first start creates a Python environment (Python 3.10 or newer is needed), installs the packages and, for the flow studies, downloads OpenFOAM (about 200 MB) and the Microsoft MPI runtime (about 12 MB) into the workbench folder.
+4. To stop: click **Close** (top right). This stops every running solver.
 
 Other ways to start:
 
 ```
-.venv\Scripts\python -m simwb.server
+.venv\Scripts\python -m simwb.qt
 ```
 
 Settings are read from environment variables (all optional):
@@ -60,8 +58,7 @@ Settings are read from environment variables (all optional):
 | Variable | Effect |
 |---|---|
 | `SIMWB_HOME` | Folder where studies are stored by default. Default: the `projects` folder of the workbench. |
-| `SIMWB_PORT` | Port of the web page. Default 8765. |
-| `SIMWB_NO_BROWSER=1` | Do not open a browser window at start. |
+| `SIMWB_PORT` | Port of the window's local API (REST, tools and window control: for Claude and scripts). Default 8765, or the next free one. |
 | `SIMWB_OPENFOAM_DIR` | Move the built-in OpenFOAM copy. |
 | `SIMWB_OPENFOAM_CMD` | Use an OpenFOAM that is already installed. |
 | `SIMWB_AUTO_OPENFOAM=0` | Do not download OpenFOAM automatically. |
@@ -480,7 +477,6 @@ Back up or move a study by copying its folder, then use **Open a saved study...*
 
 | Symptom | Cause and action |
 |---|---|
-| Page stays empty (only the top bar) | The page script failed to load. Reload with Ctrl+F5. If it persists, restart the server and look at the browser console. |
 | "Please wait: a job is still running" | Cancel the running job in the status bar, or wait. |
 | Mesh generation fails with "crossing surfaces" | The program locates the faces and retries with local refinement. If it still fails, check the CAD for overlapping parts. |
 | Max non-orthogonality above 75 degrees | Refine near sharp edges or thin features. |
@@ -509,23 +505,19 @@ Back up or move a study by copying its folder, then use **Open a saved study...*
 
 ---
 
-## 15. The desktop application (beta)
+## 15. The desktop window in detail
 
-Version 0.4.0 beta 1 adds the workbench as a **desktop program**: the same studies, solvers and assistant in a window of its own
-instead of a browser page. It uses the same engine, so a study made in one can be opened in the other. Sections 3 to 14 describe the
-web version; this section says what is the same, what is different and what is not there yet. Terms: the **web version** is the
-browser page of sections 1 to 14; the **desktop version** is this window.
+The workbench is a desktop program. Sections 3 to 14 describe the five steps and their settings; this section describes the window around them: how to start it, its areas, saving and sharing a study, the results tools, the assistant, and what to do when something goes wrong.
 
 ### 15.1 Start it
 
 | How | What happens |
 |---|---|
-| The icon **Mechanical Simulation Workbench (beta desktop)** on the desktop or in the Start menu (made by the setup) | Opens the window; no console and no browser. |
-| `run_workbench_qt.bat` in the workbench folder | The same. If Qt and VTK (about 400 MB) are not installed, it installs them once first. |
+| The icon **Mechanical Simulation Workbench** on the desktop or in the Start menu (made by the setup) | Opens the window; no console. |
+| `run_workbench.bat` in the workbench folder (a source checkout) | The same. The first time it creates the Python environment and installs everything. |
 | `.venv\Scripts\python -m simwb.qt` | The same, from a console. `--project <name>` opens a study at once; `--no-api` turns off the local control interface (see 15.8). |
 
-The web icon still starts the web version. Both can be installed together; they share the same studies and the same settings variables
-(section 1). To stop the desktop version click **Close** (top right): it stops every running solver.
+To stop it click **Close** (top right): it stops every running solver.
 
 ### 15.2 The window
 
@@ -564,7 +556,7 @@ A study is written to its folder after every change, so nothing is lost when the
 | **Import study from a file** | Unpacks an exported `.zip` into a new study. It refuses anything that is not a saved study, anything that would write outside its own folder, and anything unreasonably large; an AI agent's settings files inside the zip (`.claude`, `CLAUDE.md`, `.mcp.json`) are not unpacked. |
 
 To give a study to a colleague: **Export study to one file** (leave out the results to keep it small), send the `.zip`, and they use
-**Import study from a file**. The same functions are in the web version.
+**Import study from a file**.
 
 ### 15.4 Results
 
@@ -646,7 +638,7 @@ model, a bar under the 3D view says what to click, and the top of the panel show
 top (+z), facing the wall") with **Apply** and **Cancel**. For a curved face (a wing, a smooth body, an STL mesh) the **average
 direction** of the face is used; press **Normal at the click** to use the direction of the surface at the point you clicked instead. A
 yellow arrow shows where the face points now, the face is highlighted, and a message box with an icon says what was picked.
-The next click chooses the plane to lay it against, as in the web version: click **a face of any part** or **a wall of the air volume**
+The next click chooses the plane to lay it against, click **a face of any part** or **a wall of the air volume**
 (the air volume is shown translucent while you pick, the camera stays on the model, and the face under the pointer is named next to the
 cursor; turn the view to reach another wall), and the model turns in the view at once. Or choose a coordinate plane (**facing +z** ...:
 the nearest one is marked with a star), or choose by name in the panel: a **wall of the air volume** (upstream (inlet), downstream
@@ -662,7 +654,7 @@ edited. Faces get new numbers after an edit: check the supports and loads that s
 **Air volume** (flow and cooling studies). Choose the **shape** (box, C-shape, cylinder along the flow), type the sizes in mm and press
 **Apply**; **Fit to parts** sizes it automatically; **Show all** zooms out to it. A cooling study chooses whether a body of the file is the
 air or an air box is made. A flow study has the **automatic size** in spans of the parts: **Minimal**, **Compact**, **Standard**, **Large**
-or your own numbers and **Fit with these**. The orange drag handles of the web version are not in the window: sizes are typed. **Parts**
+or your own numbers and **Fit with these**. The air volume's orange drag handles are not in the window yet: sizes are typed. **Parts**
 lists the parts of a flow study with **Hide / Show**.
 ### 15.4b Setup
 
@@ -685,7 +677,7 @@ gravity too). A line at the top of the panel says what the last action did, or w
 - **Moving zones** (flow studies): **＋ Add rotating zone**; each zone has its name, **Method** (MRF steady, or sliding mesh in a transient external
   flow), speed, axis, centre, radius, length, **Cell size inside** (empty = automatic), **Fit around part** and **⌖ Centre on a cylinder or circular
   edge…**. If the picked axis is not along x, y or z, the panel offers **Turn the model** (or **Leave it**).
-- The settings are headed as in the web version (**Flow condition**, **Loads**, **Modes and vibration source** ...). A transient external flow with
+- The settings are headed (**Flow condition**, **Loads**, **Modes and vibration source** ...). A transient external flow with
   sliding zones shows a **Suggested end time** with **Use it**.
 
 ### 15.5 The mesh
@@ -706,7 +698,7 @@ layers** - and **Generate mesh**.
   **Cell volume**. A hex-dominant mesh is shown by quality and region only (the other buttons are greyed and say why). Under the buttons,
   the **cell budget** shows, for each band of cell sizes, the share of the cells and of the volume, with remarks when a size jump or a
   fine region uses too many cells.
-- Under the quality check (**Show cells below**, **Zoom to worst**) the verdict lists, in words, what the web version checks: poorly
+- Under the quality check (**Show cells below**, **Zoom to worst**) the verdict lists, in words, what the checks cover: poorly
   shaped cells, how many cells lie across the thinnest part and the narrowest air gap, the estimated wall y+ of a flow, and a coarse CFD
   mesh. **Next: solve →** goes on.
 - **Mesh sensitivity** (once the study is solved and converged): **Run mesh-sensitivity check** re-meshes one preset finer, solves again
@@ -715,7 +707,7 @@ layers** - and **Generate mesh**.
 
 ### 15.5a Solving
 
-The Solve step follows the web version:
+The Solve step:
 
 - **Solver**: which solver runs and whether its program is found. If OpenFOAM (flow studies) or CalculiX (when chosen for a structural
   study) is missing, **Install OpenFOAM** / **Install CalculiX** download it into the workbench folder with a progress bar and **Cancel
@@ -745,11 +737,11 @@ place inside the workspace, and move the file yourself afterwards. The `/` comma
 
 ### 15.7 Not in the desktop beta yet
 
-Everything the web version's five steps offer now has a control in the desktop window. What is still missing is small:
+What is still missing in the window is small:
 
 - **Dragging in the 3D view**: the orange handles of the air volume, and dragging a symmetry plane, a rotor disc or a rotating zone with the
   mouse. Type the values in the panel instead.
-- **Symbols on the model**: the web version's block, roller and plate symbols for each kind of condition. The desktop window shows each
+- **Symbols on the model**: block, roller and plate symbols for each kind of condition. The desktop window shows each
   condition by its tint, its label and arrows.
 - **A per-part gizmo preview inside a flow study**: the model turns and moves as a whole there (a single part can be moved in heat,
   structural and vibration studies from a STEP file).
@@ -758,7 +750,7 @@ Everything the web version's five steps offer now has a control in the desktop w
 - **The application bar**: the Claude Code button and the `/` commands of section 11, a Cancel button in the status bar, the probe button
   in the 3D view's bar, a selection-hint banner and toasts.
 
-`docs/QT_PARITY.md` lists every control of the web version and its state in the desktop version.
+`docs/QT_PARITY.md` lists every control of the former browser version and where it is in the window.
 
 ### 15.8 For people who script it
 
@@ -773,8 +765,7 @@ window needs `--debug-api` and a secret; do not use that on a shared computer. `
 | A box **The job failed** | Read its message, close it and run the step again. Meshing can fail to start when the computer is short of memory (close other programs). |
 | The window is slow with a flow study | Use a coarser **Grid** in the Flow tab, or the region around the object. |
 | Text appears as empty boxes in a picture taken by a script | That happens only in the test mode without fonts (`QT_QPA_PLATFORM=offscreen`); the real window is not affected. |
-| The desktop icon says the libraries are missing | Run the setup again, or `run_workbench_qt.bat`, which installs Qt and VTK. |
-| A feature you know from the web version is missing | See 15.7; open the same study in the web version. |
+| The desktop icon says the libraries are missing | Run the setup again, or `run_workbench.bat`. |
 
 ## Choosing the solver: built-in FEM or CalculiX (structural studies)
 

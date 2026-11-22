@@ -294,7 +294,6 @@ if (-not (Test-Path $py)) {
     Ok "Python $PYTHON ready (a private copy, your own Python is untouched)"
 } else { Skip 'Python environment already there' }
 $reqs = @('-r', (Join-Path $InstallDir 'requirements.txt'))
-if (Test-Path (Join-Path $InstallDir 'requirements-qt.txt')) { $reqs += @('-r', (Join-Path $InstallDir 'requirements-qt.txt')) }   # (the desktop application's libraries, ON TOP of the others)
 $code = RunLogged $uv (@('pip', 'install', '--python', $py) + $reqs) 'packages' $uvEnv
 if ($code -ne 0) { Fail 'Could not install the Python libraries.' 'Run the setup again: it continues where it stopped.' }
 Ok 'Libraries installed'
@@ -340,14 +339,11 @@ try {
     $bw.Write($png); $bw.Close(); $fs.Close(); $g.Dispose(); $bmp.Dispose()
 } catch { $icon = $null; Logf "icon: $_" }
 $launcher = Join-Path $InstallDir 'installer\Launch-SimWB.ps1'
-$launcherDesktop = Join-Path $InstallDir 'installer\Launch-SimWB-Desktop.ps1'
 $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $wsh = New-Object -ComObject WScript.Shell
 $links = @(
     @{ Path = (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Mechanical Simulation Workbench.lnk'); Args = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$launcher`""; Desc = 'Start the workbench' },
-    @{ Path = (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Mechanical Simulation Workbench (beta desktop).lnk'); Args = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$launcherDesktop`""; Desc = 'Start the desktop application (beta)' },
     @{ Path = (Join-Path ([Environment]::GetFolderPath('Programs')) 'Mechanical Simulation Workbench.lnk'); Args = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$launcher`""; Desc = 'Start the workbench' },
-    @{ Path = (Join-Path ([Environment]::GetFolderPath('Programs')) 'Mechanical Simulation Workbench (beta desktop).lnk'); Args = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$launcherDesktop`""; Desc = 'Start the desktop application (beta)' },
     @{ Path = (Join-Path ([Environment]::GetFolderPath('Programs')) 'Uninstall Mechanical Simulation Workbench.lnk'); Args = "-NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $InstallDir 'installer\Uninstall-SimWB.ps1')`""; Desc = 'Remove the workbench and its solvers' }
 )
 if ($NoDesktopShortcut) { $links = @($links | Where-Object { $_.Path -notlike (Join-Path ([Environment]::GetFolderPath('Desktop')) '*') }) }
@@ -371,7 +367,7 @@ $mins = [Math]::Round(((Get-Date) - $T0).TotalMinutes, 1)
 Line ''
 Line '   ╔══════════════════════════════════════════════════════════╗' Green
 C    '   ║  ' Green; C ("✓  All set in $mins minutes".PadRight(56)) White; Line '║' Green
-C    '   ║  ' Green; C 'Start it from a desktop icon (the beta desktop is new).'.PadRight(56) Gray; Line '║' Green
+C    '   ║  ' Green; C 'Start it from the Mechanical Simulation Workbench icon.'.PadRight(56) Gray; Line '║' Green
 C    '   ║  ' Green; C 'Your studies are saved where you choose.'.PadRight(56) Gray; Line '║' Green
 Line '   ╚══════════════════════════════════════════════════════════╝' Green
 Line ''

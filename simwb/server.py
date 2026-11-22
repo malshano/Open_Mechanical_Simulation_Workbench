@@ -11,17 +11,14 @@ import re
 import shutil
 import tempfile
 import threading
-import webbrowser
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Body, FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
 
 from . import __version__, agent, materials, project as P, studies
 
-WEB = Path(__file__).parent / "web"
 @asynccontextmanager
 async def _lifespan(app):
     HUB.loop = asyncio.get_running_loop()  # job threads publish websocket events onto this loop
@@ -802,22 +799,7 @@ async def ws(sock: WebSocket):
             await s.close()
 
 
-# ---------------------------------------------------------------- static
-@app.get("/")
-def index():
-    return FileResponse(WEB / "index.html", headers={"Cache-Control": "no-cache"})
-
-
-class _Static(StaticFiles):
-    """Scripts and styles are revalidated on every load (ETag: unchanged files are not sent again), so a browser
-    never mixes a new app.js with an old cached viewer.js after an update."""
-
-    def file_response(self, *args, **kw):
-        r = super().file_response(*args, **kw)
-        r.headers["Cache-Control"] = "no-cache"
-        return r
-
-
+# ---------------------------------------------------------------- helpers
 def _box(box: str, pr) -> list:
     """The region of a resampled view: 'x0,y0,z0,x1,y1,z1' in metres."""
     try:
@@ -913,17 +895,13 @@ def result_particles(pid: str, box: str, n: int = 1500, steps: int = 160, seed: 
                                    seed_box=_box(sbox, pr) if seed == "box" else None)
 
 
-app.mount("/static", _Static(directory=WEB), name="static")
-
-
 def main():
+    """The API without a window (REST, /api/tools, /api/ui is served only by the desktop window): for scripts and tests. The
+    application itself is the desktop window: python -m simwb.qt."""
     import uvicorn
 
     port = int(os.environ.get("SIMWB_PORT", "8765"))
-    url = f"http://127.0.0.1:{port}"
-    if not os.environ.get("SIMWB_NO_BROWSER"):
-        threading.Timer(1.5, lambda: webbrowser.open(url)).start()
-    print(f"Mechanical Simulation Workbench running at {url}")
+    print(f"Mechanical Simulation Workbench API (no window) at http://127.0.0.1:{port}  - the application is: python -m simwb.qt")
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
 
 

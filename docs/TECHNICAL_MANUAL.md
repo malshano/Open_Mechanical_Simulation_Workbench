@@ -1,3 +1,5 @@
+> **Note (0.4.0):** the browser front end (`simwb/web/`) was removed: the application is the desktop window (`simwb/qt/`, see `docs/QT_APP.md`). The server (`simwb/server.py`) is now only the API. Sections of this manual that describe the browser GUI (the front-end sections, JavaScript gotchas) are kept as history; the last version that had it is the tag `v0.4.0-beta.1`.
+
 ---
 title: Mechanical Simulation Workbench - Technical Manual
 audience: developers and LLM coding agents that change the software (users: read USER_MANUAL.md)
@@ -16,14 +18,14 @@ how_to_use_this_file_with_an_llm: >
 
 | Item | Value |
 |---|---|
-| Purpose | General Ansys-Workbench-like tool: import STEP/STL/OBJ -> tag faces -> mesh -> solve -> results, in a browser. Not tuned to any one example. |
+| Purpose | General Ansys-Workbench-like tool: import STEP/STL/OBJ -> tag faces -> mesh -> solve -> results, in a desktop window (Qt + VTK). Not tuned to any one example. |
 | Architecture | One Python process (FastAPI + uvicorn) serving a static single-page GUI and a REST + websocket API. Heavy work runs in background threads and subprocesses (gmsh, OpenFOAM, mpiexec). |
 | Persistence | One folder per study with a `project.json` (plain JSON) plus mesh, case and result files. No database. |
 | Front end | `simwb/web/` - `index.html`, `app.js` (UI state and panels), `viewer.js` (three.js scene), `style.css`. No bundler, no npm; `three.module.js` is vendored in `simwb/web/vendor/`. |
 | Solvers | Built-in FEM in `simwb/solvers/*.py` (heat, static structural, modal). OpenFOAM driven through `simwb/solvers/openfoam/`. |
 | LLM interfaces | In-app chat (`simwb/agent.py`, Claude Agent SDK), stdio MCP server (`simwb/mcp_server.py`), both over the same tool list in `simwb/tools.py`. |
 | Branches | Work on `initial`. Never push or merge to `main` (the owner merges). |
-| Default URL | <http://127.0.0.1:8765> (`SIMWB_PORT`). |
+| API URL | <http://127.0.0.1:8765> (`SIMWB_PORT`; the next free port if busy): REST, `/api/tools/*`, `/api/ui/*`, served by the desktop window. |
 
 Terminology (same words are used in code and in the user manual):
 
@@ -43,7 +45,8 @@ Terminology (same words are used in code and in the user manual):
 ```
 python -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
-.venv\Scripts\python -m simwb.server               # GUI + API on 127.0.0.1:8765
+.venv\Scripts\python -m simwb.qt                   # the desktop application; it also serves the API on 127.0.0.1:8765
+.venv\Scripts\python -m simwb.server               # the API alone, no window (scripts, tests)
 .venv\Scripts\python -m pytest tests -q            # about 10 minutes, 104 tests (one file at a time on a busy machine)
 .venv\Scripts\python -m simwb.solvers.openfoam.installer   # one-time built-in OpenFOAM (Windows)
 ```
@@ -53,7 +56,7 @@ Environment variables (read in the named files):
 | Variable | File | Meaning |
 |---|---|---|
 | `SIMWB_HOME` | `simwb/project.py` (`WORKSPACE`) | Default study folder. Tests set it to a temporary folder and `importlib.reload` the modules. |
-| `SIMWB_PORT`, `SIMWB_NO_BROWSER`, `SIMWB_GUI_URL` | `simwb/server.py`, `simwb/mcp_server.py` | Port; skip the browser; GUI URL the MCP server forwards to. |
+| `SIMWB_PORT`, `SIMWB_GUI_URL` | `simwb/server.py`, `simwb/mcp_server.py` | Port; the window's API URL the MCP server forwards to. |
 | `SIMWB_OPENFOAM_DIR`, `SIMWB_OPENFOAM_CMD`, `SIMWB_AUTO_OPENFOAM`, `SIMWB_OPENFOAM_URL` + `SIMWB_OPENFOAM_SHA256` (another installer: both required), `SIMWB_DOCKER_IMAGE`, `SIMWB_USE_DOCKER` (Windows only: use Docker instead of the built-in install), `SIMWB_MPI_DIR` | `simwb/solvers/openfoam/runner.py`, `installer.py` | OpenFOAM location and auto-install. |
 | `SIMWB_MEM_LIMIT_GB` | `simwb/memlimit.py` | Memory cap for helper processes. |
 | `SIMWB_GMSH_DEBUG` | `simwb/gmsh_worker.py` | Extra gmsh output. |
@@ -70,7 +73,6 @@ Dev server with a scratch workspace (do this when testing; do not use the user's
 
 ```
 set SIMWB_HOME=%TEMP%\simwb_runs
-set SIMWB_NO_BROWSER=1
 .venv\Scripts\python -m simwb.server
 ```
 

@@ -1,6 +1,6 @@
 # The desktop (Qt) application
 
-`python -m simwb.qt` (or `run_workbench_qt.bat`) opens the workbench as a desktop program instead of a web page. It uses the
+`python -m simwb.qt` (or `run_workbench.bat`) opens the workbench, which is a desktop program (there is no browser version any more). It uses the
 same engine (`simwb.project`, the solvers, the Claude tools) **in the same process**: there is no web server in between.
 The web version (`python -m simwb.server`) stays, for remote machines and for Claude Code's MCP connection.
 
