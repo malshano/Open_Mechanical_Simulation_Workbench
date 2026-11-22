@@ -383,3 +383,13 @@ def test_the_3d_view_shows_the_rebuilt_geometry_after_apply(plate):
     pts = np.vstack([np.asarray(v, float).reshape(-1, 3) for _, v, _, _ in c.win.view._solid_parts])
     bb = c.engine.state()["geometry"]["info"]["parts_bbox"]
     assert abs(pts[:, 2].min() - bb[2]) < 1e-6                                    # drawn where the engine has it now
+
+
+def test_a_hovered_air_wall_does_not_stay_lit_when_the_air_volume_is_hidden(aero):
+    c = aero
+    wall = c.engine.project().air_walls()[0]["face"]
+    c.do("view.air_box", {"visible": True})
+    c.win.view._set_hover(wall)                                                      # the pointer is over a wall of the air volume
+    assert c.win.view.hover_id == wall and c.win.view.mark_actors
+    c.do("view.air_box", {"visible": False})
+    assert c.win.view.hover_id == -1                                                 # (its highlight is as large as the air volume)

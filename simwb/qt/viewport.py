@@ -645,6 +645,8 @@ class Viewport(QWidget):
         self.air_on = bool(on)
         for a in self.air_actors:
             a.SetVisibility(self._geo_shown and self.air_on)
+        if not self.air_on and self.hover_id in {p[0] for p in self._air_parts}:    # (a wall that was under the pointer must not stay lit once the box is hidden:
+            self._set_hover(-1)                                                       #  its highlight is as big as the air volume and covers the model)
         self.geometry_info["air_visible"] = self.air_on and bool(self.air_actors)
         self.render()
 
