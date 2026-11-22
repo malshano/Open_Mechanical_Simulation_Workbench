@@ -981,7 +981,7 @@ class Project:
         return self._face_direction(face_id, point, reference=True)
 
     def air_walls(self) -> list:
-        """The faces of the air volume (flow and cooling studies), named by where they are: [{face, name, role, normal, nearest,
+        """The faces of the air volume of any shape (box, C-shape, cylinder; flow and cooling studies), named by where they are: [{face, name, role, normal, nearest,
         curved, area_m2}] - 'upstream (inlet)', 'downstream (outlet)', 'top', 'bottom' ... by their outward direction and the flow."""
         out = []
         try:
@@ -989,24 +989,37 @@ class Project:
         except Exception:  # noqa: BLE001
             fd = None
         names = {"+x": "+x side", "-x": "-x side", "+y": "+y side", "-y": "-y side", "+z": "top (+z)", "-z": "bottom (-z)"}
+        shape = (((self.data["geometry"].get("info") or {}).get("domain") or {}).get("spec") or {}).get("shape", "box")
         for f in self.faces():
             if f.get("kind") not in ("farfield", "enclosure"):
                 continue
+            pt = None
             try:
                 d = self._face_direction(f["id"], reference=True)
             except ValueError:
-                continue
+                try:                              # a wall that curves right round (a cylinder): the direction at a point of it
+                    pt = np.asarray(f["mesh"]["vertices"], float).reshape(-1, 3)[0]
+                    d = self._face_direction(f["id"], pt, reference=True)
+                except (ValueError, KeyError, IndexError):
+                    continue
             n, near = np.asarray(d["normal"]), d["nearest"]
             role = f.get("domain_role")
             nm = names[near]
-            if fd is not None and abs(float(n @ fd)) > 0.9:
-                nm = "upstream (inlet)" if n @ fd < 0 else "downstream (outlet)"
+            if pt is not None:
+                nm = "cylinder wall (all round: its direction at a point is used)"
+            elif d["curved"]:                       # the curved wall of a cylinder, the curved inlet of a C-shape
+                nm = "curved inlet" if role == "inlet" else ("cylinder wall" if shape == "cylinder" else "curved wall")
+                nm += f" (average direction {near})"
+            elif fd is not None and abs(float(n @ fd)) > 0.9:
+                end = "upstream" if n @ fd < 0 else "downstream"
+                nm = (f"cylinder end, {end} ({near})" if shape == "cylinder" else
+                      "upstream (inlet)" if n @ fd < 0 else "downstream (outlet)")
             elif role in ("inlet", "outlet"):
                 nm = f"{role} ({near})"
             out.append({"face": f["id"], "name": nm, "role": role, "normal": d["normal"], "nearest": near,
-                        "curved": d["curved"], "area_m2": f["area"]})
-        order = {"upstream (inlet)": 0, "downstream (outlet)": 1}
-        out.sort(key=lambda w: (order.get(w["name"], 2), w["nearest"]))
+                        "curved": d["curved"], "area_m2": f["area"], "point": None if pt is None else pt.tolist()})
+        out.sort(key=lambda w: (0 if w["name"].startswith(("upstream", "curved inlet", "cylinder end, upstream")) else
+                                1 if w["name"].startswith(("downstream", "cylinder end, downstream")) else 2, w["nearest"]))
         return out
 
     def body_faces(self, body_id) -> list:

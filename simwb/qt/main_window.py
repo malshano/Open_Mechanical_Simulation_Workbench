@@ -666,7 +666,11 @@ class MainWindow(QMainWindow):
                     self.panels["results"].draw_marks()
                     return
             self.view.clear_overlay()
-            key = (self.engine.pid, st["geometry"].get("status"), st["geometry"].get("updated"))
+            try:                                  # (the geometry is rebuilt in place by a turn, a move or a CAD edit: the file it is drawn from changes)
+                built = (self.engine.project().geo_dir / "faces.json").stat().st_mtime_ns
+            except OSError:
+                built = 0
+            key = (self.engine.pid, st["geometry"].get("status"), st["geometry"].get("updated"), built)
             if key != self._geo_key:
                 self._geo_key = key
                 kinds = AIR_KINDS.get(st["study"], ())

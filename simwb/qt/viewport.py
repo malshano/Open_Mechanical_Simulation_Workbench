@@ -562,7 +562,7 @@ class Viewport(QWidget):
     # (the mouse: a press and release that hardly moved is a click, anything else is the camera being turned)
     def _on_press(self, obj, event):
         self._press = tuple(self.iren.GetEventPosition())
-        if self.gizmo.press(self._press[0], self.iren.height() - 1 - self._press[1]):    # a ring is taken: it turns the model, the camera stays
+        if self.gizmo.press(self._press[0], self.gizmo._size()[1] - 1 - self._press[1]):    # a ring is taken: it turns the model, the camera stays
             self._gizmo_drag = True
             self.iren.SetInteractorStyle(None)
             return
@@ -576,7 +576,7 @@ class Viewport(QWidget):
         if self._gizmo_drag:
             self._gizmo_drag = False
             q = self.iren.GetEventPosition()
-            self.gizmo.release(q[0], self.iren.height() - 1 - q[1], bool(self.iren.GetShiftKey()))
+            self.gizmo.release(q[0], self.gizmo._size()[1] - 1 - q[1], bool(self.iren.GetShiftKey()))
             if self._style is not None:
                 self.iren.SetInteractorStyle(self._style)
             return
@@ -596,7 +596,7 @@ class Viewport(QWidget):
     def _on_move(self, obj, event):
         q = self.iren.GetEventPosition()
         if self._gizmo_drag:
-            self.gizmo.drag_to(q[0], self.iren.height() - 1 - q[1], bool(self.iren.GetShiftKey()))
+            self.gizmo.drag_to(q[0], self.gizmo._size()[1] - 1 - q[1], bool(self.iren.GetShiftKey()))
             return
         if self._drag is not None:
             i, p0, off0, _ = self._drag
@@ -608,7 +608,7 @@ class Viewport(QWidget):
         if now - self._hover_t < 0.05:
             return
         self._hover_t = now
-        if self.gizmo.on and self.gizmo.hover_at(q[0], self.iren.height() - 1 - q[1]) is not None:
+        if self.gizmo.on and self.gizmo.hover_at(q[0], self.gizmo._size()[1] - 1 - q[1]) is not None:
             return                                          # (over a ring: the cursor is a hand, no face is hovered)
         over = bool(self._label_state) and self._label_at(*q) is not None        # (the cursor says that a label can be dragged)
         self.iren.setCursor(Qt.SizeAllCursor) if over else self.iren.unsetCursor()

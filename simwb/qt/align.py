@@ -1,9 +1,9 @@
 """Aligning a face to a plane (the Geometry step's "Align a face to a plane..."): pick a face of the model - flat or CURVED (a wing, a smooth
 body, an STL: the area-weighted average normal of the face, or the normal AT the click) - then lay it on a coordinate plane, or against ANY
-other face: a wall of the air box (chosen by name or clicked), a face of any body (listed by body) ...  The choice becomes a previewed
+other face: a wall of the air volume (chosen by name or clicked), a face of any body (listed by body) ...  The choice becomes a previewed
 turn (orient.py), applied with Apply orientation.
 
-Why a list as well as clicks: the air box is much bigger than the model and mostly out of the picture, so its walls are chosen by name."""
+Why a list as well as clicks: the air volume is much bigger than the model and mostly out of the picture, so its walls are chosen by name."""
 from __future__ import annotations
 
 import numpy as np
@@ -86,7 +86,7 @@ class AlignController:
         self.p.rebuild()
 
     def end(self, keep_preview: bool = False):
-        """Leave the alignment: forget the faces, put the air box and the camera back as they were."""
+        """Leave the alignment: forget the faces, put the air volume and the camera back as they were."""
         v = self.p.view
         was = self.active or self.ref_pick or self.saved is not None
         self._restore_air()
@@ -175,15 +175,14 @@ class AlignController:
 
     # ------------------------------------------------------------------ choosing a plane that is not a coordinate plane
     def _save_air(self):
-        """Show the air box (translucent) and fit the view to it while a reference is picked, so its walls can be clicked."""
+        """Show the air volume (translucent) and fit the view to it while a reference is picked, so its walls can be clicked."""
         w = self.p.win
         if w is None or self.saved is not None or not w.act_air.isVisible():
             return
         self.saved = {"air": bool(w.chk_air.isChecked()), "camera": self.p.view.camera()}
         if not self.saved["air"]:
-            w.chk_air.setChecked(True)                           # (shows it and fits the view to the whole air box and the model)
-        else:
-            self.p.view.fit()
+            w.chk_air.setChecked(True)                           # (shows it and fits the view to the whole air volume and the model)
+        self.p.view.set_view("iso")                              # (an oblique view: from straight along an axis one wall covers the whole picture)
 
     def _restore_air(self):
         s, self.saved = self.saved, None
@@ -204,7 +203,7 @@ class AlignController:
         self.p.view.set_pick_mode("face")
         has_air = self.saved is not None
         self._say("info", "<b>Click the face to lay it against</b> in the 3D view: a face of any part (flat or curved)"
-                  + (", or a wall of the air box, which is shown now. The walls and the bodies are also in the lists below, so you need not hit them." if has_air
+                  + (", or a wall of the air volume, which is shown now. The walls and the bodies are also in the lists below, so you need not hit them." if has_air
                      else ". The bodies and their faces are also in the lists below."))
         self.p.rebuild()
 
@@ -231,8 +230,8 @@ class AlignController:
         if info["kind"] == "wall":
             for w in self.p.engine.project().air_walls():
                 if w["face"] == info["face"]:
-                    return f"air box: {w['name']}"
-            return f"air box wall {info['face']}"
+                    return f"air volume: {w['name']}"
+            return f"air volume wall {info['face']}"
         return f"face {info['face']}"
 
     def entries(self) -> list:
@@ -250,7 +249,7 @@ class AlignController:
 
     def set_side(self, away: bool):
         if not self.ref:
-            raise ValueError("Choose the plane first: an air box wall, a body's face or a face clicked in the 3D view")
+            raise ValueError("Choose the plane first: an air volume wall, a body's face or a face clicked in the 3D view")
         self.ref["away"] = bool(away)
         self.recompute()
 
@@ -265,7 +264,7 @@ class AlignController:
     def recompute(self):
         r = self.ref
         w = np.asarray(self.ref_normal(), float)
-        if r["info"]["kind"] != "wall":                           # (a face of the model moves with the preview turn; the air box does not)
+        if r["info"]["kind"] != "wall":                           # (a face of the model moves with the preview turn; the air volume does not)
             w = self.base @ w
         t = -w if r["away"] else w
         self._set_turn(t, f"face {self.face['face']} {'facing away from' if r['away'] else 'laid against'} {r['label']}")
@@ -336,10 +335,10 @@ class AlignController:
                 row.addWidget(btn)
             b.addLayout(row)
         b.addWidget(_h("…or against another face"))
-        b.addWidget(_muted("Lay it against the plane of any other face: a wall of the air box, a face of a body (flat or curved), including contact faces."))
+        b.addWidget(_muted("Lay it against the plane of any other face: a wall of the air volume, a face of a body (flat or curved), including contact faces."))
         wb = wid(QPushButton("Click the face in the 3D view…" if self.ref_pick else "Pick the plane in the 3D view"), "geometry.align.wall")
         wb.setObjectName("primary" if self.ref_pick else "ghostBorder")
-        wb.setToolTip("Then click the face to line this one up with. The air box is shown while you pick, and the view fits it.")
+        wb.setToolTip("Then click the face to line this one up with. The air volume is shown while you pick (the Air box switch of the 3D view), and the view fits it.")
         wb.clicked.connect(lambda: self._try(self.start_ref_pick))
         b.addWidget(wb)
         self._lists(b, busy)
@@ -366,31 +365,23 @@ class AlignController:
         pr = self.p.engine.project()
         walls = pr.air_walls()
         if walls:
-            b.addWidget(_muted("Air box walls (by where they are; the flow runs from upstream to downstream):"))
-            row = None
-            for i, w in enumerate(walls):
-                if i % 2 == 0:
-                    row = QHBoxLayout()
-                    b.addLayout(row)
-                btn = wid(QPushButton(f"Air box: {w['name']}"), f"geometry.align.airwall.{w['face']}")
+            b.addWidget(_muted("Air volume walls (by where they are; the flow runs from upstream to downstream):"))
+            for w in walls:
+                btn = wid(QPushButton(f"Air volume: {w['name']}"), f"geometry.align.airwall.{w['face']}")
                 btn.setObjectName("primary" if self.ref and self.ref["face"] == w["face"] else "ghostBorder")
-                btn.setToolTip(f"Lay the face against this wall of the air box (face {w['face']}, its outside faces {_minus(w['nearest'])}); "
-                               "it is highlighted in the 3D view")
-                btn.clicked.connect(lambda _=False, f=w["face"]: self._try(lambda: self.choose_ref_face(f, None, "wall")))
-                row.addWidget(btn)
+                btn.setToolTip(f"Lay the face against this wall of the air volume (face {w['face']}, its outside faces {_minus(w['nearest'])}"
+                               + ("; it is curved: its average direction is used" if w["curved"] else "") + "); it is highlighted in the 3D view")
+                btn.clicked.connect(lambda _=False, f=w["face"], pt=w.get("point"): self._try(lambda: self.choose_ref_face(f, pt, "wall")))
+                b.addWidget(btn)
         bodies = self.entries()
         if bodies:
             b.addWidget(_muted("Bodies (choose one, then one of its faces; or click a face of it in the 3D view):"))
-            row = None
-            for i, bd in enumerate(bodies):
-                if i % 2 == 0:
-                    row = QHBoxLayout()
-                    b.addLayout(row)
+            for bd in bodies:
                 btn = wid(QPushButton(bd["name"]), f"geometry.align.body.{bd['wid']}")
                 btn.setObjectName("primary" if self.body == bd["key"] else "ghostBorder")
                 btn.setToolTip(f"List the faces of {bd['name']}: choose one to lay the face against")
                 btn.clicked.connect(lambda _=False, i=bd["key"]: self.choose_body(None if self.body == i else i))
-                row.addWidget(btn)
+                b.addWidget(btn)
             if self.body is not None:
                 faces = pr.body_faces(self.body)
                 shown = [f for f in faces if f["face"] != self.face["face"]][:10]

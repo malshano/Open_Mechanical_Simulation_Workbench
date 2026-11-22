@@ -341,11 +341,11 @@ class OrientController:
         rings.setToolTip("Show or hide the rings and arrows in the 3D view that turn and move the model when dragged")
         rings.clicked.connect(self.toggle_rings)
         # what the gizmo acts on
-        row = QHBoxLayout()
         who = wid(QLabel(f"The gizmo acts on: <b>{'the whole model' if self.target is None else self.target['name']}</b>"), "geometry.target.label")
         who.setStyleSheet(f"background: {theme.tokens()['panel2']};")
         who.setWordWrap(True)
-        row.addWidget(who, 1)
+        v.addWidget(who)
+        row = QHBoxLayout()
         allb = wid(QPushButton("Move all"), "geometry.target.all")
         allb.setObjectName("primary" if self.target is None else "ghostBorder")
         allb.setToolTip("Turn and move the whole model together (every body)")
@@ -383,10 +383,10 @@ class OrientController:
         go.clicked.connect(lambda: self.turn(p.axis.currentText(), float(p.deg.text() or 0)))
         row.addWidget(QLabel("Axis"))
         row.addWidget(p.axis)
-        row.addWidget(p.deg)
+        row.addWidget(p.deg, 1)
         row.addWidget(QLabel("°"))
-        row.addWidget(go)
         v.addLayout(row)
+        v.addWidget(go)
         row = QHBoxLayout()
         row.addWidget(QLabel("Move by"))
         p.move_fields = []
@@ -395,24 +395,24 @@ class OrientController:
             f.setValidator(QDoubleValidator(-1e6, 1e6, 4, f))
             f.setToolTip(f"Distance to move along {ax}, in mm (negative moves the other way)")
             f.setPlaceholderText(f"d{ax}")
-            f.setMaximumWidth(70)
+            f.setMinimumWidth(40)
             p.move_fields.append(f)
             row.addWidget(QLabel(ax))
-            row.addWidget(f)
+            row.addWidget(f, 1)
         row.addWidget(QLabel("mm"))
+        v.addLayout(row)
         mv = wid(QPushButton("Move by these"), "geometry.move.apply")
         mv.setObjectName("ghostBorder")
         mv.setEnabled(not busy)
         mv.setToolTip("Move by dx, dy, dz in mm (preview first)" if not busy else "Wait: the geometry is being rebuilt")
         mv.clicked.connect(lambda: self.move(*[float(f.text() or 0) for f in p.move_fields]))
-        row.addWidget(mv, 1)
-        v.addLayout(row)
+        v.addWidget(mv)
         # the readout, Apply / Cancel / Reset
         self.readout = wid(_muted(self.text()), "geometry.rotate.readout")
         v.addWidget(self.readout)
         if self.pending:
             v.addWidget(notice("info", "<b>Preview:</b> the " + ("parts are" if self.target is None else f"body {self.target['name']} is") +
-                               " turned or moved in the 3D view only (the air box stays). Press <b>Apply</b> to rebuild the geometry this way, "
+                               " turned or moved in the 3D view only (the air volume stays). Press <b>Apply</b> to rebuild the geometry this way, "
                                "or Cancel. If you go to another step the change is applied.", "geometry.rotate.note"))
         if self.target is not None and not can_edit:
             v.addWidget(notice("warn", "Moving one body needs a STEP file (an STL or OBJ model cannot be edited): choose <b>Move all</b>.",

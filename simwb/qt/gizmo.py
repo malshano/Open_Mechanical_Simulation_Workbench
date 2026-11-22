@@ -108,7 +108,15 @@ class RotateGizmo:
 
     # ------------------------------------------------------------------ the camera, without a render window
     def _size(self):
+        """The 3D view's size in DEVICE pixels (what the render window and the mouse events use: twice the widget's on a 200 % screen)."""
+        if self.v.rw is not None:
+            w, h = self.v.rw.GetSize()
+            if w > 0 and h > 0:
+                return int(w), int(h)
         return max(self.v.iren.width(), 1), max(self.v.iren.height(), 1)
+
+    def dpr(self) -> float:
+        return self._size()[0] / max(self.v.iren.width(), 1)
 
     def _matrix(self) -> np.ndarray:
         w, h = self._size()
@@ -225,12 +233,12 @@ class RotateGizmo:
             return
         for a in range(3):
             hot, dim = self._state_of("rot", a)
-            self._tube(self.ring_points(a), self.size * (0.016 if hot else 0.010), RING_COLORS[a], 1.0 if hot else 0.35 if dim else 0.85)
+            self._tube(self.ring_points(a), self.size * (0.009 if hot else 0.005), RING_COLORS[a], 1.0 if hot else 0.35 if dim else 0.85)
         for a in range(3):                              # the move arrows: a shaft from the middle and a cone at its end
             hot, dim = self._state_of("move", a)
             op = 1.0 if hot else 0.35 if dim else 0.95
             tip = self.arrow_tip(a)
-            self._tube(np.array([self.c, tip]), self.size * (0.012 if hot else 0.007), RING_COLORS[a], op, closed=False)
+            self._tube(np.array([self.c, tip]), self.size * (0.008 if hot else 0.0045), RING_COLORS[a], op, closed=False)
             cone = vtkConeSource()
             cone.SetHeight(self.size * 0.09)
             cone.SetRadius(self.size * (0.035 if hot else 0.027))
@@ -302,10 +310,10 @@ class RotateGizmo:
         a ring; the nearest wins, the ball and the arrows before the rings where they meet."""
         if not self.on:
             return None
-        best, bd = None, GRAB_PX
+        best, bd = None, GRAB_PX * self.dpr()
         c = self.project(self.c)
         d = math.hypot(c[0] - x, c[1] - y)
-        if d < 11:
+        if d < 11 * self.dpr():
             return ("free", 3)
         for a in range(3):
             pts = np.array([self.project(p)[:2] for p in (self.c, self.arrow_tip(a))])

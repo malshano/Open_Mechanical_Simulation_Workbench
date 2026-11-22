@@ -346,7 +346,7 @@ class Control(QObject):
                     "enabled": o.isEnabled(), "visible": o.isVisible(), "modal": modal_alt(i)[0]}
         text = o.text() if hasattr(o, "text") and callable(o.text) and not isinstance(o, (QPlainTextEdit, QTextEdit)) else None
         r = o.rect()
-        tl = o.mapTo(self.win, r.topLeft())
+        tl = o.mapTo(self.win, r.topLeft()) if self.win.isAncestorOf(o) else r.topLeft()      # (a control that a rebuild has just taken out has no place in the window)
         return {"id": i, "class": type(o).__name__, "kind": "widget", "text": text if text is not None else o.property("api_text"),
                 "value": self._value(o), "enabled": o.isEnabled(), "visible": o.isVisible(), "tooltip": o.toolTip() or None,
                 "rect": [tl.x(), tl.y(), r.width(), r.height()], "inside": self._owner_id(o), "modal": modal_alt(i)[0]}

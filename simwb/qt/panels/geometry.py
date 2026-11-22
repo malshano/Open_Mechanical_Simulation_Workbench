@@ -402,11 +402,11 @@ def register_actions(ctl):
         if kind == "airwall":
             walls = pr.air_walls()
             if not walls:
-                raise ValueError("This study has no air box")
+                raise ValueError("This study has no air volume")
             w = next((w for w in walls if (id is not None and w["face"] == int(id)) or (name and name.lower() in w["name"].lower())), None)
             if w is None:
-                raise ValueError(f"No such air box wall. Walls: {[(w['face'], w['name']) for w in walls]}")
-            a.choose_ref_face(w["face"], None, "wall")
+                raise ValueError(f"No such air volume wall. Walls: {[(w['face'], w['name']) for w in walls]}")
+            a.choose_ref_face(w["face"], w.get("point"), "wall")
         elif kind == "face":
             win.view.last_hit = None if x is None else {"kind": "face", "face": int(id), "point": [float(x), float(y), float(z)]}
             if not a.ref_pick:
@@ -446,7 +446,7 @@ def register_actions(ctl):
       {"face": (N, "face id", True), "x": (N, "x of the click", False), "y": (N, "y", False), "z": (N, "z", False)}, align_pick)
     R("geometry.align_plane", "Lay the picked face on a coordinate plane: previews the turn.", {"facing": (S, "+x|-x|+y|-y|+z|-z (the way the face then points)", True)},
       align_plane)
-    R("geometry.align_reference", "Choose what to lay the picked face against: an air box wall (id = its face id, or name such as 'bottom'), a body "
+    R("geometry.align_reference", "Choose what to lay the picked face against: an air volume wall (id = its face id, or name such as 'bottom'), a body "
       "(lists its faces) or any face (id, optional click point x,y,z in m).",
       {"kind": (S, "face|airwall|body", True), "id": (N, "face or body id", False), "name": (S, "wall or body name (part of it)", False),
        "x": (N, "click x", False), "y": (N, "click y", False), "z": (N, "click z", False)}, align_reference)

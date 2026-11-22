@@ -362,3 +362,24 @@ def test_a_reference_can_be_any_face_of_any_body_and_is_picked_in_the_view_while
     assert hit and hit["face"] == wall["face"] and hit["air"]                        # (the air box can be clicked now)
     c.do("geometry.align_pick", {"face": wall["face"]})
     assert np.allclose(_normal_after(c), wall["normal"], atol=1e-6)
+
+
+def test_the_3d_view_shows_the_rebuilt_geometry_after_apply(plate):
+    """(It used to keep drawing the old orientation: the view redrew only when the geometry's status changed.)"""
+    c = plate
+
+    def drawn():
+        pts = np.vstack([np.asarray(v, float).reshape(-1, 3) for _, v, _, _ in c.win.view._solid_parts])
+        return pts.max(0) - pts.min(0)
+    before = drawn()
+    c.widget_do("geometry.turn.z+90", "click")
+    c.widget_do("geometry.rotate.apply", "click")
+    wait(c)
+    after = drawn()
+    assert abs(after[0] - before[1]) < 1e-6 and abs(after[1] - before[0]) < 1e-6 and abs(before[0] - before[1]) > 1e-3
+    c.do("geometry.move_preview", {"dz": 20})
+    c.do("geometry.rotate_apply")
+    wait(c)
+    pts = np.vstack([np.asarray(v, float).reshape(-1, 3) for _, v, _, _ in c.win.view._solid_parts])
+    bb = c.engine.state()["geometry"]["info"]["parts_bbox"]
+    assert abs(pts[:, 2].min() - bb[2]) < 1e-6                                    # drawn where the engine has it now
