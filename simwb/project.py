@@ -1010,10 +1010,12 @@ class Project:
         return out
 
     def body_faces(self, body_id) -> list:
-        """The outer faces of one body, for choosing the face to align to by name: [{face, area_m2, nearest, curved}], largest first."""
+        """The outer faces of one body (its volume id, or a part's name in a flow study), for choosing the face to align to by name:
+        [{face, area_m2, nearest, curved}], largest first."""
         out = []
         for f in self.faces():
-            if int(body_id) not in (f.get("volumes") or []) or f.get("kind") in ("farfield", "enclosure"):
+            mine = f.get("part") == body_id if isinstance(body_id, str) else int(body_id) in (f.get("volumes") or [])
+            if not mine or f.get("kind") in ("farfield", "enclosure"):
                 continue
             try:
                 d = self._face_direction(f["id"], reference=True)

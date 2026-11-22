@@ -413,11 +413,11 @@ def register_actions(ctl):
                 a.start_ref_pick()
             win.view.click_face(int(id), False)
         elif kind == "body":
-            bodies = [b for b in ctl.engine.state()["body_list"] if b["role"] == "solid"]
-            b = next((b for b in bodies if (id is not None and b["id"] == int(id)) or (name and name.lower() in b["name"].lower())), None)
+            bodies = a.entries()
+            b = next((b for b in bodies if (id is not None and str(b["key"]) == str(id)) or (name and name.lower() in b["name"].lower())), None)
             if b is None:
-                raise ValueError(f"No such body. Bodies: {[(b['id'], b['name']) for b in bodies]}")
-            a.choose_body(b["id"])
+                raise ValueError(f"No such body. Bodies: {[(b['key'], b['name']) for b in bodies]}")
+            a.choose_body(b["key"])
         else:
             raise ValueError("kind must be face, airwall or body")
         if a.ref is None and kind != "body":

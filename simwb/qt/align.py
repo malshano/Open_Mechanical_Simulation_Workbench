@@ -37,7 +37,7 @@ class AlignController:
         self.target: str | None = None     # the coordinate plane chosen (+x ... -z)
         self.ref_pick = False              # waiting for a click on the face to lay it against
         self.ref: dict | None = None       # {"info", "away", "mode", "what", "label"}
-        self.body: int | None = None       # the body whose faces are listed
+        self.body = None                   # the body (volume id, or a part's name) whose faces are listed
         self.notice: tuple | None = None   # (kind, text): the message shown in the align box
         self.base = np.eye(3)              # the turn pending when the alignment started (the picked face is in the stored orientation)
 
@@ -235,7 +235,16 @@ class AlignController:
             return f"air box wall {info['face']}"
         return f"face {info['face']}"
 
-    def choose_body(self, bid: int | None):
+    def entries(self) -> list:
+        """The bodies a reference face can be taken from: [{key, wid, name}] - the solids of the study (a flow study's solids are its parts,
+        named in the geometry: its own body list holds only the air)."""
+        st = self.p.engine.state()
+        out = [{"key": b["id"], "wid": str(b["id"]), "name": b["name"]} for b in st["body_list"] if b["role"] == "solid"]
+        if not out:
+            out = [{"key": p["name"], "wid": f"p{i}", "name": p["name"]} for i, p in enumerate(self.p.engine.project().parts())]
+        return out
+
+    def choose_body(self, bid):
         self.body = bid
         self.p.rebuild()
 
@@ -369,7 +378,7 @@ class AlignController:
                                "it is highlighted in the 3D view")
                 btn.clicked.connect(lambda _=False, f=w["face"]: self._try(lambda: self.choose_ref_face(f, None, "wall")))
                 row.addWidget(btn)
-        bodies = [bd for bd in self.p.engine.state()["body_list"] if bd["role"] == "solid"]
+        bodies = self.entries()
         if bodies:
             b.addWidget(_muted("Bodies (choose one, then one of its faces; or click a face of it in the 3D view):"))
             row = None
@@ -377,15 +386,15 @@ class AlignController:
                 if i % 2 == 0:
                     row = QHBoxLayout()
                     b.addLayout(row)
-                btn = wid(QPushButton(bd["name"]), f"geometry.align.body.{bd['id']}")
-                btn.setObjectName("primary" if self.body == bd["id"] else "ghostBorder")
+                btn = wid(QPushButton(bd["name"]), f"geometry.align.body.{bd['wid']}")
+                btn.setObjectName("primary" if self.body == bd["key"] else "ghostBorder")
                 btn.setToolTip(f"List the faces of {bd['name']}: choose one to lay the face against")
-                btn.clicked.connect(lambda _=False, i=bd["id"]: self.choose_body(None if self.body == i else i))
+                btn.clicked.connect(lambda _=False, i=bd["key"]: self.choose_body(None if self.body == i else i))
                 row.addWidget(btn)
             if self.body is not None:
                 faces = pr.body_faces(self.body)
                 shown = [f for f in faces if f["face"] != self.face["face"]][:10]
-                b.addWidget(_muted(f"Faces of {next((x['name'] for x in bodies if x['id'] == self.body), 'the body')}, largest first"
+                b.addWidget(_muted(f"Faces of {next((x['name'] for x in bodies if x['key'] == self.body), 'the body')}, largest first"
                                    + (f" (the largest {len(shown)} of {len(faces)})" if len(faces) > len(shown) + 1 else "") + ":"))
                 for f in shown:
                     btn = wid(QPushButton(f"Face {f['face']} · {fmt_num(f['area_m2'] * 1e6)} mm² · faces {_minus(f['nearest'])}"

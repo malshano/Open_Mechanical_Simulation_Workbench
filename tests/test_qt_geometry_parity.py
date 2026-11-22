@@ -35,6 +35,16 @@ def wing(ctl):
     return ctl
 
 
+@pytest.fixture
+def aero(ctl):
+    """The wing in an external-aerodynamics study: the air box (far-field walls) around it, hidden as the window starts."""
+    from qt_support import EXAMPLES
+    ctl.do("study.new", {"name": "Aero", "study": "external_aero"})
+    ctl.do("geometry.import", {"path": str(EXAMPLES / "airplane_wing.step")})
+    wait(ctl)
+    return ctl
+
+
 def rotz(deg):
     t = math.radians(deg)
     return np.array([[math.cos(t), -math.sin(t), 0], [math.sin(t), math.cos(t), 0], [0, 0, 1]])
@@ -209,3 +219,146 @@ def test_one_body_can_be_turned_and_pending_changes_go_when_the_target_changes(p
     wait(c)
     e = c.engine.project().cad_edits()[-1]
     assert e["op"] == "rotate" and e["edit"]["bodies"] == [bodies[1]["name"]] and abs(e["edit"]["angle_deg"]) == pytest.approx(90, abs=1e-6)
+
+
+# ============================================================ aligning a face: curved faces, any face, the air box
+def _import(c, path):
+    c.do("geometry.import", {"path": path})
+    wait(c)
+
+
+def _normal_after(c):
+    """Where the picked face's direction points once the previewed turn is applied."""
+    s = c.do("geometry.state")["result"]
+    R = np.array(s["matrix"]) if s["matrix"] else np.eye(3)
+    return R @ np.array(s["align"]["direction"])
+
+
+def test_a_curved_wing_face_is_aligned_by_its_average_direction(wing):
+    c = wing
+    faces = c.engine.project().faces()
+    big = max(faces, key=lambda f: f["area"])
+    assert big["surface_type"] != "Plane"                                            # the largest face of a wing is curved
+    c.widget_do("geometry.align.start", "click")
+    c.do("geometry.align_pick", {"face": big["id"]})
+    a = c.do("geometry.state")["result"]["align"]
+    assert a["curved"] and a["mode"] == "average"
+    assert "average direction" in c.widget_do("geometry.notice")["text"].lower() or "average direction" in str(c.state()["panels"]["geometry"]["geometry.notice"]).lower()
+    assert c.widget_do("geometry.align.mode.average")["enabled"]
+    assert c.widget_do("geometry.align.face")["visible"] and "curved" in c.widget_do("geometry.align.face")["value"]
+    assert c.win.view.selection == [big["id"]] and c.win.view.gizmo.marker                  # the face is highlighted and its direction drawn
+    c.widget_do("geometry.align.to.-z", "click")                                    # lay it on the XY plane, facing down
+    assert np.allclose(_normal_after(c), [0, 0, -1], atol=1e-6)
+    c.widget_do("geometry.rotate.apply", "click")
+    wait(c)
+    again = c.engine.project().align_info(max(c.engine.project().faces(), key=lambda f: f["area"])["id"])
+    assert again["curved"] and again["nearest"] == "-z" and again["normal"][2] < -0.999   # the wing's big face now looks down
+
+
+def test_the_normal_at_the_click_differs_from_the_average_on_a_curved_face(wing):
+    c = wing
+    f = max(c.engine.project().faces(), key=lambda f: f["area"])
+    v = np.asarray(f["mesh"]["vertices"]).reshape(-1, 3)
+    pt = v[100]
+    c.widget_do("geometry.align.start", "click")
+    c.do("geometry.align_pick", {"face": f["id"], "x": pt[0], "y": pt[1], "z": pt[2]})
+    avg = np.array(c.do("geometry.state")["result"]["align"]["direction"])
+    c.widget_do("geometry.align.mode.point", "click")
+    loc = np.array(c.do("geometry.state")["result"]["align"]["direction"])
+    assert c.do("geometry.state")["result"]["align"]["mode"] == "point"
+    assert np.degrees(np.arccos(np.clip(avg @ loc, -1, 1))) > 10                    # the local slope is not the average
+    c.widget_do("geometry.align.to.+x", "click")
+    assert np.allclose(_normal_after(c), [1, 0, 0], atol=1e-6)
+    c.widget_do("geometry.align.mode.average", "click")                              # back to the average: the turn follows
+    assert np.allclose(_normal_after(c), [1, 0, 0], atol=1e-6) and np.allclose(c.do("geometry.state")["result"]["align"]["direction"], avg)
+
+
+def test_a_mesh_face_can_be_aligned_too(ctl, tmp_path):
+    import gmsh
+    c = ctl
+    gmsh.initialize()
+    gmsh.option.setNumber("General.Terminal", 0)
+    b = gmsh.model.occ.addBox(0, 0, 0, 40, 20, 10)
+    cy = gmsh.model.occ.addCylinder(20, 10, -1, 0, 0, 12, 3)
+    gmsh.model.occ.cut([(3, b)], [(3, cy)])
+    gmsh.model.occ.synchronize()
+    gmsh.option.setNumber("Mesh.MeshSizeMax", 2)
+    gmsh.model.mesh.generate(2)
+    gmsh.option.setNumber("Mesh.Binary", 1)
+    gmsh.write(str(tmp_path / "part.stl"))
+    gmsh.finalize()
+    c.do("study.new", {"name": "Mesh", "study": "static_structural"})
+    _import(c, str(tmp_path / "part.stl"))
+    pr = c.engine.project()
+    hole = next(f for f in pr.faces() if f["surface_type"] == "Mesh")
+    v = np.asarray(hole["mesh"]["vertices"]).reshape(-1, 3)
+    c.widget_do("geometry.align.start", "click")
+    c.do("geometry.align_pick", {"face": hole["id"], "x": v[0][0], "y": v[0][1], "z": v[0][2]})
+    a = c.do("geometry.state")["result"]["align"]
+    assert a["curved"] and a["face"] == hole["id"]
+    c.do("geometry.align_mode", {"mode": "point"})
+    c.widget_do("geometry.align.to.+z", "click")                                    # the radial direction at that point goes up
+    assert np.allclose(_normal_after(c), [0, 0, 1], atol=1e-6)
+
+
+def test_a_face_of_the_air_box_cannot_be_the_face_to_turn_and_says_why(aero):
+    c = aero
+    wall = c.engine.project().air_walls()[0]
+    c.widget_do("geometry.align.start", "click")
+    c.do("geometry.align_pick", {"face": wall["face"]})
+    assert not c.do("geometry.state")["result"]["align"]["face"]
+    box = c.widget_do("geometry.notice")
+    assert box["visible"] and "air" in str(c.state()["panels"]["geometry"]["geometry.notice"]).lower()
+
+
+def test_the_air_box_walls_are_listed_by_name_and_a_wing_face_can_be_laid_against_one(aero):
+    c = aero
+    pr = c.engine.project()
+    walls = pr.air_walls()
+    names = [w["name"] for w in walls]
+    assert "upstream (inlet)" in names and "downstream (outlet)" in names and any("bottom" in n for n in names) and any("top" in n for n in names)
+    assert not c.win.chk_air.isChecked()                                             # the user has the air box hidden ...
+    f = max((f for f in pr.faces() if f.get("kind") == "body"), key=lambda f: f["area"])
+    c.widget_do("geometry.align.start", "click")
+    c.do("geometry.align_pick", {"face": f["id"]})
+    n0 = np.array(c.do("geometry.state")["result"]["align"]["direction"])
+    c.widget_do("geometry.align.wall", "click")                                      # Pick the plane
+    assert c.win.chk_air.isChecked() and c.win.view.air_on                           # ... it is shown (and fitted) for the pick
+    assert c.do("geometry.state")["result"]["align"]["picking_reference"]
+    bottom = next(w for w in walls if "bottom" in w["name"])
+    for w in walls:
+        assert c.widget_do(f"geometry.align.airwall.{w['face']}")["enabled"]
+    c.widget_do(f"geometry.align.airwall.{bottom['face']}", "click")
+    assert c.win.view.face_tints.get(bottom["face"])                                 # the wall is highlighted
+    assert "bottom" in c.widget_do("geometry.align.plane")["value"]
+    assert np.allclose(_normal_after(c), bottom["normal"], atol=1e-6)               # the face lies against the wall: its normal is the wall's
+    c.widget_do("geometry.align.away", "click")
+    assert np.allclose(_normal_after(c), -np.array(bottom["normal"]), atol=1e-6)
+    assert c.widget_do("geometry.rotate.apply")["enabled"]
+    c.widget_do("geometry.align.done", "click")
+    assert not c.win.chk_air.isChecked()                                             # the user's choice of the air box is put back
+    c.widget_do("geometry.rotate.cancel", "click")
+
+
+def test_a_reference_can_be_any_face_of_any_body_and_is_picked_in_the_view_while_the_air_box_is_hidden(aero):
+    c = aero
+    pr = c.engine.project()
+    body = [f for f in pr.faces() if f.get("kind") == "body"]
+    big, other = sorted(body, key=lambda f: -f["area"])[:2]
+    c.widget_do("geometry.align.start", "click")
+    c.do("geometry.align_pick", {"face": big["id"]})
+    c.widget_do("geometry.align.body.p0", "click")                                   # (a flow study's solids are its parts)
+    assert c.widget_do(f"geometry.align.bodyface.{other['id']}")["visible"]          # its faces are listed
+    c.widget_do(f"geometry.align.bodyface.{other['id']}", "click")
+    assert c.do("geometry.state")["result"]["align"]["reference"]["face"] == other["id"]
+    ref = pr.ref_info(other["id"])
+    assert np.allclose(_normal_after(c), ref["normal"], atol=1e-6)
+    # the same by a click in the 3D view (a ray at the wall, with the air box hidden when the pick starts)
+    c.widget_do("geometry.align.wall", "click")
+    wall = next(w for w in pr.air_walls() if "top" in w["name"])
+    tri = np.asarray(pr.face_map()[wall["face"]]["mesh"]["vertices"]).reshape(-1, 3)
+    p = tri.mean(0)
+    hit = c.do("view.pick_ray", {"p0": (p + np.array(wall["normal"]) * 0.5).tolist(), "p1": (p - np.array(wall["normal"]) * 0.01).tolist()})["result"]["hit"]
+    assert hit and hit["face"] == wall["face"] and hit["air"]                        # (the air box can be clicked now)
+    c.do("geometry.align_pick", {"face": wall["face"]})
+    assert np.allclose(_normal_after(c), wall["normal"], atol=1e-6)
