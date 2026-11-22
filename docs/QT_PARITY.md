@@ -7,7 +7,7 @@ plus the toolbar and application bar. Status: ✅ done in the Qt app · 🟡 par
 
 
 > **Last reviewed:** after the fifth critic round of the Qt interface (overall 5.4 / 7). Rows marked ✅ have tests in `tests/test_qt_*.py`;
-> 🟡 rows say what is missing. The largest remaining gaps are: CAD edits and the air-volume editor (Geometry), symmetry planes, rotors and
+> 🟡 rows say what is missing. The largest remaining gaps are: the air-volume drag handles (Geometry), symmetry planes, rotors and
 > moving zones (Setup), continue / extend runs, cores and advanced OpenFOAM numerics (Solve), and the time bar for transient results.
 > (The CFD result views - contours, vectors, vortex surfaces, volume cloud, particle paths - and the colour legend are done.)
 
@@ -40,14 +40,14 @@ plus the toolbar and application bar. Status: ✅ done in the Qt app · 🟡 par
 |---|---|---|
 | Import STEP / STL / OBJ; Replace… | ✅ (import, Replace) | geometry |
 | Units of the file (×1, ×0.001, inch→mm, ×100 ...) | ✅ | geometry |
-| **Align a face to a plane** (pick a face, choose the plane) | ✅ (pick a face, choose the plane) | geometry (+ viewtools picking) |
-| Turn the model: X/Y/Z ±90°, free angle about an axis, Reset, Apply orientation, Cancel | 🟡 (±90° buttons, free angle, Apply, Reset; no drag-to-turn rings) | geometry |
+| **Align a face to a plane** (pick a face, choose the plane) | ✅ flat or curved (average normal, or the normal at the click), STL/OBJ too; to a coordinate plane, an air-volume wall of any shape (listed by name, shown and fitted while picking), any body face, or a face clicked in the view; icon message box, highlighted face, direction arrow | geometry (+ viewtools picking) |
+| Turn the model: X/Y/Z ±90°, free angle about an axis, Reset, Apply orientation, Cancel; drag rings (Shift snap) | ✅ rings + move arrows + free-move ball, live preview and readout, Shift snap (5°, round mm), moves of the whole model or one body, typed move fields, Apply / Cancel / Reset, Hide gizmo | geometry |
 | Bodies list with show/hide (eye), highlight, rename | ✅ (eye, select; hide in the view) | geometry |
-| Parts list | ✅ | geometry |
-| **CAD edits** (add/cut shapes, holes, fillet, chamfer, mirror, pattern, scale, move, loft): list, undo last, remove, remove all | ⬜ | geometry |
-| Air volume (flow studies): shape Box / C-shape / Cylinder, sizes, Apply, Fit to parts, Show all | ⬜ | geometry |
-| Automatic domain size presets (Minimal / Compact / Standard / Large, Fit with these) | ⬜ | geometry |
-| Hide rings; next-step button | ⬜ / ✅ | geometry |
+| Parts list (flow studies) | ✅ hide / show | geometry |
+| **CAD edits** (add/cut shapes, holes, fillet, chamfer, mirror, pattern, scale, move, loft): list, undo last, remove, remove all | ✅ list, undo, remove, remove all and an add form for every kind (web: list only, adding through the assistant) | geometry |
+| Air volume (flow studies): shape Box / C-shape / Cylinder, sizes, Apply, Fit to parts, Show all | 🟡 all of it with typed sizes; the orange drag handles in the 3D view are not ported | geometry |
+| Automatic domain size presets (Minimal / Compact / Standard / Large, Fit with these) | ✅ | geometry |
+| Hide rings; next-step button | ✅ Hide gizmo; Next: setup | geometry |
 
 ## 2 Setup
 

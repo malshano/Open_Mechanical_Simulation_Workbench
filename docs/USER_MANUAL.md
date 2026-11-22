@@ -600,6 +600,45 @@ The tabs are the ones of section 8, with these differences and additions.
 Limits of the views: contour lines and their labels do not follow an animated deformation; labels can be hidden behind a surface; the
 force coefficients of a flow study use the frontal area of the object, which is not the wing area of a wing (work from the forces).
 
+### 15.4a The Geometry step
+
+The Geometry step of the window has everything of section 4 and more.
+
+**The gizmo (turn and move).** Round the model the 3D view shows one gizmo: three **rings** (x red, y green, z blue) that turn it, three
+**arrows** that move it along an axis and a white **ball** that moves it freely in the plane of the view. The pointer becomes a hand over a
+handle and the handle lights up. Drag a ring to turn, an arrow to move, the ball to move freely; the model follows live in the view, with
+the angle or the distance written in the corner and in the panel. Hold **Shift** to snap to 5° steps and to round distances. Nothing is
+rebuilt yet: press **Apply** to rebuild the geometry turned and moved like the preview, **Cancel** to throw the preview away, or **Reset
+orientation** to go back to the place the file had. If you go to another step with a preview, it is applied. The **X/Y/Z -90° / +90°**
+buttons, the **Turn by this angle** field and the **Move by** fields (dx, dy, dz in mm) change the same preview, and turns and moves add up.
+**Hide gizmo** takes the handles out of the way.
+
+**One body or all.** The gizmo acts on **the whole model** by default (**Move all**). Press **Move this body** on a body's card in the
+list to turn and move just that body, leaving the others where they are; it is stored as a CAD edit (*rotate*, *move*), so it can be removed
+again, and it needs a STEP file. Moving the whole model also moves its supports, loads and zones with it.
+
+**Align a face to a plane.** Press **Align a face to a plane...** and click a face of the model: flat or curved. For a curved face (a
+wing, a smooth body, an STL mesh) the **average direction** of the face is used; press **Normal at the click** to use the direction of the
+surface at the point you clicked instead. A yellow arrow shows where the face points now, the face is highlighted, and a message box with
+an icon says what was picked. Then choose a coordinate plane (**facing +z** ...: the nearest one is marked with a star), or lay the face
+against another face: press **Pick the plane in the 3D view** and click it, or choose it by name: a **wall of the air volume** (upstream
+(inlet), downstream (outlet), top, bottom, the sides, or a cylinder's ends and wall), or a **body** and then one of its faces. While you
+pick, the air volume is shown and the view is turned so that all of it can be seen; your own choice of showing it is put back afterwards.
+**Same direction / Face to face** (for an air-volume wall **facing the wall / facing away**) say which way round. The turn is previewed;
+press **Apply** to rebuild.
+
+**CAD edits.** The list shows every edit made to the model (also by the assistant), each with a **✕** to remove it, **Undo last** and
+**Remove all**. **Add an edit** opens a form for every kind: boxes, cylinders, spheres, cones, prisms, revolved shapes, lofts, cuts,
+joins, holes, fillets, chamfers, moves, turns, scales, mirrors, linear and polar patterns, cuts at a plane, deleting and renaming.
+Outlines are typed as lists of points. An edit that does not work is refused and the model stays as it was. STL and OBJ models cannot be
+edited. Faces get new numbers after an edit: check the supports and loads that sit on edited faces.
+
+**Air volume** (flow and cooling studies). Choose the **shape** (box, C-shape, cylinder along the flow), type the sizes in mm and press
+**Apply**; **Fit to parts** sizes it automatically; **Show all** zooms out to it. A cooling study chooses whether a body of the file is the
+air or an air box is made. A flow study has the **automatic size** in spans of the parts: **Minimal**, **Compact**, **Standard**, **Large**
+or your own numbers and **Fit with these**. The orange drag handles of the web version are not in the window: sizes are typed. **Parts**
+lists the parts of a flow study with **Hide / Show**.
+
 ### 15.5 The mesh
 
 The Mesh step has the same settings as section 6 (resolution presets, tetrahedral or hex-dominant, advanced sizes, part sizing, wall
@@ -621,7 +660,7 @@ place inside the workspace, and move the file yourself afterwards. The `/` comma
 
 These are in the web version (use it for them; a study opens in both):
 
-- CAD edits of the model (holes, fillets, patterns ...) and the air-volume editor with its size presets.
+- Dragging the air volume's orange handles in the 3D view (type the sizes in the window instead).
 - Symmetry planes; detecting and editing rotors and moving zones; the flow-condition form (fluid, turbulence model, steady or transient)
   beyond the settings generated for each study type.
 - Continue or extend a finished run, the number of cores, starting from another solution, and the advanced OpenFOAM numerics and case
