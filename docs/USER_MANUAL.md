@@ -617,15 +617,17 @@ buttons, the **Turn by this angle** field and the **Move by** fields (dx, dy, dz
 list to turn and move just that body, leaving the others where they are; it is stored as a CAD edit (*rotate*, *move*), so it can be removed
 again, and it needs a STEP file. Moving the whole model also moves its supports, loads and zones with it.
 
-**Align a face to a plane.** Press **Align a face to a plane...** and click a face of the model: flat or curved. For a curved face (a
-wing, a smooth body, an STL mesh) the **average direction** of the face is used; press **Normal at the click** to use the direction of the
-surface at the point you clicked instead. A yellow arrow shows where the face points now, the face is highlighted, and a message box with
-an icon says what was picked. Then choose a coordinate plane (**facing +z** ...: the nearest one is marked with a star), or lay the face
-against another face: press **Pick the plane in the 3D view** and click it, or choose it by name: a **wall of the air volume** (upstream
-(inlet), downstream (outlet), top, bottom, the sides, or a cylinder's ends and wall), or a **body** and then one of its faces. While you
-pick, the air volume is shown and the view is turned so that all of it can be seen; your own choice of showing it is put back afterwards.
-**Same direction / Face to face** (for an air-volume wall **facing the wall / facing away**) say which way round. The turn is previewed;
-press **Apply** to rebuild.
+**Align a face to a plane.** Press **Align a face to a plane...** and click a face of the model: flat or curved. The view is fitted to the
+model, a bar under the 3D view says what to click, and the top of the panel shows the current choice in one line ("Face 7 → Air volume:
+top (+z), facing the wall") with **Apply** and **Cancel**. For a curved face (a wing, a smooth body, an STL mesh) the **average
+direction** of the face is used; press **Normal at the click** to use the direction of the surface at the point you clicked instead. A
+yellow arrow shows where the face points now, the face is highlighted, and a message box with an icon says what was picked.
+The next click chooses the plane to lay it against, as in the web version: click **a face of any part** or **a wall of the air volume**
+(the air volume is shown translucent while you pick, the camera stays on the model, and the face under the pointer is named next to the
+cursor; turn the view to reach another wall), and the model turns in the view at once. Or choose a coordinate plane (**facing +z** ...:
+the nearest one is marked with a star), or choose by name in the panel: a **wall of the air volume** (upstream (inlet), downstream
+(outlet), top, bottom, the sides, or a cylinder's ends and wall), or a **body** and then one of its faces. **Same direction / Face to
+face** (for an air-volume wall **facing the wall / facing away**) say which way round. Press **Apply** to rebuild the geometry.
 
 **CAD edits.** The list shows every edit made to the model (also by the assistant), each with a **✕** to remove it, **Undo last** and
 **Remove all**. **Add an edit** opens a form for every kind: boxes, cylinders, spheres, cones, prisms, revolved shapes, lofts, cuts,
