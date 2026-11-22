@@ -4,7 +4,7 @@ Same things as the web version's top bar. Every control has an id (chrome.*) and
 from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt, QTimer
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QResizeEvent
 from PySide6.QtWidgets import (QApplication, QComboBox, QHBoxLayout, QMenu, QMessageBox, QPushButton, QSizePolicy, QToolButton, QWidget)
 
 from .. import project as P
@@ -132,7 +132,13 @@ def running():
 
 def _count(win):
     n = len(running())
-    win.jobs_btn.setText(f"⚙ Jobs ({n})" if n else "⚙ Jobs")
+    text = f"⚙ Jobs ({n})" if n else "⚙ Jobs"
+    if win.jobs_btn.text() != text:
+        win.jobs_btn.setText(text)
+        corner = getattr(win, "_chrome_corner", None)
+        if corner is not None:                              # (the corner is as wide as its parts now: Simple / Expert are not squeezed)
+            corner.updateGeometry()
+            QApplication.sendEvent(win.menuBar(), QResizeEvent(win.menuBar().size(), win.menuBar().size()))   # (the bar places its corner again)
 
 
 def _fill_jobs(win):

@@ -114,8 +114,12 @@ class Shell(QObject):
         self.cancel = wid(QPushButton("Cancel"), "status.cancel")
         self.cancel.setObjectName("viewbtn")
         self.cancel.clicked.connect(self.cancel_job)
-        sb.insertPermanentWidget(0, self.job_msg)
-        sb.insertPermanentWidget(2, self.cancel)          # (after the progress bar the window made)
+        self.job_msg.setMinimumWidth(240)
+        for x in (w.progress, w.lbl_saved):               # (the right end, in this order: what the job says, its bar, Cancel, when it was saved)
+            sb.removeWidget(x)
+        for x in (self.job_msg, w.progress, self.cancel, w.lbl_saved):
+            sb.addPermanentWidget(x)
+            x.show() if x is w.lbl_saved else None
         self.job_msg.hide()
         self.cancel.hide()
 
