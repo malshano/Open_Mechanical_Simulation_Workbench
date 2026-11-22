@@ -99,6 +99,10 @@ class AlignController:
                   "is aligned by its average direction, or by the direction at the point you click.")
         self.p.view.set_pick_mode("face")
         self.p.view.set_selection([])
+        bb = (((self.p._st or {}).get("geometry") or {}).get("info") or {}).get("parts_bbox")
+        if bb:                                                    # (the picture is on the model while aligning, whatever else is shown: a duct, an air volume)
+            self.p.view.set_focus([bb[0], bb[1], bb[2], bb[3], bb[4], bb[5]])
+            self.p.view.fit()
         self._banner("Click the face of the model that you want to align (flat or curved), or press Done", "Done")
         self.p.scroll_top()
         self.p.rebuild()
@@ -133,6 +137,8 @@ class AlignController:
         self._banner(None)
         self._reset()
         if v is not None:
+            if was:
+                v.set_focus(None)
             v.set_pick_mode(None)
             v.set_selection([])
             v.set_face_tints({})

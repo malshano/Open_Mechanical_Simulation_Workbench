@@ -523,9 +523,9 @@ def test_after_the_first_click_the_plane_pick_starts_by_itself_and_the_camera_st
     pr = c.engine.project()
     view = c.win.view
     f = max((f for f in pr.faces() if f.get("kind") == "body"), key=lambda f: f["area"])
-    cam0 = view.camera()
     assert not c.win.chk_air.isChecked()
     c.widget_do("geometry.align.start", "click")
+    cam0 = view.camera()                                                                               # (fitted to the model)
     assert "click the face of the model" in c.widget_do("view.banner")["value"].lower()            # the bar under the view says what to do
     assert c.widget_do("view.banner.button")["text"] == "Done"
     c.do("geometry.align_pick", {"face": f["id"]})
