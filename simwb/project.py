@@ -831,7 +831,7 @@ class Project:
             step = np.eye(3)
             step[i, i], step[i, j], step[j, i], step[j, j] = c, -s_, s_, c
             new = step @ old
-        if np.allclose(new, old):
+        if np.allclose(new, old) and not (reset and np.abs(old_t).max() > 1e-12):   # (a reset also undoes a move)
             raise ValueError("The orientation would not change")
         D = new @ old.T
         if reset:  # back to the file's own place
@@ -844,25 +844,95 @@ class Project:
         return self.prepare_geometry(turn=D, turn_t=t_step, rotation=None if back else new.tolist(),
                                      translation=None if back else new_t.tolist(), snap_zones=snap_zones)
 
-    def align_info(self, face_id) -> dict:
-        """Which way a flat face of the model points (out of the part), for lining it up with a coordinate plane."""
+    def transform_geometry(self, matrix=None, shift=None, bodies=None) -> Job:
+        """Turn and / or move the whole model or only some bodies (what the rotation / move gizmo of the 3D view applies).
+        matrix: a turn (3x3 rotation) about the middle of what is moved; shift: [dx, dy, dz] in metres, applied after the turn.
+        bodies: None = the whole model (boundary conditions, rotors and zones follow it; Reset orientation undoes it), or a list of
+        body names = those bodies only, done as CAD edits ('rotate' about the body's middle, 'move'), which need a STEP file and
+        are listed (and can be removed) under CAD edits."""
+        if self.busy():
+            raise RuntimeError("Please wait: a job is still running for this project (or cancel it).")
+        if not (self.geo_dir / "source.step").exists():
+            raise ValueError("Import a geometry first")
+        M = np.eye(3) if matrix is None else np.asarray([[studies.finite(x, "Rotation") for x in row] for row in matrix], float)
+        if M.shape != (3, 3) or not np.allclose(M @ M.T, np.eye(3), atol=1e-6) or np.linalg.det(M) < 0:
+            raise ValueError("The rotation must be a proper 3x3 rotation matrix")
+        s = np.zeros(3) if shift is None else np.asarray([studies.finite(x, "Shift") for x in shift], float)
+        if s.shape != (3,):
+            raise ValueError("The shift must be [dx, dy, dz]")
+        turned, moved = not np.allclose(M, np.eye(3), atol=1e-9), bool(np.abs(s).max() > 1e-12)
+        if not turned and not moved:
+            raise ValueError("Nothing to change: the turn and the move are both zero")
+        if not bodies:
+            old = np.asarray(self.data["geometry"].get("rotation") or np.eye(3), float)
+            old_t = np.asarray(self.data["geometry"].get("translation") or np.zeros(3), float)
+            c = self._parts_center()
+            new = M @ old
+            t_step = (c - M @ c) + s
+            new_t = M @ old_t + t_step
+            back = np.allclose(new, np.eye(3)) and np.allclose(new_t, 0, atol=1e-12)
+            return self.prepare_geometry(turn=M, turn_t=t_step, rotation=None if back else new.tolist(),
+                                         translation=None if back else new_t.tolist())
+        fmt = (self.data["geometry"].get("info") or {}).get("source_format") or self.data["geometry"].get("format")
+        if fmt in ("stl", "obj"):
+            raise ValueError("Moving one body needs a STEP file: an STL / OBJ model is a surface mesh and cannot be edited (move the whole model)")
+        names = [str(b) for b in bodies]
+        src = {b["name"]: b for b in (self.data["geometry"].get("info") or {}).get("source_bodies") or []}
+        unknown = [n for n in names if n not in src]
+        if unknown:
+            raise ValueError(f"No body {unknown[0]}. Bodies: {', '.join(src)}")
+        ops = []
+        if turned:
+            lo = np.min([src[n]["bbox"][:3] for n in names], axis=0)
+            hi = np.max([src[n]["bbox"][3:] for n in names], axis=0)
+            ax, deg = orient.axis_angle(M)
+            ops.append({"op": "rotate", "bodies": names, "point": ((lo + hi) / 2 * 1000).tolist(), "axis": ax.tolist(), "angle_deg": deg})
+        if moved:
+            ops.append({"op": "move", "bodies": names, "by": (s * 1000).tolist()})
+        cur = [dict(e) for e in (self.data["geometry"].get("edits") or [])]
+        if len(cur) + len(ops) > cad_edit.MAX_EDITS:
+            raise ValueError(f"At most {cad_edit.MAX_EDITS} CAD edits")
+        return self.prepare_geometry(edits=cur + [cad_edit.validate(o) for o in ops])
+
+    def _face_direction(self, face_id, point=None, reference: bool = False) -> dict:
+        """The direction a face points out of its part (see orient.surface_direction): flat or curved. The face to turn must be a face
+        of a part; a REFERENCE (the plane to lay it against) may be anything: a wall of the air volume (out of the air volume), a face
+        of any part, a contact face between two parts (out of the first of them)."""
         fm = self.face_map()
         f = fm.get(int(face_id))
         if f is None:
             raise ValueError(f"Face {face_id} does not exist")
-        if "Plane" not in str(f.get("surface_type", "")):
-            raise ValueError(f"Face {face_id} is not flat: select a flat face to align")
-        if f.get("kind") in ("farfield", "enclosure"):
+        air = f.get("kind") in ("farfield", "enclosure")
+        if air and not reference:
             raise ValueError(f"Face {face_id} belongs to the air volume, not to the model: select a face of a part")
-        if f.get("interface"):
+        if f.get("interface") and not reference:
             raise ValueError(f"Face {face_id} is a contact face between two parts: select an outer face")
         roles = {b["id"]: b["role"] for b in self.bodies()}
-        res = orient.outward_normal(f, fm, solid=roles.get((f.get("volumes") or [None])[0]) == "solid")
+        vols = f.get("volumes") or []
+        volume = vols[0] if (len(vols) > 1 and f.get("interface")) else None
+        solid = True if air or f.get("interface") else roles.get((vols or [None])[0]) == "solid"
+        res = orient.surface_direction(f, fm, solid=solid, point=point, volume=volume)
         if res is None:
             raise ValueError(f"Cannot tell which way face {face_id} points")
-        n, pt = res
-        return {"face": int(face_id), "normal": n.tolist(), "point": pt.tolist(), "area_m2": f["area"],
-                "nearest": orient.nearest_axis(n), "kind": "face"}
+        n, pn = res["normal"], res["point_normal"]
+        if n is None:                         # a face that curves right round: only the direction at a point means anything
+            if pn is None:
+                raise ValueError(f"Face {face_id} curves right round (a whole cylinder or sphere): its average direction cancels out. "
+                                 "Click the face where you want its direction taken (the normal at the click is used)")
+            n = pn
+        out = {"face": int(face_id), "normal": n.tolist(), "point": res["point"].tolist(), "area_m2": f["area"],
+               "nearest": orient.nearest_axis(n), "kind": "wall" if air else "face", "curved": bool(res["curved"]),
+               "coherence": round(res["coherence"], 4), "contact": bool(f.get("interface")), "role": f.get("domain_role"),
+               "average_defined": res["normal"] is not None}
+        if pn is not None:
+            out.update(point_normal=pn.tolist(), point_nearest=orient.nearest_axis(pn), click=res["click"].tolist())
+        return out
+
+    def align_info(self, face_id, point=None) -> dict:
+        """Which way a face of the model points (out of the part), for lining it up with a coordinate plane or another face. A flat face
+        has its normal; a CURVED face (flagged `curved`: a wing, a smooth body, a mesh) the area-weighted average normal of the face, and
+        with `point` (a click on it) also `point_normal`, the surface normal at that point."""
+        return self._face_direction(face_id, point)
 
     def axis_info(self, face_id, point=None) -> dict:
         """Centre and axis of a round feature for placing a rotating zone or a rotor disc: a cylindrical face (a
@@ -893,47 +963,85 @@ class Project:
             e["angle_deg"] = math.degrees(math.acos(min(1.0, abs(float(np.dot(e["axis"], studies.AXES[near]))))))
         return out
 
-    def wall_info(self, face_id) -> dict:
-        """A flat wall of the tunnel (the air volume around the parts): which way it faces out of the tunnel."""
-        fm = self.face_map()
-        f = fm.get(int(face_id))
+    def wall_info(self, face_id, point=None) -> dict:
+        """A wall of the tunnel (the air volume around the parts): which way it faces out of the tunnel."""
+        f = self.face_map().get(int(face_id))
         if f is None:
             raise ValueError(f"Face {face_id} does not exist")
         if f.get("kind") not in ("farfield", "enclosure"):
             raise ValueError(f"Face {face_id} is not a wall of the air volume (the tunnel): select one of its walls "
                              "(shown translucent)")
-        if "Plane" not in str(f.get("surface_type", "")):
-            raise ValueError(f"Face {face_id} is not flat: select a flat wall of the tunnel")
-        res = orient.outward_normal(f, fm, solid=True)  # (out of the air volume = out of the tunnel)
-        if res is None:
-            raise ValueError(f"Cannot tell which way face {face_id} faces")
-        n, pt = res
-        return {"face": int(face_id), "normal": n.tolist(), "point": pt.tolist(), "nearest": orient.nearest_axis(n),
-                "role": f.get("domain_role"), "kind": "wall"}
+        return self._face_direction(face_id, point, reference=True)
 
-    def ref_info(self, face_id, exclude=None) -> dict:
-        """The plane to align to: a wall of the tunnel or another flat face of the model (its normal points out)."""
+    def ref_info(self, face_id, exclude=None, point=None) -> dict:
+        """The plane to align to: ANY face - a wall of the air box, a face of any part (flat or curved: its average direction, or the
+        direction at `point`), a contact face between parts. Its direction points out of the part (out of the air volume for a wall)."""
         if exclude is not None and int(face_id) == int(exclude):
             raise ValueError("Choose a different face as the plane to align to")
-        f = self.face_map().get(int(face_id))
-        if f is not None and f.get("kind") in ("farfield", "enclosure"):
-            return self.wall_info(face_id)
-        return self.align_info(face_id)
+        return self._face_direction(face_id, point, reference=True)
 
-    def align_face(self, face_id, target: str | None = None, wall=None, away: bool = False) -> Job:
-        """Turn the parts (about their middle) so that the flat face lies against a plane: the plane normal to
-        `target` ('+x' ... '-z', the face then faces that way), or the plane of another face (`wall`: a wall of the
-        tunnel or a flat face of the model): the face then points the same way as that one (a tunnel wall's outward
-        normal: the face lies against the wall), or the opposite way when `away` (face to face)."""
-        info = self.align_info(face_id)
+    def air_walls(self) -> list:
+        """The faces of the air volume (flow and cooling studies), named by where they are: [{face, name, role, normal, nearest,
+        curved, area_m2}] - 'upstream (inlet)', 'downstream (outlet)', 'top', 'bottom' ... by their outward direction and the flow."""
+        out = []
+        try:
+            fd = np.asarray(self._flow_dir(), float) if self.study == "external_aero" else None
+        except Exception:  # noqa: BLE001
+            fd = None
+        names = {"+x": "+x side", "-x": "-x side", "+y": "+y side", "-y": "-y side", "+z": "top (+z)", "-z": "bottom (-z)"}
+        for f in self.faces():
+            if f.get("kind") not in ("farfield", "enclosure"):
+                continue
+            try:
+                d = self._face_direction(f["id"], reference=True)
+            except ValueError:
+                continue
+            n, near = np.asarray(d["normal"]), d["nearest"]
+            role = f.get("domain_role")
+            nm = names[near]
+            if fd is not None and abs(float(n @ fd)) > 0.9:
+                nm = "upstream (inlet)" if n @ fd < 0 else "downstream (outlet)"
+            elif role in ("inlet", "outlet"):
+                nm = f"{role} ({near})"
+            out.append({"face": f["id"], "name": nm, "role": role, "normal": d["normal"], "nearest": near,
+                        "curved": d["curved"], "area_m2": f["area"]})
+        order = {"upstream (inlet)": 0, "downstream (outlet)": 1}
+        out.sort(key=lambda w: (order.get(w["name"], 2), w["nearest"]))
+        return out
+
+    def body_faces(self, body_id) -> list:
+        """The outer faces of one body, for choosing the face to align to by name: [{face, area_m2, nearest, curved}], largest first."""
+        out = []
+        for f in self.faces():
+            if int(body_id) not in (f.get("volumes") or []) or f.get("kind") in ("farfield", "enclosure"):
+                continue
+            try:
+                d = self._face_direction(f["id"], reference=True)
+            except ValueError:
+                continue
+            out.append({"face": f["id"], "area_m2": f["area"], "nearest": d["nearest"], "curved": d["curved"],
+                        "normal": d["normal"], "contact": d["contact"]})
+        out.sort(key=lambda x: -x["area_m2"])
+        return out
+
+    def align_face(self, face_id, target: str | None = None, wall=None, away: bool = False, point=None, at_point: bool = False,
+                   wall_point=None, wall_at_point: bool = False) -> Job:
+        """Turn the parts (about their middle) so that the face lies against a plane: the plane normal to `target` ('+x' ... '-z', the
+        face then faces that way), or the plane of another face (`wall`: a wall of the air box or any face of the model): the face then
+        points the same way as that one (a tunnel wall's outward normal: the face lies against the wall), or the opposite way when `away`
+        (face to face). A curved face points along its average normal, or - with at_point and the click `point` - along the normal at the
+        click (the same for the reference with wall_point / wall_at_point)."""
+        info = self.align_info(face_id, point)
+        n = info["point_normal"] if at_point and info.get("point_normal") else info["normal"]
         if wall is not None:
-            w = np.asarray(self.ref_info(wall, exclude=face_id)["normal"], float)
+            ref = self.ref_info(wall, exclude=face_id, point=wall_point)
+            w = np.asarray(ref["point_normal"] if wall_at_point and ref.get("point_normal") else ref["normal"], float)
             vec, name = (-w if away else w), f"the plane of face {wall}" + (" (facing away)" if away else "")
         else:
             if target not in orient.AXES:
                 raise ValueError(f"The plane's direction must be one of {', '.join(orient.AXES)}")
             vec, name = target, target
-        D = orient.align_matrix(info["normal"], vec)
+        D = orient.align_matrix(n, vec)
         if np.allclose(D, np.eye(3), atol=1e-9):
             raise ValueError(f"Face {face_id} already faces {name}")
         return self.rotate_geometry(matrix=D.tolist())
