@@ -56,15 +56,15 @@ plus the toolbar and application bar. Status: ✅ done in the Qt app · 🟡 par
 | About this simulation (what the study does) | ✅ | setup |
 | Parts & materials: rename, material list per body, confirm default material (✓ Use ...), eye, highlight | ✅ | setup |
 | **Boundary conditions**: add by type, name, faces (pick in the view / by chip), type-specific parameters, delete, highlight, colour glyphs in the view | ✅ (add by type, name, faces from the view, parameters, delete) | setup (+ viewtools) |
-| Boundary-condition glyphs drawn on the model | 🟡 (face tints, labels, load and gravity arrows; no symbols for every type) | setup / viewtools |
+| Boundary-condition glyphs drawn on the model | ✅ (every type: tint + label with name/value or type; arrows for loads, flows, pressure/heat in or out, exchange; free stream, oncoming air, open sides, rotors, zones, heat sources, symmetry planes, gravity - through the tint/label/arrow API; no 3D block/roller symbols or draggable discs/planes) | setup |
 | Loads: gravity direction | ✅ (setting, arrow in the view) | setup |
-| Solver choice for the study (built-in, CalculiX ...) | ⬜ | setup |
-| **Symmetry planes**: plane ⟂ x/y/z, from a face, flip, remove | ⬜ | setup |
-| Rotors: detect on motor tops, thrusts, reset to automatic, edit | ⬜ | setup |
-| Moving (rotating) zones: add, edit, delete | ⬜ | setup |
-| Flow condition: fluid (air/water), speed, direction, turbulence model, steady/transient, flow & solver settings | ⬜ | setup |
+| Solver choice for the study (built-in, CalculiX ...) | ✅ (Solver line in About; the choice in Advanced settings, open in Expert mode, as the web shows it in Expert mode) | setup |
+| **Symmetry planes**: plane ⟂ x/y/z, from a face, flip, remove | ✅ (draft with axis/position/flip/Set, from a face, position, flip, remove, cut parts (aero), linked condition greyed; no mouse drag of the plane) | setup |
+| Rotors: detect on motor tops, thrusts, reset to automatic, edit | ✅ (detect, add, radius, thrust/auto, centre on a cylinder or edge, delete, reset, weight/thrust note) | setup |
+| Moving (rotating) zones: add, edit, delete | ✅ (add, every field, fit around part, centre on a cylinder or edge, turn the model for a tilted axis, delete) | setup |
+| Flow condition: fluid (air/water), speed, direction, turbulence model, steady/transient, flow & solver settings | ✅ (headed as in the web; expert settings open in Expert mode; suggested end time with Use it) | setup |
 | Readiness checklist (errors/warnings that jump to the control) | ✅ (items jump to their control) | setup |
-| Auto-detect inlet & outlet (cooling studies) | ⬜ | setup |
+| Auto-detect inlet & outlet (cooling studies) | ✅ | setup |
 | Settings of every study type (generic form from the study spec) | ✅ (generated from the study spec, Advanced hidden in Simple mode) | setup |
 
 ## 3 Mesh

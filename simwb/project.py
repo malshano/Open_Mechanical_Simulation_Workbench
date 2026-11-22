@@ -1984,6 +1984,90 @@ class Project:
         self.save()
         return self.state()
 
+    def new_moving_zone(self) -> dict:
+        """A first guess for one more rotating zone (what the 'Add rotating zone' button adds): in the middle of the parts
+        about the up axis, or - for a further zone, a second propeller - next to the last one across the parts, so the
+        two do not overlap. MRF, or a sliding mesh in a transient external flow."""
+        info = self.data["geometry"].get("info") or {}
+        pb = info.get("parts_bbox") or info.get("bbox")
+        if not pb:
+            raise ValueError("Import a geometry first")
+        up = self.data["settings"].get("up_axis") or "+z"
+        c = [(pb[k] + pb[k + 3]) / 2 for k in range(3)]
+        half = max((pb[k + 3] - pb[k]) / 2 for k in range(3))
+        old = list(self.data.get("moving_zones") or [])
+        radius = half * 0.6
+        names = {z["name"] for z in old}
+        i = len(old) + 1
+        while f"zone{i}" in names:
+            i += 1
+        if old:
+            last = old[-1]
+            ax = "xyz".index(up[1])
+            side = max((k for k in range(3) if k != ax), key=lambda k: pb[k + 3] - pb[k])
+            c = list(last["center"])
+            c[side] = last["center"][side] + 2.2 * max(radius, last["radius"])
+        transient = self.study == "external_aero" and self.data["settings"].get("analysis") == "transient"
+        return {"name": f"zone{i}", "center": c, "axis": up, "radius": radius, "length": half * 0.3, "rpm": 3000.0,
+                "method": "sliding" if transient else "mrf", "cell_size": None}
+
+    def zone_around_part(self, zone: dict, part: str) -> dict:
+        """The zone (a copy) fitted round a part: its axis through the part's area-weighted centre (the box centre of a
+        three-blade propeller is off the hub), centred on the part along the axis, and a gap of 0.6 zone-boundary cells
+        to the part (the zone check asks for at least 0.5)."""
+        from .gmsh_worker import ZONE_CELLS
+        fs = [f for f in self.faces() if f.get("kind") not in ("farfield", "enclosure")
+              and (f.get("part") == part or (not f.get("part") and part == "(body)"))]
+        pts = np.vstack([np.asarray((f.get("mesh") or {}).get("vertices") or [], float).reshape(-1, 3) for f in fs]
+                        or [np.zeros((0, 3))])
+        if not len(pts):
+            raise ValueError(f"No part '{part}' to fit the zone round")
+        A = sum(float(f.get("area") or 0) for f in fs if f.get("centroid"))
+        c0 = (sum(np.asarray(f["centroid"], float) * float(f["area"]) for f in fs if f.get("centroid")) / A
+              if A > 0 else pts.mean(0))
+        a = np.abs(np.asarray(studies.AXES[zone["axis"]], float))
+        d = pts - c0
+        ax = d @ a
+        rmax = float(np.linalg.norm(d - np.outer(ax, a), axis=1).max())
+        N = ZONE_CELLS.get(self.data["mesh"].get("preset"), 40)
+        z = dict(zone)
+        z["center"] = (c0 + a * (ax.min() + ax.max()) / 2).tolist()
+        z["radius"] = rmax / (1 - 1.2 * math.pi / N)
+        z["length"] = float(ax.max() - ax.min()) + 2 * 0.6 * 2 * math.pi * z["radius"] / N
+        return z
+
+    def end_time_advice(self) -> dict | None:
+        """A suggested end time of a transient external flow with sliding-mesh zones: the longest of 5 revolutions of the
+        fastest zone (the start-up of the rotation), 2 of the slowest (when they differ) and 3 flow-through times of the
+        model; rounded up to two figures. One time step is 0.5 degree of the fastest zone. None when it does not apply."""
+        s = self.data["settings"]
+        if self.study != "external_aero" or s.get("analysis") != "transient":
+            return None
+        sl = [z for z in self.data.get("moving_zones") or [] if z.get("method") == "sliding" and z.get("rpm")]
+        if not sl:
+            return None
+        fast = max(sl, key=lambda z: abs(z["rpm"]))
+        slow = min(sl, key=lambda z: abs(z["rpm"]))
+        rev = lambda z: 60.0 / abs(z["rpm"])  # noqa: E731
+        parts = [(5 * rev(fast), f"5 revolutions of {fast['name']} ({abs(fast['rpm']):.4g} rpm, {rev(fast) * 1e3:.3g} ms each)")]
+        if len(sl) > 1:
+            parts.append((2 * rev(slow), f"2 revolutions of {slow['name']} ({abs(slow['rpm']):.4g} rpm)"))
+        pb = (self.data["geometry"].get("info") or {}).get("parts_bbox")
+        fa = str(s.get("forward_axis") or "+x")
+        k = "xyz".index(fa[1]) if fa[1:] in ("x", "y", "z") else None
+        L = float(pb[k + 3] - pb[k]) if pb and k is not None else 0.0
+        U = float(s.get("speed") or 0.0)
+        if L > 0 and U > 0.5:
+            parts.append((3 * L / U, f"3 flow-through times of the model ({L * 1e3:.4g} mm at {U:.3g} m/s)"))
+        best = max(parts, key=lambda p: p[0])
+        t = float(f"{best[0]:.2g}")
+        if t < best[0]:
+            t = float(f"{best[0] * 1.05:.2g}")
+        steps = t * abs(fast["rpm"]) * math.pi / 30 / (0.5 * math.pi / 180)
+        cur = float(s.get("end_time") or 0.0)
+        return {"t": t, "why": best[1], "steps": steps, "revs": t / rev(fast), "cur": cur, "cur_revs": cur / rev(fast),
+                "fast": fast["name"], "same": abs(cur - t) <= 0.05 * t, "long": cur > 3 * t}
+
     @staticmethod
     def _zones_touch(z1: dict, z2: dict, gap: float = 0.0) -> bool:
         """Whether two cylindrical zones are closer than `gap` (conservative: a cylinder is compared by the

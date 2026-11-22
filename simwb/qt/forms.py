@@ -1,5 +1,6 @@
 """Forms made from the engine's own parameter definitions (simwb.studies): a list of {key, label, unit, default, options, help, min, max,
-show_if, adv}. The same code builds the form of a boundary condition, of a body, and of a study's settings, for every study type.
+show_if, adv; and for forms made in the Qt app: option_labels {value: words}, placeholder (text of an empty field), blank (an emptied field
+means None, 'automatic')}. The same code builds the form of a boundary condition, of a body, and of a study's settings, for every study type.
 
 Each control has an API id ("<prefix>.<key>"), a visible label with its unit, and a tooltip with the engine's help text; parameters whose
 `show_if` is not met are hidden, and `adv` ones are hidden in Simple mode."""
@@ -61,13 +62,16 @@ class ParamForm(QWidget):
                 c = wid(QComboBox(), f"{prefix}.{k}")
                 c.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
                 c.setMinimumContentsLength(8)
+                names = p.get("option_labels") or {}         # (a word for each value: 'MRF (steady)' for 'mrf')
                 for o in p["options"]:
-                    c.addItem(str(o))
-                i = c.findText(str(cur))
-                c.setCurrentIndex(max(i, 0))
-                c.currentTextChanged.connect(lambda txt, k=k: self._edited(k, txt))
+                    c.addItem(str(names.get(o, o)), o)
+                i = c.findData(cur)
+                c.setCurrentIndex(max(i if i >= 0 else c.findText(str(cur)), 0))
+                c.currentIndexChanged.connect(lambda i, k=k, c=c: self._edited(k, c.itemData(i)))
             else:
                 c = wid(QLineEdit(fmt_num(cur) if cur not in (None, "") else ""), f"{prefix}.{k}")
+                if p.get("placeholder"):                     # (empty means automatic: the field says so)
+                    c.setPlaceholderText(str(p["placeholder"]))
                 v = QDoubleValidator(c)
                 v.setNotation(QDoubleValidator.ScientificNotation)
                 if "min" in p:
@@ -76,7 +80,8 @@ class ParamForm(QWidget):
                     v.setTop(float(p["max"]))
                 c.setValidator(v)
                 c.editingFinished.connect(lambda k=k, c=c: self._edited(k, c.text()))
-            c.setToolTip(p.get("help") or f"{p['label']}{unit}")
+            oh = p.get("option_help") or {}
+            c.setToolTip(p.get("help") or ("  ".join(f"{o}: {t}" for o, t in oh.items()) if oh else f"{p['label']}{unit}"))
             c.setAccessibleName(f"{p['label']}{unit}")
             expl = QLabel("")
             expl.setObjectName("muted")
@@ -98,6 +103,8 @@ class ParamForm(QWidget):
         p = self.params[key]
         if p.get("options"):
             val = text
+        elif p.get("blank") and str(text).strip() == "":     # (emptied: automatic)
+            val = None
         else:
             try:
                 val = float(text)

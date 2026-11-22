@@ -640,6 +640,29 @@ edited. Faces get new numbers after an edit: check the supports and loads that s
 air or an air box is made. A flow study has the **automatic size** in spans of the parts: **Minimal**, **Compact**, **Standard**, **Large**
 or your own numbers and **Fit with these**. The orange drag handles of the web version are not in the window: sizes are typed. **Parts**
 lists the parts of a flow study with **Hide / Show**.
+### 15.4b Setup
+
+The Setup step has the blocks of section 5 in the same order, and the conditions are drawn on the model (each in its colour, with its
+name and value, arrows for loads, flows, pressures and heat; the free stream, rotors, rotating zones, heat sources, symmetry planes and
+gravity too). A line at the top of the panel says what the last action did, or why it could not be done.
+
+- **About this simulation** says which **Solver** runs the study. In a structural or vibration study, choose built-in or CalculiX under
+  **Advanced settings** (Expert mode; the block is open).
+- **Boundary conditions** says what the **Other faces** get. In a cooling study with a fan, **✨ Auto-detect inlet & outlet** puts the inlet and
+  outlet on the two end faces of the air volume. The condition of a symmetry plane is listed greyed out: change it with its plane.
+- **Symmetry planes**: **＋ Plane ⟂ x** (y, z) places a new plane through the middle of the parts; type its **Position [mm]**, **⇄ Flip** to keep the
+  other side (the arrow on the model points into the side kept), then **Set plane**. **＋ From a face**, then click a flat face, puts the plane
+  through that face (choosing **Symmetry plane** in the add list with no face selected does the same). Each plane has its position, **⇄ Flip**,
+  **✕** (remove: the removed side comes back) and, in an external flow, **Also delete the model beyond the plane**. Each change rebuilds the
+  geometry (a job); the buttons wait while it runs.
+- **Rotors** (drone): **✨ Detect on motor tops**, **＋ Add rotor**, and for each rotor its **Radius**, **Thrust** (empty = automatic: the rotors
+  together carry the weight), **⌖ Centre on a cylinder or circular edge…** (press it, then click a motor can or a round edge) and **✕**.
+  **Reset thrusts to automatic** empties every thrust. The weight and the total thrust are written under the flow condition.
+- **Moving zones** (flow studies): **＋ Add rotating zone**; each zone has its name, **Method** (MRF steady, or sliding mesh in a transient external
+  flow), speed, axis, centre, radius, length, **Cell size inside** (empty = automatic), **Fit around part** and **⌖ Centre on a cylinder or circular
+  edge…**. If the picked axis is not along x, y or z, the panel offers **Turn the model** (or **Leave it**).
+- The settings are headed as in the web version (**Flow condition**, **Loads**, **Modes and vibration source** ...). A transient external flow with
+  sliding zones shows a **Suggested end time** with **Use it**.
 
 ### 15.5 The mesh
 
@@ -665,6 +688,8 @@ These are in the web version (use it for them; a study opens in both):
 - Dragging the air volume's orange handles in the 3D view (type the sizes in the window instead).
 - Symmetry planes; detecting and editing rotors and moving zones; the flow-condition form (fluid, turbulence model, steady or transient)
   beyond the settings generated for each study type.
+- CAD edits of the model (holes, fillets, patterns ...) and the air-volume editor with its size presets.
+- Dragging a symmetry plane, a rotor disc or a zone with the mouse in the 3D view (type the values in the Setup panel instead).
 - Continue or extend a finished run, the number of cores, starting from another solution, and the advanced OpenFOAM numerics and case
   files viewer.
 - The time bar and MP4 export for transient results; the modal spectrum, flutter and sweep plots; the mesh sensitivity and three-level checks.
