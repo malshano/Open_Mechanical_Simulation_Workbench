@@ -641,7 +641,7 @@ buttons, the **Turn by this angle** field and the **Move by** fields (dx, dy, dz
 list to turn and move just that body, leaving the others where they are; it is stored as a CAD edit (*rotate*, *move*), so it can be removed
 again, and it needs a STEP file. Moving the whole model also moves its supports, loads and zones with it.
 
-**Align a face to a plane.** Press **Align a face to a plane...** and click a face of the model: flat or curved. The view is fitted to the
+**Align a face to a plane.** Press **Align a face to a plane...**: a card appears over the top of the 3D view and guides you in three steps - **1 Click the surface you want to align**, **2 Click the side, plane or face to align it with** (any face of the model, or a wall of the air volume, the control volume; or press **Coordinate plane...**, **Air volume wall...** or **Another face - just click it** in the card), **3 Check the preview, then Apply**. The current step is big, finished steps carry a tick and what you chose, and **Back**, **Cancel** and **Apply** are in the card. Details: click a face of the model, flat or curved. The view is fitted to the
 model, a bar under the 3D view says what to click, and the top of the panel shows the current choice in one line ("Face 7 → Air volume:
 top (+z), facing the wall") with **Apply** and **Cancel**. For a curved face (a wing, a smooth body, an STL mesh) the **average
 direction** of the face is used; press **Normal at the click** to use the direction of the surface at the point you clicked instead. A

@@ -643,3 +643,67 @@ def test_a_ray_from_a_camera_inside_a_big_air_volume_reaches_the_far_wall(aero):
         if hh and hh["air"]:
             seen.add(hh["face"])
     assert len(seen) >= 4                                                                   # different directions hit different walls
+
+
+# ============================================================ the guided popup
+def test_the_guided_popup_walks_through_the_three_steps(aero):
+    c = aero
+    view = c.win.view
+    pr = c.engine.project()
+    assert c.do("geometry.align_state")["result"]["step"] == 0 and not c.widget_do("align.guide")["visible"]
+    c.widget_do("geometry.align.start", "click")                                       # ---- step 1
+    s = c.do("geometry.align_state")["result"]
+    assert s["step"] == 1 and s["popup"]["visible"] and s["popup"]["buttons"]["cancel"] and not s["popup"]["buttons"]["apply"]
+    assert "Step 1 of 3 - Click the surface you want to align" in c.widget_do("align.guide.step1")["value"]
+    assert c.widget_do("align.guide.step1")["visible"] and c.widget_do("align.guide")["visible"]
+    x, y, w, h = s["popup"]["geometry"]
+    iren = view.iren
+    assert x >= 0 and y >= iren.y() and x + w <= view.width() + 1 and y + h <= iren.y() + iren.height()      # inside the 3D picture, at its top
+    assert abs((x + w / 2) - (iren.x() + iren.width() / 2)) < 3                                              # centred
+    assert view.pick_cursor is not None                                                                       # (a pointing hand while picking)
+    face = max((f for f in pr.faces() if f.get("kind") == "body"), key=lambda f: f["area"])
+    c.do("geometry.align_pick", {"face": face["id"]})                                    # ---- step 2
+    s = c.do("geometry.align_state")["result"]
+    assert s["step"] == 2 and "Surface: face" in s["surface"] and "curved" in s["surface"]
+    t2 = c.widget_do("align.guide.step2")["value"]
+    assert "Step 2 of 3" in t2 and "air volume" in t2 and "(control volume)" in t2
+    assert "✓" in c.widget_do("align.guide.step1")["text"] and "Surface: face" in c.widget_do("align.guide.step1")["value"]
+    for i in ("align.guide.plane", "align.guide.wall", "align.guide.face", "align.guide.back", "align.guide.cancel"):
+        assert c.widget_do(i)["visible"] and c.widget_do(i)["enabled"], i
+    assert not c.widget_do("align.guide.apply")["visible"]
+    walls = pr.air_walls()
+    top = next(wl for wl in walls if "top" in wl["name"])
+    act = next(a for a in c.win.findChildren(__import__("PySide6.QtGui", fromlist=["QAction"]).QAction) if a.objectName() == f"align.guide.wall.{top['face']}")
+    assert act.text() == f"Air volume: {top['name']}"                                    # the menu lists the walls by direction
+    act.trigger()                                                                         # ---- step 3
+    s = c.do("geometry.align_state")["result"]
+    assert s["step"] == 3 and "Plane: Air volume: top" in s["plane"] and s["popup"]["buttons"]["apply"] and s["pending"]
+    assert "Step 3 of 3 - Check the preview, then Apply" in c.widget_do("align.guide.step3")["value"]
+    assert view.face_tints.get(top["face"]) and view.selection == [face["id"]]            # the plane is tinted, the surface stays selected
+    c.widget_do("align.guide.back", "click")                                              # ---- back to 2
+    s = c.do("geometry.align_state")["result"]
+    assert s["step"] == 2 and not s["pending"] and not view.face_tints
+    c.widget_do("align.guide.back", "click")                                              # ---- back to 1
+    s = c.do("geometry.align_state")["result"]
+    assert s["step"] == 1 and view.selection == []
+    c.do("geometry.align_pick", {"face": face["id"]})
+    c.widget_do("align.guide.plane", "get")
+    plane = next(a for a in c.win.findChildren(__import__("PySide6.QtGui", fromlist=["QAction"]).QAction) if a.objectName() == "align.guide.plane.+x")
+    plane.trigger()                                                                       # a coordinate plane from the popup's menu
+    assert c.do("geometry.align_state")["result"]["step"] == 3 and "coordinate plane facing +x" in c.do("geometry.align_state")["result"]["plane"]
+    c.widget_do("align.guide.cancel", "click")                                            # ---- cancel
+    s = c.do("geometry.align_state")["result"]
+    assert s["step"] == 0 and not s["popup"]["visible"] and not s["pending"] and view.pick_cursor is None
+
+
+def test_the_popup_applies_the_turn(aero):
+    c = aero
+    face = max((f for f in c.engine.project().faces() if f.get("kind") == "body"), key=lambda f: f["area"])
+    c.widget_do("geometry.align.start", "click")
+    c.do("geometry.align_pick", {"face": face["id"]})
+    c.do("geometry.align_plane", {"facing": "+y"})
+    assert c.widget_do("align.guide.apply")["enabled"]
+    c.widget_do("align.guide.apply", "click")
+    wait(c)
+    d = c.engine.project().align_info(max((f for f in c.engine.project().faces() if f.get("kind") == "body"), key=lambda f: f["area"])["id"])
+    assert d["nearest"] == "+y" and c.do("geometry.align_state")["result"]["step"] == 0

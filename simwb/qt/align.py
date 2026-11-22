@@ -50,9 +50,36 @@ class AlignController:
     def picking(self) -> bool:
         return self.pick or self.ref_pick
 
+    def step(self) -> int:
+        """Where the guided popup is: 0 not aligning, 1 click the surface, 2 click the plane to align it with, 3 check the preview and Apply."""
+        if self.pick:
+            return 1
+        if self.face is None:
+            return 0
+        return 2 if (self.ref is None and not self.target) else 3
+
+    def back(self):
+        """Back in the popup: from step 3 to choosing the plane again, from step 2 to choosing the surface again."""
+        s = self.step()
+        if s == 3:
+            self.ref, self.target = None, None
+            self.p.orient.clear()
+            self.p.view.set_face_tints({})
+            self.start_ref_pick()
+        elif s == 2:
+            self.p.orient.clear()
+            self.start()
+        else:
+            raise ValueError("There is no step to go back to")
+
+    def _guide(self):
+        g = getattr(self.p, "guide", None)
+        if g is not None:
+            g.refresh()
+
     def describe(self) -> dict:
         f, r = self.face, self.ref
-        return {"picking_face": self.pick, "picking_reference": self.ref_pick, "face": f and f["face"],
+        return {"step": self.step(), "picking_face": self.pick, "picking_reference": self.ref_pick, "face": f and f["face"],
                 "curved": bool(f and f.get("curved")), "mode": self.mode, "target": self.target,
                 "direction": f and self.normal(), "reference": r and {k: v for k, v in r.items() if k != "info"} or None,
                 "reference_direction": r and self.ref_normal(), "notice": self.notice,
@@ -99,6 +126,7 @@ class AlignController:
                   "is aligned by its average direction, or by the direction at the point you click.")
         self.p.view.set_pick_mode("face")
         self.p.view.set_selection([])
+        self._pointer(True)
         bb = (((self.p._st or {}).get("geometry") or {}).get("info") or {}).get("parts_bbox")
         if bb:                                                    # (the picture is on the model while aligning, whatever else is shown: a duct, an air volume)
             self.p.view.set_focus([bb[0], bb[1], bb[2], bb[3], bb[4], bb[5]])
@@ -106,6 +134,14 @@ class AlignController:
         self._banner("Click the face of the model that you want to align (flat or curved), or press Done", "Done")
         self.p.scroll_top()
         self.p.rebuild()
+
+    def _pointer(self, on: bool):
+        """The pointer is a pointing hand over the picture while a face is being picked."""
+        v = self.p.view
+        if v is None:
+            return
+        v.pick_cursor = Qt.PointingHandCursor if on else None
+        v.iren.setCursor(Qt.PointingHandCursor) if on else v.iren.unsetCursor()
 
     def _banner(self, text: str | None, button: str | None = None):
         """The instruction in the bar under the 3D view (None: take it away)."""
@@ -136,6 +172,8 @@ class AlignController:
         self._restore_air()
         self._banner(None)
         self._reset()
+        self._pointer(False)
+        self._guide()
         if v is not None:
             if was:
                 v.set_focus(None)
@@ -268,11 +306,12 @@ class AlignController:
         """The pointer is over a face while the plane is being picked: say which one next to the cursor."""
         from PySide6.QtGui import QCursor
         from PySide6.QtWidgets import QToolTip
-        if not self.ref_pick or fid < 0:
+        if fid < 0 or not (self.ref_pick or self.pick):
             QToolTip.hideText()
             return
         name = getattr(self, "_wall_names", {}).get(fid)
-        QToolTip.showText(QCursor.pos(), f"Air volume: {name}" if name else f"Face {fid}", self.p.view.iren)
+        text = f"Air volume: {name}" if name else (f"Face {fid}: click to align this surface" if self.pick else f"Face {fid}")
+        QToolTip.showText(QCursor.pos(), text, self.p.view.iren)
 
     def choose_ref_face(self, fid: int, point=None, what: str = "face"):
         pr = self.p.engine.project()

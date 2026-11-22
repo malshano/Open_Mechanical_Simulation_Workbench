@@ -138,6 +138,8 @@ class Viewport(QWidget):
         self._solid_parts: list = []
         self._air_parts: list = []
         self.hover_id = -1
+        self.overlays: list = []             # widgets laid over the 3D picture; each has place()
+        self.pick_cursor = None              # the cursor to show over the picture while a face is being picked
         self._pick_box = None               # the box round everything that can be picked, air volume included (rays are made long enough to reach it)
         self.last_hit = None
         self._ov = None
@@ -1136,8 +1138,14 @@ class Viewport(QWidget):
     def resizeEvent(self, e):  # noqa: N802
         """A view fitted before it had its final size (a study opened from the start screen) is fitted again to the size it got."""
         super().resizeEvent(e)
+        QTimer.singleShot(0, self._place_overlays)
         if self._autofit:
             QTimer.singleShot(0, self._refit)
+
+    def _place_overlays(self):
+        for w in self.overlays:                                   # (cards laid over the picture, as the align guide)
+            if w.isVisible():
+                w.place()
 
     def _refit(self):
         if self._autofit:
