@@ -28,7 +28,8 @@ class AlignGuide(QFrame):
     def __init__(self, ctrl, view):
         super().__init__(view)
         self.c, self.view = ctrl, view
-        self.setAttribute(Qt.WA_NativeWindow, True)               # (a native window: it is stacked above the OpenGL surface, not under it)
+        if view.rw is not None:                                    # (a native window: it is stacked above the OpenGL surface, not under it)
+            self.setAttribute(Qt.WA_NativeWindow, True)
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setObjectName("alignGuide")
         wid(self, "align.guide")
@@ -78,7 +79,13 @@ class AlignGuide(QFrame):
         row.addWidget(self.b_apply)
         lay.addLayout(row)
         self.hide()
-        theme.bus.changed.connect(lambda _: self.refresh())
+        theme.bus.changed.connect(self._theme)
+
+    def _theme(self, _mode=None):
+        try:
+            self.refresh()
+        except RuntimeError:                                       # (the window was closed)
+            pass
 
     def _try(self, fn):
         try:
@@ -150,6 +157,7 @@ class AlignGuide(QFrame):
     def _menus(self):
         c = self.c
         m = QMenu(self.b_plane)
+        m.menuAction().setObjectName("align.guide.plane.menu")
         for plane, targets in (("XY plane", ("+z", "-z")), ("YZ plane", ("+x", "-x")), ("XZ plane", ("+y", "-y"))):
             for tg in targets:
                 a = m.addAction(f"{plane}, facing {_minus(tg)}")
@@ -162,6 +170,7 @@ class AlignGuide(QFrame):
                                "This study has no air volume: click a face of the model, or use a coordinate plane")
         if walls:
             w = QMenu(self.b_wall)
+            w.menuAction().setObjectName("align.guide.wall.menu")
             for wl in walls:
                 a = w.addAction(f"Air volume: {wl['name']}")
                 a.setObjectName(f"align.guide.wall.{wl['face']}")
@@ -179,7 +188,8 @@ class AlignGuide(QFrame):
         self.setFixedHeight(max(self.layout().totalHeightForWidth(w), self.layout().minimumSize().height()))
         x = iren.x() + (iren.width() - w) // 2
         self.move(max(0, x), iren.y() + 10)
-        self.raise_()
+        if self.view.rw is not None:
+            self.raise_()
 
     def describe(self) -> dict:
         return {"visible": self.isVisible(), "step": self.c.step(), "texts": self.texts(),

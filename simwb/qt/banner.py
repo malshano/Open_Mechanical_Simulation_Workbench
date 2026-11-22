@@ -28,9 +28,15 @@ class Banner(QFrame):
         self._items: dict = {}          # key -> (priority, text, button text, callback)
         self._cb = None
         self.button.clicked.connect(lambda: self._cb and self._cb())
-        theme.bus.changed.connect(lambda _: self._style())
+        theme.bus.changed.connect(self._theme)
         self._style()
         self._refresh()
+
+    def _theme(self, _mode=None):
+        try:
+            self._style()
+        except RuntimeError:
+            pass
 
     def _style(self):
         t = theme.tokens()
