@@ -132,15 +132,9 @@ TERMINAL = Terminal()
 TERMINAL_ALLOWED = {("auth", "login"), ("auth", "logout"), ("auth", "status"), ("--help",), ("-h",), ("--version",),
                     ("-v",), ("mcp", "list")}
 
-TERM_HELP = ("Commands (they run the claude command line in the study folder):
-/login   log in to Claude
-/logout  log out
-"
-             "/status  who is logged in
-/ask question   one plain question to Claude (no study tools, no shell)
-/version, /help
-"
-             "Anything without a / goes to the assistant, which can set up and run your study.")
+TERM_HELP = "\n".join(["Commands (they run the claude command line in the study folder):", "/login   log in to Claude", "/logout  log out",
+                          "/status  who is logged in", "/ask question   one plain question to Claude (no study tools, no shell)", "/version, /help",
+                          "Anything without a / goes to the assistant, which can set up and run your study."])
 
 
 def terminal_args(args: list) -> list:
