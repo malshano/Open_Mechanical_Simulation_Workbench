@@ -941,7 +941,7 @@ class ResultsPanel(_Panel):
             lay.addStretch(1)
             return
         study = st["study"]
-        if st["solve"].get("status") == "stale":
+        if (st.get("solve") or {}).get("status") == "stale":
             row = QHBoxLayout()
             row.addWidget(_note("Out of date: the setup changed after this run.", "warn"), 1)
             b = wid(QPushButton("Re-run"), "results.rerun")
@@ -950,8 +950,8 @@ class ResultsPanel(_Panel):
             b.clicked.connect(lambda: self.win.go("solve"))
             row.addWidget(b)
             lay.addLayout(row)
-        if st["solve"].get("note"):
-            lay.addWidget(_note(st["solve"]["note"], "warn"))
+        if (st.get("solve") or {}).get("note"):
+            lay.addWidget(_note((st.get("solve") or {})["note"], "warn"))
         self._convergence(lay, st, s.get("convergence"))
         self._history(lay, st, s)
         preset = (st.get("mesh") or {}).get("preset")
@@ -1040,8 +1040,8 @@ class ResultsPanel(_Panel):
                 tiles += [("Max air speed", _f(s.get("velocity_max"), 2), "m/s", "", "", "Velocity"), ("Room", _f(s.get("room_T")), "°C", "", "", None)]
             else:
                 imb = abs(s.get("energy_imbalance_percent") or 0)
-                tiles += [("Air leaves at", _f(s.get("outlet_T_mixed", s.get("outlet_T_area_avg"))), "°C", "", f"it came in at {s.get('inlet_T', 0):g} °C", None),
-                          ("Pressure drop", _f(s.get("pressure_drop_Pa")), "Pa", "", f"what a fan must supply ({s.get('flow_m3_per_h', 0):.1f} m³/h)", "Pressure"),
+                tiles += [("Air leaves at", _f(round(s.get("outlet_T_mixed", s.get("outlet_T_area_avg")) or 0, 1)), "°C", "", f"it came in at {s.get('inlet_T', 0):g} °C", None),
+                          ("Pressure drop", f"{s.get('pressure_drop_Pa') or 0:.2f}", "Pa", "", f"what a fan must supply ({s.get('flow_m3_per_h', 0):.1f} m³/h)", "Pressure"),
                           ("Heat taken by the air", f"{s.get('heat_carried_by_air_W', 0):.2f}", "W", "ok" if imb < 2 else "warn",
                            f"of {s.get('heat_input_W', 0):g} W put in ({imb:.1f} % off)", None)]
             tiles.append(self._converged_tile(s))

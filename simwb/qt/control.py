@@ -47,6 +47,7 @@ MODAL = {
     "file.import": "study.import", "geometry.import": "geometry.import", "help.about": None,
     "home.open_folder": "study.open_folder", "home.import": "study.import", "viewbar.picture": "view.picture",
     "chrome.close": None, "results.export.report": "results.export", "results.export.csv": "results.export", "results.export.vtk": "results.export",
+    "results.time.record": "results.video",
 }
 
 
@@ -623,7 +624,10 @@ class Control(QObject):
            "section_pos": (N, "0..1: where the plane cuts (from one end of the part to the other)", False),
            "contours": (B, "contour lines on the result", False), "contour_lines": (N, "how many evenly spaced contour lines", False),
            "contour_levels": ("array", "extra contour values, besides the evenly spaced ones", False),
-           "contour_labels": (B, "write the value on each contour line", False)},
+           "contour_labels": (B, "write the value on each contour line", False),
+           "opacity": (N, "0.1..1: see-through surfaces (1 = solid)", False), "outline": (B, "outline of the undeformed part", False),
+           "hide_air": (B, "cooling studies: hide the air box", False),
+           "time": (N, "index of the saved time to show (transient results; -1 = the last)", False)},
           lambda **kw: self._results(**kw))
 
         def rp():
@@ -633,7 +637,11 @@ class Control(QObject):
         R("results.flow", "Flow and cooling studies: switch on the flow tools (contour planes, vortex surfaces, volume cloud, arrows, particle paths) and set them. "
                           "Omitted arguments stay.",
           {"region": (S, "object|all", False), "grid": (N, "48|64|96|128", False),
-           "planes": ("array", "contour planes, replacing the list: [{field, axis x|y|z, position 0..1 across the region, opacity 0.1..1}]; [] for none", False),
+           "planes": ("array", "contour planes, replacing the list: [{field, axis x|y|z, position 0..1 across the region, opacity 0.1..1, range [lo, hi] (omit: automatic)}]; [] for none", False),
+           "volume_range": ("array", "[lo, hi] colour range of the cloud; [] automatic", False),
+           "vectors_range": ("array", "[lo, hi] colour range of the arrows; [] automatic", False),
+           "streams_range": ("array", "[lo, hi] colour range of the paths; [] automatic", False),
+           "streams_animate": (B, "dots moving along the paths", False), "streams_speed": (N, "0.1..4: playback speed of the dots", False),
            "iso": (B, "vortex surfaces (Q-criterion) on/off", False), "iso_k": (N, "2..60: weaker vortices shown", False), "iso_color": (S, "field the surfaces are coloured by", False),
            "iso_gap": (N, "keep clear of walls, mm", False), "iso_smooth": (N, "0..3", False),
            "volume": (B, "volume rendering on/off", False), "volume_field": (S, "field of the cloud", False), "volume_density": (N, "0.5..30", False),
@@ -653,6 +661,28 @@ class Control(QObject):
         R("results.line_minmax", "Plot the field along the line from its lowest to its highest value.", {},
           lambda: (rp().line_min_max(), {"line": {k: v for k, v in (rp().line_data or {}).items() if k not in ("values", "s")}})[1])
         R("results.clear_probes", "Remove the pinned values and the line plot.", {}, lambda: (rp().clear_probes(), {"cleared": True})[1])
+        def video(path, fps=None, orbit=None):
+            return {"video": rp().record_video(path, fps, orbit)}
+        R("results.video", "Save an MP4 video of what is shown: every saved time of a transient result, or a turntable of a steady one.",
+          {"path": (S, "full path of the .mp4 file", True), "fps": (N, "frames per second (default: the time bar's)", False),
+           "orbit": (N, "degrees the camera turns over the video (default: the time bar's; a turntable turns 360)", False)}, video)
+
+        def play(on=True):
+            tb = rp().timebar
+            if not tb.transient:
+                raise ValueError("This result has no saved times to play (it is steady)")
+            self._set(self._w("results.time.play"), "results.time.play", bool(on))
+            return {"playing": tb.play.isChecked(), "time_index": tb.index}
+        R("results.play", "Play (or pause) the saved times of a transient result.", {"on": (B, "default true", False)}, play)
+        R("results.part", "Show or hide one part (result region) of the drawing.",
+          {"name": (S, "part name (state: the tick boxes under Model)", True), "visible": (B, "default true", False)},
+          lambda name, visible=True: (rp().set_part_visible(name, visible), {"hidden": rp().hidden_regions()})[1])
+        R("results.temperature_limit", "Set the allowed temperature (°C) the parts bars compare against; omit or null to clear it.",
+          {"value": (N, "°C", False)}, lambda value=None: {"limit": rp().set_tlimit(value)})
+        R("results.mesh_check", "Start the mesh-sensitivity check: levels 1 (one preset finer) or 2 (three levels, grid-convergence index); a job.",
+          {"levels": (N, "1 or 2", False)}, lambda levels=1: {"job": rp().mesh_check(int(levels)).id})
+        R("results.model_check", "Cooling studies: solve the same mesh with the other flow model and compare; a job.", {},
+          lambda: {"job": rp().model_check().id})
         R("results.export", "Write the results to a file: format report (HTML) | csv | vtk.",
           {"format": (S, "report|csv|vtk", True), "path": (S, "full path of the file", True)},
           lambda format, path: {"file": rp().export(format, path)})
@@ -797,8 +827,19 @@ class Control(QObject):
         return {"color": self.win.panels["mesh"].color, "cut": self.win.panels["mesh"].axis or "off", "position": self.win.panels["mesh"].frac}
 
     def _results(self, field=None, colormap=None, reverse=None, bands=None, deform=None, edges=None, animate=None, scale=None, range=None,
-                 minmax=None, section=None, section_pos=None, contours=None, contour_lines=None, contour_levels=None, contour_labels=None):
+                 minmax=None, section=None, section_pos=None, contours=None, contour_lines=None, contour_levels=None, contour_labels=None,
+                 opacity=None, outline=None, hide_air=None, time=None):
         panel = self.win.panels["results"]
+        if time is not None:
+            panel.timebar.set_index(int(time))
+        if opacity is not None:
+            self._set(self._w("results.opacity"), "results.opacity", int(round(min(max(float(opacity), 0.1), 1.0) * 100)))
+        if outline is not None:
+            self._set(self._w("results.deform_outline"), "results.deform_outline", bool(outline))
+        if hide_air is not None:
+            if not panel.hide_air.isVisibleTo(panel):
+                raise ValueError("Hide the air is for cooling studies (they have an air box)")
+            self._set(self._w("results.hide_air"), "results.hide_air", bool(hide_air))
         if section_pos is not None:
             self._set(self._w("results.section.pos"), "results.section.pos", int(round(float(section_pos) * 1000)))
         if section is not None:
@@ -829,7 +870,10 @@ class Control(QObject):
                 self._set(self._w("results.range.max"), "results.range.max", str(range[1]))
             else:
                 self._set(self._w("results.range.auto"), "results.range.auto", True)
-        return {k: self._value(self._w(f"results.{k}")) for k in ("field", "colormap", "reverse", "bands", "deform", "edges", "minmax")}
+        out = {k: self._value(self._w(f"results.{k}")) for k in ("field", "colormap", "reverse", "bands", "deform", "edges", "minmax")}
+        out.update(opacity=panel.opacity.value() / 100.0, outline=panel.outline.isChecked(), time_index=panel.timebar.time_index(),
+                   times=len(panel.timebar.times), hidden=panel.hidden_regions())
+        return out
 
     def _flow(self, **kw):
         panel = self.win.panels["results"]
@@ -890,6 +934,12 @@ class Control(QObject):
                     data(f.par_seed, v)
                 elif k == "streams_steps":
                     f.par_steps.setValue(int(v))
+                elif k == "streams_animate":
+                    f.par_anim.setChecked(bool(v))
+                elif k == "streams_speed":
+                    f.par_speed.setValue(int(round(float(v) * 10)))
+                elif k in ("volume_range", "vectors_range", "streams_range"):
+                    f.set_scale(k.split("_")[0], *(list(v)[:2] if v else (None, None)))
         finally:
             f._quiet = False
         f.changed.emit()
