@@ -29,6 +29,7 @@ import vtkmodules.vtkRenderingOpenGL2  # noqa: F401  (the OpenGL back end)
 import vtkmodules.vtkRenderingFreeType  # noqa: F401
 
 from . import colormaps, theme
+from .gizmo import RotateGizmo
 from .legend import Legend
 from .picking import FaceIndex, locator_for
 from .viewtools import ViewBar
@@ -119,6 +120,8 @@ class Viewport(QWidget):
         self._overlay_index = None          # ... and over the drawn result surface
         self.edge_actors: list = []
         self.mark_actors: list = []         # selection, hover and tint highlights
+        self.gizmo = RotateGizmo(self)      # the rings that turn the model, its preview and the align arrow (gizmo.py)
+        self._gizmo_drag = False
         self.label_actors: list = []        # text hung on the model (what a boundary condition carries)
         self.arrow_actors: list = []        # loads and gravity as arrows
         self._label_items: list = []
@@ -283,6 +286,7 @@ class Viewport(QWidget):
             if a is not None:
                 self.ren.AddActor(a)
                 self.mark_actors.append(a)
+        self.gizmo.apply_preview()          # (a highlight is turned with the model while the orientation is previewed)
 
     # ------------------------------------------------------------------ values on the drawn result
     def extrema(self):
@@ -515,8 +519,6 @@ class Viewport(QWidget):
     def click_face(self, fid: int, add: bool = False):
         """What a click on a face does: tell the panels (facePicked) and, in face mode, change the selection (Ctrl/Shift adds or removes
         one face; a plain click selects just that face; a click on nothing clears it)."""
-        if fid >= 0:
-            self.facePicked.emit(int(fid), bool(add))
         if self.pick_mode == "face":
             sel = list(self.selection)
             if fid < 0:
@@ -527,6 +529,8 @@ class Viewport(QWidget):
                 sel = [int(fid)]
             self.set_selection(sel)
             self.selectionChanged.emit(list(self.selection))
+        if fid >= 0:                               # (after the selection changed: a panel may then show another one, as the align step does)
+            self.facePicked.emit(int(fid), bool(add))
 
     def click_at(self, x: float, y: float, add: bool = False):
         """A click at pixel (x, y) of the 3D view (as the mouse would): what is hit, or None."""
@@ -534,9 +538,9 @@ class Viewport(QWidget):
         if h is None:
             self.click_face(-1, add)
             return None
+        self.last_hit = h                          # (before the click is announced: the panel reads the point on the face from it)
         if h["kind"] == "face":
             self.click_face(h["face"], add)
-        self.last_hit = h
         if self.pick_mode == "point":
             self.pointPicked.emit(*h["point"])
         return h
@@ -558,6 +562,10 @@ class Viewport(QWidget):
     # (the mouse: a press and release that hardly moved is a click, anything else is the camera being turned)
     def _on_press(self, obj, event):
         self._press = tuple(self.iren.GetEventPosition())
+        if self.gizmo.press(self._press[0], self.iren.height() - 1 - self._press[1]):    # a ring is taken: it turns the model, the camera stays
+            self._gizmo_drag = True
+            self.iren.SetInteractorStyle(None)
+            return
         i = self._label_at(*self._press) if self._label_state and self._style is not None else None
         if i is not None:                                   # a label is taken: it moves with the mouse and the camera stays where it is
             self._drag = (i, self._press, self._label_state[i]["off"], self._style)
@@ -565,6 +573,13 @@ class Viewport(QWidget):
 
     def _on_release(self, obj, event):
         p, self._press = self._press, None
+        if self._gizmo_drag:
+            self._gizmo_drag = False
+            q = self.iren.GetEventPosition()
+            self.gizmo.release(q[0], self.iren.height() - 1 - q[1], bool(self.iren.GetShiftKey()))
+            if self._style is not None:
+                self.iren.SetInteractorStyle(self._style)
+            return
         if self._drag is not None:
             if self._drag[3] is not None:
                 self.iren.SetInteractorStyle(self._drag[3])
@@ -580,6 +595,9 @@ class Viewport(QWidget):
 
     def _on_move(self, obj, event):
         q = self.iren.GetEventPosition()
+        if self._gizmo_drag:
+            self.gizmo.drag_to(q[0], self.iren.height() - 1 - q[1], bool(self.iren.GetShiftKey()))
+            return
         if self._drag is not None:
             i, p0, off0, _ = self._drag
             self.move_label(i, off0[0] + q[0] - p0[0], off0[1] + q[1] - p0[1])
@@ -590,6 +608,8 @@ class Viewport(QWidget):
         if now - self._hover_t < 0.05:
             return
         self._hover_t = now
+        if self.gizmo.on and self.gizmo.hover_at(q[0], self.iren.height() - 1 - q[1]) is not None:
+            return                                          # (over a ring: the cursor is a hand, no face is hovered)
         over = bool(self._label_state) and self._label_at(*q) is not None        # (the cursor says that a label can be dragged)
         self.iren.setCursor(Qt.SizeAllCursor) if over else self.iren.unsetCursor()
         self.hover_at(q[0], self.iren.height() - 1 - q[1])
@@ -698,6 +718,7 @@ class Viewport(QWidget):
             self.ren.AddActor(ea)
             self.edge_actors.append(ea)
         self._rebuild_marks()
+        self.gizmo.apply_preview()
         self.render()
 
     def _air_box(self, faces: list):

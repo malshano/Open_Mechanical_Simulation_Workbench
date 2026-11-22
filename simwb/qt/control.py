@@ -692,6 +692,24 @@ class Control(QObject):
           lambda mode: (win.view.set_pick_mode(None if mode in ("none", "") else mode), {"pick_mode": win.view.pick_mode})[1])
         R("view.edges", "Show or hide the edges and face outlines of the model.", {"visible": (B, "default true", False)},
           lambda visible=True: (win.view.viewbar.edges.setChecked(bool(visible)), {"edges": win.view.edges_on})[1])
+        from .panels import geometry as _geometry
+        _geometry.register_actions(self)                       # (geometry.* : orientation, rings, align a face)
+        def view_drag(x0, y0, x1, y1, shift=False, steps=8):
+            """A real mouse drag on the 3D view (Qt events to the interactor), needs the OpenGL window."""
+            from PySide6.QtCore import QPoint, Qt as _Qt
+            from PySide6.QtTest import QTest
+            if win.view.rw is None:
+                raise ValueError("The 3D view has no OpenGL window here (SIMWB_NO_GL): use geometry.ring_drag")
+            w, mod = win.view.iren, (_Qt.ShiftModifier if shift else _Qt.NoModifier)
+            QTest.mousePress(w, _Qt.LeftButton, mod, QPoint(int(x0), int(y0)))
+            for k in range(1, int(steps) + 1):
+                QTest.mouseMove(w, QPoint(int(x0 + (x1 - x0) * k / steps), int(y0 + (y1 - y0) * k / steps)))
+                self.app.processEvents()
+            QTest.mouseRelease(w, _Qt.LeftButton, mod, QPoint(int(x1), int(y1)))
+            return {"gizmo": win.view.gizmo.describe(), "camera": win.view.camera()}
+        R("view.drag", "Drag the mouse over the 3D view from one pixel to another (turns the camera, or a rotation ring if it starts on one); "
+          "needs the OpenGL window.", {"x0": (N, "pixel x", True), "y0": (N, "pixel y", True), "x1": (N, "pixel x", True), "y1": (N, "pixel y", True),
+                                       "shift": (B, "Shift held (rings snap to 15 degrees)", False)}, view_drag)
         R("view.picture", "Save the 3D view with its colour scale as a PNG.", {"path": (S, "full path of the .png", True)},
           lambda path: (win.view.picture(path), {"file": path})[1])
         def set_theme(mode):
