@@ -308,7 +308,7 @@ class MeshPanel(_Panel):
         j = P.JOBS.latest(self.engine.pid, "mesh") if self.engine.pid else None
         running = bool(j and j.status == "running")
         geo = st["geometry"].get("status") == "ready"
-        self.gen.setEnabled(not running and geo)
+        self.gen.setEnabled(not running)                    # (without geometry it stays pressable: the click says what is missing)
         self.gen.setToolTip("Meshing is running" if running else "Make the cells of the model with these settings" if geo
                             else "Not yet: import the geometry first (step 1, Geometry)")
         if running:

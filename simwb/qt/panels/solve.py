@@ -676,6 +676,8 @@ class SolvePanel(_Panel):
                 notes.append("Fix before solving:<br>" + "<br>".join("• " + b for b in blockers))
             if st["solve"].get("status") == "interrupted" and not self.running:
                 notes.append("The last run was stopped before it finished. Continue it below, or run again.")
+        if blockers and meshed and not self.running and not getattr(self, "done", False):
+            self.state.setText("Before it can run: " + blockers[0] + (f" (and {len(blockers) - 1} more: see above)" if len(blockers) > 1 else ""))
         self.note.setText("<br>".join(notes))
         self.note.setVisible(bool(notes))
         self.note.setStyleSheet(f"color: {t['warn_text']};")

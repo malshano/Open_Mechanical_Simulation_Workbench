@@ -328,7 +328,8 @@ def register(ctl):
         ctl._click("solve.casefiles.show")
         return eng.project().case_files()
 
-    def case_file(path, text=None, revert=False):
+    def case_file(dictionary, text=None, revert=False):
+        path = dictionary
         p = sp()
         _open(ctl, "solve.advanced.toggle")
         p.open_case_file(path)
@@ -374,10 +375,10 @@ def register(ctl):
                         "all to the defaults.", {"values": ("object", "{key: value}", False), "reset": ("boolean", "reset to defaults first", False)},
       advanced)
     R("solve.case_files", "Write the OpenFOAM case files as the next run would (a preview) and list them.", {}, case_files)
-    R("solve.case_file", "Open an OpenFOAM case file in the editor; with text, save your version (used on every run); with revert, go back "
-                         "to the generated file.",
-      {"path": (S, "file inside the case, e.g. system/fvSchemes", True), "text": (S, "the new file text", False),
-       "revert": ("boolean", "back to the generated file", False)}, case_file)
+    R("solve.case_file", "Open an OpenFOAM case dictionary in the editor; with text, save your version (used on every run); with revert, "
+                         "go back to the generated one.",
+      {"dictionary": (S, "the dictionary inside the case, e.g. system/fvSchemes", True), "text": (S, "its new text", False),
+       "revert": ("boolean", "back to the generated version", False)}, case_file)
     R("solve.case_zip", "Save the study's OpenFOAM case folder as a zip file.", {"path": (S, "where to write the .zip", True)}, zip_case)
     R("software.install", "Check for the solver programs (recheck) or install one: openfoam or calculix (a download; a job).",
       {"name": (S, "openfoam|calculix", False), "recheck": ("boolean", "look for the programs again", False)}, software)

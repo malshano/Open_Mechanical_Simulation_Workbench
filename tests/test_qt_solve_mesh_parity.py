@@ -237,10 +237,10 @@ def test_advanced_numerics_reset_and_case_files(flow, monkeypatch):
     assert c.do("solve.advanced", {"reset": True})["result"]["foam_advanced"] == {}
     assert c.do("solve.case_files")["result"]["files"] == ["system/fvSchemes"]
     assert c.widget_do("solve.casefile.system_fvSchemes")["visible"]
-    d = c.do("solve.case_file", {"path": "system/fvSchemes", "text": "ddtSchemes { default Euler; }\n"})["result"]
+    d = c.do("solve.case_file", {"dictionary": "system/fvSchemes", "text": "ddtSchemes { default Euler; }\n"})["result"]
     assert d["overridden"] and "Euler" in d["text"]
     assert c.widget_do("solve.casefile.revert")["enabled"] is True
-    d = c.do("solve.case_file", {"path": "system/fvSchemes", "revert": True})["result"]
+    d = c.do("solve.case_file", {"dictionary": "system/fvSchemes", "revert": True})["result"]
     assert not d["overridden"] and "steadyState" in d["text"]
 
 
