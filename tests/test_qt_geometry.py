@@ -32,7 +32,7 @@ def test_the_import_card_then_the_file_card(plate):
             "geometry.turn.z-90", "geometry.turn.z+90", "geometry.turn.axis", "geometry.turn.degrees", "geometry.turn.apply",
             "geometry.next"} <= ids
     assert plate.widget_do("geometry.import")["text"] == "Replace…"
-    assert "geometry.turn.reset" not in ids                                           # nothing to reset yet
+    assert not plate.widget_do("geometry.turn.reset")["enabled"]                      # nothing to reset yet (it says why in its tooltip)
     assert plate.widget_do("geometry.info")["value"].endswith("bodies")
     assert plate.widget_do("geometry.next")["enabled"] is True
     bodies = [i for i in ids if i.startswith("geometry.body.") and i.endswith(".eye")]
@@ -42,7 +42,9 @@ def test_the_import_card_then_the_file_card(plate):
 def test_turning_and_resetting(plate):
     c = plate
     before = box(c)
-    c.widget_do("geometry.turn.z+90", "click")
+    c.widget_do("geometry.turn.z+90", "click")                                       # a PREVIEW first (the rings, the web version's way) ...
+    assert not c.engine.state()["geometry"].get("rotation")
+    c.widget_do("geometry.rotate.apply", "click")                                     # ... then Apply orientation rebuilds the geometry
     wait(c)
     after = box(c)
     assert np.allclose(sorted(after), sorted(before), rtol=1e-3) and abs(after[0] - before[1]) < 1e-6 * 100 and abs(after[1] - before[0]) < 1e-6 * 100
@@ -54,6 +56,7 @@ def test_turning_and_resetting(plate):
     c.widget_do("geometry.turn.axis", "set", "x")
     c.widget_do("geometry.turn.degrees", "set", "45")
     c.widget_do("geometry.turn.apply", "click")
+    c.widget_do("geometry.rotate.apply", "click")
     wait(c)
     assert c.engine.state()["geometry"].get("rotation")
 
@@ -67,12 +70,13 @@ def test_a_picked_flat_face_is_laid_on_a_plane(plate):
     assert c.state()["view"]["pick_mode"] == "face"
     c.do("view.pick_face", {"id": side["id"]})                                       # the click on the face
     assert c.state()["view"]["selection"] == [side["id"]]
-    info = c.widget_do("geometry.align.done")                                        # the choice of planes is offered
+    c.widget_do("geometry.align.done")                                               # the choice of planes is offered
     for t in ("+x", "-x", "+y", "-y", "+z", "-z"):
         assert c.widget_do(f"geometry.align.to.{t}")["enabled"]
     star = [w["text"] for w in c.widgets("geometry.align.to.")["widgets"] if "★" in w["text"]]
     assert len(star) == 1                                                            # the nearest plane is marked
-    c.widget_do("geometry.align.to.+z", "click")
+    c.widget_do("geometry.align.to.+z", "click")                                     # previews the turn ...
+    c.widget_do("geometry.rotate.apply", "click")                                     # ... Apply orientation rebuilds
     wait(c)
     n = c.engine.project().faces()
     after = next(f for f in n if f["surface_type"] == "Plane" and abs(f["normal"][2]) > 0.99)
@@ -83,17 +87,19 @@ def test_a_picked_flat_face_is_laid_on_a_plane(plate):
     assert c.state()["view"]["selection"] == []                                      # (done: the choice is cleared)
 
 
-def test_a_face_that_cannot_be_aligned_says_why(ctl):
+def test_a_face_that_curves_right_round_needs_a_click_and_says_so(ctl):
     c = ctl
-    c.do("study.example", {"study": "static_structural"})          # (the bracket has bolt holes: curved faces)
+    c.do("study.example", {"study": "static_structural"})          # (the bracket has bolt holes: whole cylinders)
     wait(c)
-    curved = [f for f in c.engine.project().faces() if f["surface_type"] != "Plane"]
-    assert curved
+    cyl = next(f for f in c.engine.project().faces() if f["surface_type"] == "Cylinder")
     c.widget_do("geometry.align.start", "click")
-    c.do("view.pick_face", {"id": curved[0]["id"]})
-    notes = [w for w in c.widgets("geometry.")["widgets"] if w["class"] == "QLabel" and "flat" in str(w["text"]).lower()]
-    assert not [w for w in c.widgets("geometry.align.to.")["widgets"]]               # no plane is offered for a curved face
-    assert c.win.panels["geometry"].note and "flat" in c.win.panels["geometry"].note.lower()
+    c.do("view.pick_face", {"id": cyl["id"]})                      # (no point on it: its average direction cancels out)
+    assert not c.widgets("geometry.align.to.")["widgets"]
+    assert "right round" in c.win.panels["geometry"].note and c.widget_do("geometry.notice")["visible"]
+    v = np.asarray(cyl["mesh"]["vertices"]).reshape(-1, 3)
+    c.do("geometry.align_pick", {"face": cyl["id"], "x": v[3][0], "y": v[3][1], "z": v[3][2]})      # a click on it: the normal there is used
+    assert c.widgets("geometry.align.to.")["widgets"]
+    assert c.widget_do("geometry.align.mode.point")["enabled"] and not c.widget_do("geometry.align.mode.average")["enabled"]
 
 
 def test_hide_a_part_and_leave_the_step(plate):
@@ -117,6 +123,7 @@ def test_the_geometry_panel_is_legible(plate, name):
     f = next(f for f in c.engine.project().faces() if f["surface_type"] == "Plane" and f.get("kind") not in ("farfield", "enclosure") and not f.get("interface"))
     c.do("view.pick_face", {"id": f["id"]})
     c._settle()
+    c.app.processEvents()
     weak, seen = [], 0
     for i, o in visible_controls(c):
         seen += 1

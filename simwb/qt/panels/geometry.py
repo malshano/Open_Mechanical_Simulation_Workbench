@@ -12,18 +12,15 @@ from ... import project as P
 from .. import theme
 from ..ids import wid
 from .common import _h, _muted, _Panel, clear_layout
+from ..align import AlignController
 from ..forms import fmt_num
+from ..airvolume import AirVolumeBox
+from ..cadedits import CadEditsBox
+from ..orient import OrientController, _item, _plain
 
 SCALES = [(1.0, "×1 (STL/OBJ: mm)"), (0.001, "×0.001"), (25.4, "inch → mm  ×25.4"), (100.0, "×100"), (1000.0, "×1000")]
 AXES = ("+x", "-x", "+y", "-y", "+z", "-z")
 PLANES = (("XY plane", ("+z", "-z")), ("YZ plane", ("+x", "-x")), ("XZ plane", ("+y", "-y")))
-
-
-def _item() -> QFrame:
-    f = QFrame()
-    f.setObjectName("item")
-    f.setAttribute(Qt.WA_StyledBackground, True)
-    return f
 
 
 def nearest_axis(normal) -> str:
@@ -36,68 +33,115 @@ class GeometryPanel(_Panel):
     def __init__(self, engine, parent=None):
         super().__init__(engine, parent)
         self._sig = None
-        self.align_pick = False        # waiting for the face to align
-        self.align: dict | None = None  # {face, info, wall, away}
-        self.align_wall_pick = False
-        self.note = ""
+        self._st = None
+        self.orient = OrientController(self)
+        self.align = AlignController(self)
+        self.cad = CadEditsBox(self)
+        self.air = AirVolumeBox(self)
+        self.target_note = ""
         self.holder = QVBoxLayout()
         self.holder.setSpacing(10)
         self.v.addLayout(self.holder)
         self.v.addStretch(1)
 
+    # old names (the tests and the API read them)
+    @property
+    def align_pick(self) -> bool:
+        return self.align.pick
+
+    @property
+    def note(self) -> str:
+        return _plain(self.align.notice[1]) if self.align.notice else ""
+
+    def scroll_top(self):
+        """Show the top of the panel (the bar with Apply / Cancel and the align box are there)."""
+        try:
+            if self.win is not None:
+                self.win.stack.currentWidget().verticalScrollBar().setValue(0)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def fail(self, e):
+        self._fail(e)
+
+    def rebuild(self):
+        """Draw the panel again now (a preview turn or an alignment choice changed what it shows)."""
+        self._sig = None
+        if self.engine.pid:
+            self.refresh(self.engine.state())
+
     # ------------------------------------------------------------------ picking (the face to align)
     def bind(self, win):
         super().bind(win)
         win.view.facePicked.connect(self._face_picked)
+        self.align.connect(win.view)
 
     def shown(self):
-        self.view.set_pick_mode("face" if (self.align_pick or self.align_wall_pick) else None)
+        self.view.set_pick_mode("face" if self.align.picking or self.align.face else None)
 
     def left(self):
+        if self.orient.pending:                                   # (as the web version does: a previewed turn is applied on leaving)
+            try:
+                self.orient.apply()
+            except Exception as e:  # noqa: BLE001
+                self._fail(e)
+        self.align.end()
+        self.view.gizmo.clear()
         self.view.set_pick_mode(None)
         self.view.set_selection([])
-        self._end_align()
 
     def _face_picked(self, fid, add):
         if self.win is None or self.win.step != "geometry":
             return
-        pr = self.engine.project()
-        try:
-            if self.align_wall_pick and self.align:
-                pr.ref_info(fid, exclude=self.align["face"])          # (raises if this cannot be the reference)
-                self.align["wall"] = fid
-                self.align_wall_pick = False
-                self._align_to_wall()
-            elif self.align_pick:
-                info = pr.align_info(fid)
-                self.align = {"face": fid, "info": info, "wall": None, "away": False}
-                self.align_pick = False
-                self.view.set_selection([fid])
-            else:
-                return
-        except Exception as e:  # noqa: BLE001
-            self.note = str(e)
-        self._sig = None
-        self.engine.changed.emit()
+        if self.align.picking:
+            self.align.face_picked(int(fid))
 
-    def _end_align(self):
-        self.align_pick = self.align_wall_pick = False
-        self.align = None
-        self.note = ""
-        self._sig = None
-        if self.view is not None:
-            self.view.set_pick_mode(None)
-            self.view.set_selection([])
+    def note_target(self, had_pending: bool):
+        """What the gizmo acts on changed: say so (a preview that was pending went)."""
+        self.target_note = ("The preview was cancelled because the gizmo now acts on something else." if had_pending else "")
+
+    def draw_marks(self):
+        """The gizmo round what it acts on, the previewed change and the arrow on the face being aligned (after the model was drawn)."""
+        st, v = self._st, self.view
+        if v is None:
+            return
+        g = (st or {}).get("geometry") or {}
+        info = g.get("info") or {}
+        bb = info.get("parts_bbox") or info.get("bbox")
+        busy = any((j or {}).get("status") == "running" for j in ((st or {}).get("jobs") or {}).values())
+        o = self.orient
+        if o.target is not None:
+            b = next((b for b in (st or {}).get("body_list", []) if b["id"] == o.target["id"] and b["name"] == o.target["name"]), None)
+            if b is None:                                          # (the body is gone or renamed: back to the whole model)
+                o.target = None
+            else:
+                bb = b["bbox"]
+        if bb:
+            o.size = max(bb[3] - bb[0], bb[4] - bb[1], bb[5] - bb[2])
+            o.bound = 0.5 * float(np.linalg.norm([bb[3] - bb[0], bb[4] - bb[1], bb[5] - bb[2]]))
+            o.pivot = np.asarray(g.get("pivot") if (o.target is None and g.get("pivot")) else [(bb[k] + bb[k + 3]) / 2 for k in range(3)], float)
+        o.preview_done(busy)
+        if g.get("status") == "ready" and bb and o.rings_on and not busy:
+            if v.gizmo.drag is None:
+                v.gizmo.set(o.pivot, o.size, o.on_handle, o.target["id"] if o.target else None, o.bound)
+        else:
+            v.gizmo.clear()
+        o.reapply()
+        self.align.draw_marker()
 
     # ------------------------------------------------------------------ the panel
     def refresh(self, st):
         if not st:
             return
+        self._st = st
         g = st["geometry"]
         busy = any((j or {}).get("status") == "running" for j in (st.get("jobs") or {}).values())
-        sig = repr([st["study"], g.get("status"), g.get("rotation"), g.get("original_name"), g.get("error"), busy,
-                    [(b["id"], b["name"], b["role"]) for b in st["body_list"]], self.align_pick, self.align_wall_pick,
-                    None if not self.align else (self.align["face"], self.align["wall"], self.align["away"]), self.note,
+        o, al = self.orient, self.align
+        sig = repr([st.get("edits"), self.cad.op, self.cad.open, self.cad.notice, self.air.notice, self.air.key, self.air.dirty, st.get("domain"),
+                    sorted(self.win.hidden_parts) if self.win is not None else [], g.get("translation"), self.target_note, o.target, st["study"], g.get("status"), g.get("rotation"), g.get("original_name"), g.get("error"), busy,
+                    [(b["id"], b["name"], b["role"]) for b in st["body_list"]], al.describe(),
+                    o.R is not None and o.R.round(6).tolist(), o.shift.round(7).tolist(), [(s_["kind"], s_["axis"], str(np.round(s_["value"], 3))) for s_ in o.steps],
+                    o.rings_on,
                     theme.effective(), sorted(self.win.hidden_bodies) if self.win is not None else []])
         if sig == self._sig:
             return
@@ -108,8 +152,16 @@ class GeometryPanel(_Panel):
         if g.get("error"):
             self.holder.addWidget(_muted(f"The last import or edit failed: {g['error']}"))
         if g.get("status") == "ready":
+            can_edit = (g.get("info") or {}).get("source_format") not in ("stl", "obj")
+            self.orient.build_bar(self.holder, busy, can_edit)
+            if self.align.active or self.align.picking or self.align.notice:
+                self.align.build(self.holder, busy)
             self._file_card(st, g, busy)
             self._bodies(st)
+            self.cad.build(self.holder, st, busy)
+            if st["study"] == "external_aero":
+                self._parts(st)
+            self.air.build(self.holder, st, busy)
         else:
             self._import_card(spec, busy)
         nxt = wid(QPushButton("Next: setup →"), "geometry.next")
@@ -188,51 +240,8 @@ class GeometryPanel(_Panel):
         self.info = wid(_muted(f"{st['face_count']} faces, {len(st['body_list'])} bod{'y' if len(st['body_list']) == 1 else 'ies'}"),
                         "geometry.info")
         v.addWidget(self.info)
-        v.addWidget(_h("Orientation"))
-        v.addWidget(_muted("Turn the parts about their middle to line them up with the axes (for example the nose along +x, the top along +z)"
-                           + (" · rotated" if g.get("rotation") else "") + "."))
-        al = wid(QPushButton("⬓  Align a face to a plane…"), "geometry.align.start")
-        al.setObjectName("ghostBorder")
-        al.setEnabled(not busy)
-        al.setToolTip("Click a flat face of the model, then choose the coordinate plane to lay it on")
-        al.clicked.connect(self._start_align)
-        v.addWidget(al)
-        self._align_box(v, busy)
-        grid = QGridLayout()
-        grid.setSpacing(4)
-        for r, ax in enumerate("xyz"):
-            for c, deg in enumerate((-90, 90)):
-                b = wid(QPushButton(f"{ax.upper()} {'−' if deg < 0 else '+'}90°"), f"geometry.turn.{ax}{'-' if deg < 0 else '+'}90")
-                b.setObjectName("ghostBorder")
-                b.setEnabled(not busy)
-                b.setToolTip(f"Turn {deg:+d}° about {ax} (right-handed)")
-                b.clicked.connect(lambda _=False, ax=ax, deg=deg: self.turn(ax, deg))
-                grid.addWidget(b, r, c)
-        v.addLayout(grid)
-        row = QHBoxLayout()
-        self.axis = wid(QComboBox(), "geometry.turn.axis")
-        self.axis.addItems(["x", "y", "z"])
-        self.axis.setCurrentText("z")
-        self.axis.setToolTip("Axis to turn about")
-        self.deg = wid(QLineEdit("45"), "geometry.turn.degrees")
-        self.deg.setValidator(QDoubleValidator(-360, 360, 4, self.deg))
-        self.deg.setToolTip("Angle in degrees")
-        go = wid(QPushButton("Turn"), "geometry.turn.apply")
-        go.setObjectName("ghostBorder")
-        go.setEnabled(not busy)
-        go.setToolTip("Turn the model by this angle about this axis")
-        go.clicked.connect(lambda: self.turn(self.axis.currentText(), float(self.deg.text() or 0)))
-        row.addWidget(self.axis)
-        row.addWidget(self.deg)
-        row.addWidget(go)
-        v.addLayout(row)
-        if g.get("rotation"):
-            rs = wid(QPushButton("Reset orientation"), "geometry.turn.reset")
-            rs.setObjectName("ghostBorder")
-            rs.setEnabled(not busy)
-            rs.setToolTip("Back to the orientation the CAD file had")
-            rs.clicked.connect(lambda: self.turn(reset=True))
-            v.addWidget(rs)
+        can_edit = (g.get("info") or {}).get("source_format") not in ("stl", "obj")
+        self.orient.build(v, g, busy, bool(g.get("rotation") or g.get("translation")), st["body_list"], can_edit)
         self.holder.addWidget(card)
 
     def _import_replace(self):
@@ -244,121 +253,40 @@ class GeometryPanel(_Panel):
                 self._fail(e)
 
     def turn(self, axis=None, degrees=90.0, reset=False):
-        """Turn the parts about their middle (a job: the geometry is rebuilt)."""
+        """Turn the preview by `degrees` about an axis (or reset the orientation): what the turn buttons do."""
         try:
-            self.engine.project().rotate_geometry(axis, degrees, reset=reset)
-            self.note = ""
+            if reset:
+                self.orient.reset()
+            else:
+                self.orient.turn(axis, float(degrees))
         except Exception as e:  # noqa: BLE001
-            self.note = str(e)
             self._fail(e)
-        self._sig = None
-        self.engine.changed.emit()
 
-    # ---- align a face to a plane
-    def _start_align(self):
-        self.align = None
-        self.align_pick = True
-        self.align_wall_pick = False
-        self.note = ""
-        self.view.set_selection([])
-        self.view.set_pick_mode("face")
-        self._sig = None
-        self.engine.changed.emit()
-
-    def _align_box(self, v, busy):
-        if self.align_pick:
-            v.addWidget(_muted("Click a flat face of the model in the 3D view…"))
-        if self.note:
-            n = QLabel(self.note)
-            n.setWordWrap(True)
-            n.setStyleSheet(f"color: {theme.tokens()['warn_text']};")
-            v.addWidget(n)
-        a = self.align
-        if not a:
+    # ---- the parts of a flow study (its solids are parts of the air volume's boundary, not bodies of their own)
+    def _parts(self, st):
+        parts = self.engine.project().parts()
+        if not parts:
             return
-        info, near = a["info"], nearest_axis(a["info"]["normal"])
-        box = _item()
-        b = QVBoxLayout(box)
-        b.setContentsMargins(8, 6, 8, 6)
-        b.setSpacing(4)
-        lab = QLabel(f"<b>Face {a['face']}</b> ({fmt_num(info['area_m2'] * 1e6)} mm²) points {near.replace('-', '−')} now (★ = nearest). "
-                     "Choose the plane to lay it on:")
-        lab.setWordWrap(True)
-        b.addWidget(lab)
-        for plane, targets in PLANES:
-            row = QHBoxLayout()
-            row.addWidget(QLabel(plane))
-            for t in targets:
-                btn = wid(QPushButton(f"facing {t.replace('-', '−')}{' ★' if t == near else ''}"), f"geometry.align.to.{t}")
-                btn.setObjectName("ghostBorder")
-                btn.setEnabled(not busy)
-                btn.setToolTip(f"Lay the face on the {plane}, facing {t.replace('-', '−')}")
-                btn.clicked.connect(lambda _=False, t=t: self.align_to(t))
-                row.addWidget(btn)
-            b.addLayout(row)
-        b.addWidget(_muted("… or align it to a plane in the 3D view (a tunnel wall or another flat face):"))
-        wb = wid(QPushButton("Click the plane in the 3D view…" if self.align_wall_pick else "Pick the plane"), "geometry.align.wall")
-        wb.setObjectName("ghostBorder")
-        wb.setToolTip("Then click the face to line this one up with")
-        wb.clicked.connect(self._pick_wall)
-        b.addWidget(wb)
-        if a.get("wall") is not None:
-            b.addWidget(_muted(f"Plane: face {a['wall']}"))
-            row = QHBoxLayout()
-            for away, label, tip in ((False, "Same direction", "The face points the same way as the plane"),
-                                     (True, "Face to face", "The face points the opposite way")):
-                btn = wid(QPushButton(label), f"geometry.align.{'away' if away else 'same'}")
-                btn.setObjectName("ghostBorder")
-                btn.setToolTip(tip)
-                btn.clicked.connect(lambda _=False, away=away: self._align_to_wall(away))
-                row.addWidget(btn)
-            b.addLayout(row)
-        done = wid(QPushButton("Done"), "geometry.align.done")
-        done.setObjectName("ghostBorder")
-        done.setToolTip("Stop aligning")
-        done.clicked.connect(lambda: (self._end_align(), self.engine.changed.emit()))
-        b.addWidget(done, 0, Qt.AlignLeft)
-        v.addWidget(box)
-
-    def align_to(self, target: str):
-        """Lay the picked face on the plane that faces `target` (a job: the geometry is rebuilt)."""
-        if not self.align:
-            raise ValueError("Pick a face first (Align a face to a plane…)")
-        try:
-            self.engine.project().align_face(self.align["face"], target)
-            self.note = ""
-            self.align = None
-            self.view.set_selection([])
-        except Exception as e:  # noqa: BLE001
-            self.note = str(e)
-        self._sig = None
-        self.engine.changed.emit()
-
-    def _pick_wall(self):
-        self.align_wall_pick = True
-        self.view.set_pick_mode("face")
-        self._sig = None
-        self.engine.changed.emit()
-
-    def _align_to_wall(self, away=None):
-        a = self.align
-        if not a or a.get("wall") is None:
-            return
-        if away is not None:
-            a["away"] = bool(away)
-        try:
-            self.engine.project().align_face(a["face"], None, a["wall"], a["away"])
-            self.note = ""
-            self.align = None
-            self.view.set_selection([])
-        except Exception as e:  # noqa: BLE001
-            self.note = str(e)
-        self._sig = None
-        self.engine.changed.emit()
+        self.holder.addWidget(_h("Parts"))
+        self.holder.addWidget(_muted("Hide a part to see what is behind it (it stays in the model)."))
+        for i, p in enumerate(parts):
+            card = _item()
+            head = QHBoxLayout(card)
+            head.setContentsMargins(10, 6, 10, 6)
+            head.addWidget(QLabel(f"<b>{p['name']}</b>"), 1)
+            head.addWidget(_muted(" × ".join(fmt_num(x) for x in p["size_mm"]) + " mm"))
+            hid = p["name"] in self.win.hidden_parts
+            eye = wid(QPushButton("Show" if hid else "Hide"), f"geometry.part.{i}.eye")
+            eye.setObjectName("ghostBorder")
+            eye.setToolTip("Hide or show this part in the 3D view")
+            eye.clicked.connect(lambda _=False, n=p["name"]: self.win.toggle_part(n))
+            head.addWidget(eye)
+            self.holder.addWidget(card)
 
     # ---- the parts
     def _bodies(self, st):
         self.holder.addWidget(_h("Bodies"))
+        self.holder.addWidget(_muted("Press Move this body to let the gizmo turn and move one body on its own; Move all (above) puts it back on the whole model."))
         from ..viewport import BODY_COLORS
         for i, b in enumerate(st["body_list"]):
             card = _item()
@@ -375,6 +303,15 @@ class GeometryPanel(_Panel):
             head.addWidget(QLabel(f"<b>{b['name']}</b>"), 1)
             head.addWidget(_muted("air" if b["role"] == "fluid" else "solid"))
             if b["role"] == "solid":
+                mv = wid(QPushButton("Moving" if self.orient.target and self.orient.target["id"] == b["id"] else "Move this body"),
+                         f"geometry.body.{b['id']}.move")
+                mv.setObjectName("primary" if self.orient.target and self.orient.target["id"] == b["id"] else "ghostBorder")
+                can = (st["geometry"].get("info") or {}).get("source_format") not in ("stl", "obj")
+                mv.setEnabled(can)
+                mv.setToolTip("Let the gizmo turn and move just this body, leaving the others where they are" if can else
+                              "Moving one body needs a STEP file: an STL or OBJ model is a surface mesh (use Move all)")
+                mv.clicked.connect(lambda _=False, b=b: self.orient.set_target({"id": b["id"], "name": b["name"]}))
+                head.addWidget(mv)
                 eye = wid(QPushButton("Show" if b["id"] in self.win.hidden_bodies else "Hide"), f"geometry.body.{b['id']}.eye")
                 eye.setObjectName("ghostBorder")
                 eye.setToolTip("Hide or show this part in the 3D view")
@@ -385,3 +322,248 @@ class GeometryPanel(_Panel):
             size = " × ".join(fmt_num((bb[k + 3] - bb[k]) * 1000) for k in range(3))
             v.addWidget(_muted(f"{size} mm · {fmt_num(b['volume_cm3'])} cm³"))
             self.holder.addWidget(card)
+
+
+def register_actions(ctl):
+    """The Geometry step's operations as control-API actions: each drives the same state as the buttons and the mouse."""
+    win, R = ctl.win, ctl._reg
+    S, N, B = "string", "number", "boolean"
+
+    def gp():
+        if not ctl.engine.pid:
+            raise ValueError("No study is open")
+        win.go("geometry")
+        ctl._settle()
+        return win.panels["geometry"]
+
+    def state(p=None):
+        p = p or win.panels["geometry"]
+        o = p.orient
+        from ..orient import angle_of
+        return {"pending": o.pending, "steps": [{"kind": s["kind"], "axis": s["axis"], "value": s["value"]} for s in o.steps], "angles": o.angles(),
+                "move_mm": o.move_mm(), "matrix": None if o.R is None else np.asarray(o.R).round(9).tolist(), "readout": o.text(),
+                "turn_degrees": None if o.R is None else round(angle_of(o.R), 4), "acts_on": o.target["name"] if o.target else "all",
+                "gizmo": win.view.gizmo.describe(), "align": p.align.describe()}
+
+    def preview(axis, degrees):
+        if axis not in ("x", "y", "z"):
+            raise ValueError("axis must be x, y or z")
+        p = gp()
+        p.orient.turn(axis, float(degrees))
+        return state(p)
+
+    def move_preview(dx=0.0, dy=0.0, dz=0.0):
+        p = gp()
+        p.orient.move(float(dx), float(dy), float(dz))
+        return state(p)
+
+    def acts_on(body=None, id=None):
+        p = gp()
+        if body is None and id is None or str(body).lower() in ("all", "model", "whole"):
+            p.orient.set_target(None)
+        else:
+            bs = [b for b in ctl.engine.state()["body_list"] if b["role"] == "solid"]
+            b = next((b for b in bs if (id is not None and b["id"] == int(id)) or (body and body.lower() in b["name"].lower())), None)
+            if b is None:
+                raise ValueError(f"No such body. Bodies: {[(b['id'], b['name']) for b in bs]}")
+            p.orient.set_target({"id": b["id"], "name": b["name"]})
+        return state(p)
+
+    def handle_drag(handle, amount, shift=False):
+        """handle: rot:x | rot:y | rot:z (amount in degrees), move:x | move:y | move:z (mm), free (mm to the right in the view's plane)."""
+        p = gp()
+        win.update_view()
+        g = win.view.gizmo
+        if not g.on:
+            raise ValueError("The gizmo is not shown (Show gizmo, and wait until the geometry is rebuilt)")
+        kind, _, ax = str(handle).partition(":")
+        if kind == "rot" and ax in ("x", "y", "z"):
+            r = g.simulate_drag("xyz".index(ax), float(amount), bool(shift))
+        elif kind == "move" and ax in ("x", "y", "z"):
+            r = g.simulate_move("xyz".index(ax), float(amount), bool(shift))
+        elif kind == "free":
+            r = g.simulate_move(3, float(amount), bool(shift))
+        else:
+            raise ValueError("handle must be rot:x, rot:y, rot:z, move:x, move:y, move:z or free")
+        return {**state(p), "dragged": r}
+
+    def apply():
+        p = gp()
+        job = p.orient.apply()
+        return {**state(p), "job": job.to_dict(log_tail=0)}
+
+    def cancel():
+        p = gp()
+        p.orient.cancel()
+        return state(p)
+
+    R("geometry.rotate_preview", "Turn the PREVIEW of the model by an angle about x, y or z (what the turn buttons do); nothing is rebuilt until "
+      "geometry.rotate_apply. Turns add up.", {"axis": (S, "x|y|z", True), "degrees": (N, "right-handed angle", True)}, preview)
+    R("geometry.rotate_apply", "Apply the previewed turn (Apply orientation): rebuilds the geometry; a job (use wait).", {}, apply)
+    R("geometry.rotate_cancel", "Throw the previewed turn away (Cancel).", {}, cancel)
+    R("geometry.gizmo_drag", "Drag a handle of the gizmo in the 3D view with the mouse (synthetic: the press, moves and release go through the "
+      "same code as the real mouse): rot:x|rot:y|rot:z turns the preview by the angle (degrees), move:x|move:y|move:z moves it along the axis "
+      "(mm), free moves it in the view's plane (mm to the right). Shift snaps to 5 degrees / a round step.",
+      {"handle": (S, "rot:x|rot:y|rot:z|move:x|move:y|move:z|free", True), "amount": (N, "degrees (rot) or mm (move, free)", True),
+       "shift": (B, "Shift held", False)}, handle_drag)
+    R("geometry.ring_drag", "Drag a rotation ring (the same as geometry.gizmo_drag with rot:x ...).",
+      {"axis": (S, "x|y|z", True), "degrees": (N, "angle", True), "shift": (B, "Shift held", False)},
+      lambda axis, degrees, shift=False: handle_drag(f"rot:{axis}", degrees, shift))
+    R("geometry.move_preview", "Move the PREVIEW of the model by dx, dy, dz (mm): what the Move by fields do; applied with geometry.rotate_apply.",
+      {"dx": (N, "mm", False), "dy": (N, "mm", False), "dz": (N, "mm", False)}, move_preview)
+    R("geometry.acts_on", "Choose what the gizmo turns and moves: the whole model (omit body) or one body (name, or id).",
+      {"body": (S, "body name (part of it) or 'all'", False), "id": (N, "body id", False)}, acts_on)
+    R("geometry.rings", "Show or hide the rotation rings in the 3D view.", {"visible": (B, "default true", False)},
+      lambda visible=True: (gp(), setattr(win.panels["geometry"].orient, "rings_on", bool(visible)), win.panels["geometry"].rebuild(),
+                            win.update_view(), state())[-1])
+    R("geometry.state", "The previewed turn and the alignment in progress.", {}, lambda: state(gp()))
+
+    # ---- align a face
+    def align_start():
+        p = gp()
+        p.align.start()
+        return state(p)
+
+    def align_pick(face, x=None, y=None, z=None):
+        p = gp()
+        if not (p.align.picking or p.align.face):
+            p.align.start()
+        win.view.last_hit = None if x is None else {"kind": "face", "face": int(face), "point": [float(x), float(y), float(z)]}
+        win.view.click_face(int(face), False)                 # as a click on the face (at the point) would
+        return state(p)
+
+    def align_plane(facing):
+        p = gp()
+        p.align.choose_plane(facing)
+        return state(p)
+
+    def align_reference(kind, id=None, name=None, x=None, y=None, z=None):
+        p = gp()
+        a = p.align
+        if not a.face:
+            raise ValueError("Pick the face to turn first (geometry.align_pick)")
+        pr = ctl.engine.project()
+        if kind == "airwall":
+            walls = pr.air_walls()
+            if not walls:
+                raise ValueError("This study has no air volume")
+            w = next((w for w in walls if (id is not None and w["face"] == int(id)) or (name and name.lower() in w["name"].lower())), None)
+            if w is None:
+                raise ValueError(f"No such air volume wall. Walls: {[(w['face'], w['name']) for w in walls]}")
+            a.choose_ref_face(w["face"], w.get("point"), "wall")
+        elif kind == "face":
+            win.view.last_hit = None if x is None else {"kind": "face", "face": int(id), "point": [float(x), float(y), float(z)]}
+            if not a.ref_pick:
+                a.start_ref_pick()
+            win.view.click_face(int(id), False)
+        elif kind == "body":
+            bodies = a.entries()
+            b = next((b for b in bodies if (id is not None and str(b["key"]) == str(id)) or (name and name.lower() in b["name"].lower())), None)
+            if b is None:
+                raise ValueError(f"No such body. Bodies: {[(b['key'], b['name']) for b in bodies]}")
+            a.choose_body(b["key"])
+        else:
+            raise ValueError("kind must be face, airwall or body")
+        if a.ref is None and kind != "body":
+            raise ValueError(a.notice[1] if a.notice else "That face cannot be the plane")
+        return state(p)
+
+    def align_side(away=False):
+        p = gp()
+        p.align.set_side(bool(away))
+        return state(p)
+
+    def align_mode(mode, reference=False):
+        p = gp()
+        (p.align.set_ref_mode if reference else p.align.set_mode)(mode)
+        return state(p)
+
+    def align_end():
+        p = gp()
+        p.align.end()
+        p.rebuild()
+        return state(p)
+
+    R("geometry.align_start", "Align a face to a plane...: wait for a click on a face of the model.", {}, align_start)
+    R("geometry.align_pick", "Click a face of the model (optionally at a point, in m: the point is used for 'normal at the click' on a curved "
+      "face). Picks the face to turn, or the reference while one is being picked.",
+      {"face": (N, "face id", True), "x": (N, "x of the click", False), "y": (N, "y", False), "z": (N, "z", False)}, align_pick)
+    R("geometry.align_plane", "Lay the picked face on a coordinate plane: previews the turn.", {"facing": (S, "+x|-x|+y|-y|+z|-z (the way the face then points)", True)},
+      align_plane)
+    R("geometry.align_reference", "Choose what to lay the picked face against: an air volume wall (id = its face id, or name such as 'bottom'), a body "
+      "(lists its faces) or any face (id, optional click point x,y,z in m).",
+      {"kind": (S, "face|airwall|body", True), "id": (N, "face or body id", False), "name": (S, "wall or body name (part of it)", False),
+       "x": (N, "click x", False), "y": (N, "click y", False), "z": (N, "click z", False)}, align_reference)
+    R("geometry.align_side", "With a reference chosen: the face looks the same way as the plane (away false) or against it (away true).",
+      {"away": (B, "face to face / facing away", False)}, align_side)
+    R("geometry.align_mode", "For a curved face: use its average direction or the normal at the click.",
+      {"mode": (S, "average|point", True), "reference": (B, "for the reference face instead of the picked one", False)}, align_mode)
+    R("geometry.align_end", "Leave the alignment (Done).", {}, align_end)
+
+
+def register_more_actions(ctl):
+    """CAD edits, the air volume and the parts of the Geometry step as control-API actions (the same calls the buttons make)."""
+    win, R = ctl.win, ctl._reg
+    S, N, B = "string", "number", "boolean"
+
+    def gp():
+        if not ctl.engine.pid:
+            raise ValueError("No study is open")
+        win.go("geometry")
+        ctl._settle()
+        return win.panels["geometry"]
+
+    def cad_edit(action, edit=None, number=None):
+        p = gp()
+        job = p.cad.edit(action, edit, None if number is None else int(number))
+        return {"job": job.to_dict(log_tail=0), "edits": [e["text"] for e in ctl.engine.project().cad_edits()]}
+    R("geometry.cad_edit", "Change the CAD edits of the model (what the CAD edits buttons do): add (edit: {op, ...}), remove (number), undo (the last), "
+      "clear; a job (use wait). The geometry is kept as it was if the edit does not work.",
+      {"action": (S, "add|remove|undo|clear", True), "edit": ("object", "for add: the edit, e.g. {op: 'hole', body, at: [x,y,z], direction, diameter_mm}", False),
+       "number": (N, "for remove: the edit's number in the list", False)}, cad_edit)
+
+    def air(shape=None, flow_axis=None, span_axis=None, sizes=None, apply=False, fit=False, show_all=False, preset=None, mode=None, body=None):
+        p = gp()
+        a = p.air
+        if mode:
+            return {"job": a.set_mode(mode).to_dict(log_tail=0)}
+        if body is not None:
+            return {"job": a.set_body(int(body)).to_dict(log_tail=0)}
+        if preset:
+            return {"job": a.preset(preset).to_dict(log_tail=0)}
+        if shape:
+            return {"job": a.set_shape(shape).to_dict(log_tail=0)}
+        if flow_axis:
+            return {"job": a.set_flow(flow_axis).to_dict(log_tail=0)}
+        if span_axis:
+            return {"job": a.set_span(span_axis).to_dict(log_tail=0)}
+        if fit:
+            return {"job": a.fit().to_dict(log_tail=0)}
+        if show_all:
+            a.show_all()
+            return {"air_visible": win.chk_air.isChecked()}
+        a.spec(ctl.engine.state())
+        for k, mm in (sizes or {}).items():
+            a.set_size(k, float(mm))
+        if apply:
+            return {"job": a.apply().to_dict(log_tail=0)}
+        return {"draft": a.draft, "dirty": a.dirty}
+    R("geometry.air_volume", "The air volume of a flow or cooling study: shape (box|c_domain|cylinder), flow_axis (+x ...), span_axis, sizes {key: mm} "
+      "typed into the draft (box: min.0 max.0 min.1 max.1 min.2 max.2; c_domain: radius downstream span_min span_max; cylinder: radius upstream "
+      "downstream), apply, fit (Fit to parts), show_all, preset (minimal|compact|standard|large), mode (body|auto_box) and body (index) for a "
+      "cooling study. Jobs: use wait.",
+      {"shape": (S, "box|c_domain|cylinder", False), "flow_axis": (S, "+x|-x|+y|-y|+z|-z", False), "span_axis": (S, "x|y|z", False),
+       "sizes": ("object", "{key: mm}", False), "apply": (B, "send the typed sizes", False), "fit": (B, "Fit to parts", False),
+       "show_all": (B, "Show all", False), "preset": (S, "minimal|compact|standard|large", False), "mode": (S, "body|auto_box", False),
+       "body": (N, "index of the body that is the air", False)}, air)
+
+    def part(name, hidden=None):
+        p = gp()
+        names = [x["name"] for x in ctl.engine.project().parts()]
+        n = next((x for x in names if x.lower() == name.lower()), None) or next((x for x in names if name.lower() in x.lower()), None)
+        if n is None:
+            raise ValueError(f"No such part. Parts: {names}")
+        if hidden is None or (n in win.hidden_parts) != bool(hidden):
+            win.toggle_part(n)
+        return {"hidden_parts": sorted(win.hidden_parts)}
+    R("geometry.part", "Hide or show a part of a flow study in the 3D view.", {"name": (S, "part name", True), "hidden": (B, "default: toggle", False)}, part)

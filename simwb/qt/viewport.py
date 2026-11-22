@@ -29,8 +29,10 @@ import vtkmodules.vtkRenderingOpenGL2  # noqa: F401  (the OpenGL back end)
 import vtkmodules.vtkRenderingFreeType  # noqa: F401
 
 from . import colormaps, theme
+from .banner import Banner
+from .gizmo import RotateGizmo
 from .legend import Legend
-from .picking import FaceIndex, locator_for
+from .picking import FaceIndex, locator_for, long_segment
 from .viewtools import ViewBar
 
 # SIMWB_NO_GL=1: no OpenGL window (automated tests, machines without a display). The pipeline is built and described exactly the
@@ -75,6 +77,8 @@ class Viewport(QWidget):
         headless = no_gl()
         self.iren = QWidget(self) if headless else QVTKRenderWindowInteractor(self)
         lay.addWidget(self.iren, 1)
+        self.banner = Banner()          # what to do now, in a bar of its own under the picture (the gizmo's hint, the align step's instruction)
+        lay.addWidget(self.banner)
         self.legend = Legend()
         lay.addWidget(self.legend)
         self.viewbar = ViewBar(self)
@@ -119,6 +123,8 @@ class Viewport(QWidget):
         self._overlay_index = None          # ... and over the drawn result surface
         self.edge_actors: list = []
         self.mark_actors: list = []         # selection, hover and tint highlights
+        self.gizmo = RotateGizmo(self)      # the rings that turn the model, its preview and the align arrow (gizmo.py)
+        self._gizmo_drag = False
         self.label_actors: list = []        # text hung on the model (what a boundary condition carries)
         self.arrow_actors: list = []        # loads and gravity as arrows
         self._label_items: list = []
@@ -132,6 +138,7 @@ class Viewport(QWidget):
         self._solid_parts: list = []
         self._air_parts: list = []
         self.hover_id = -1
+        self._pick_box = None               # the box round everything that can be picked, air volume included (rays are made long enough to reach it)
         self.last_hit = None
         self._ov = None
         self.hover_highlight = True
@@ -229,6 +236,8 @@ class Viewport(QWidget):
         """The pickable faces: those of the parts that are not hidden (a hidden part cannot be clicked), and the air box."""
         solid = [f for f in self._solid_parts if self._face_volume.get(f[0]) not in self.hidden_bodies]
         self.index.build(solid, self._air_parts)
+        allv = [np.asarray(f[1], float).reshape(-1, 3) for f in solid + list(self._air_parts) if len(f[1])]
+        self._pick_box = (np.vstack(allv).min(0), np.vstack(allv).max(0)) if allv else None
 
     def _apply_visibility(self):
         for k, a, e in zip(self.geo_keys, self.geo_actors, self.edge_actors):
@@ -277,12 +286,14 @@ class Viewport(QWidget):
         items = [(ids, col, 0.5) for col, ids in by_colour.items()]      # (translucent: the part stays visible under it)
         items.append((self.selection, "#ff9f1c", 0.9))
         if self.hover_highlight and self.hover_id >= 0 and self.hover_id not in self.selection:
-            items.append(([self.hover_id], "#ffd8a8", 0.8))
+            air = self.hover_id in {p[0] for p in self._air_parts}
+            items.append(([self.hover_id], "#4cc9f0" if air else "#ffd8a8", 0.3 if air else 0.8))   # (a wall of the air volume: a see-through tint)
         for ids, col, op in items:
             a = self._mark_actor(ids, col, op)
             if a is not None:
                 self.ren.AddActor(a)
                 self.mark_actors.append(a)
+        self.gizmo.apply_preview()          # (a highlight is turned with the model while the orientation is previewed)
 
     # ------------------------------------------------------------------ values on the drawn result
     def extrema(self):
@@ -501,6 +512,8 @@ class Viewport(QWidget):
             self.ren.DisplayToWorld()
             w = self.ren.GetWorldPoint()
             pts.append([w[0] / w[3], w[1] / w[3], w[2] / w[3]] if w[3] else list(w[:3]))
+        if self._pick_box is not None:            # (not only to the far clipping plane: the walls of a big air volume are farther than that)
+            return long_segment(pts[0], pts[1], *self._pick_box)
         return pts[0], pts[1]
 
     def world_to_screen(self, point):
@@ -515,8 +528,6 @@ class Viewport(QWidget):
     def click_face(self, fid: int, add: bool = False):
         """What a click on a face does: tell the panels (facePicked) and, in face mode, change the selection (Ctrl/Shift adds or removes
         one face; a plain click selects just that face; a click on nothing clears it)."""
-        if fid >= 0:
-            self.facePicked.emit(int(fid), bool(add))
         if self.pick_mode == "face":
             sel = list(self.selection)
             if fid < 0:
@@ -527,6 +538,8 @@ class Viewport(QWidget):
                 sel = [int(fid)]
             self.set_selection(sel)
             self.selectionChanged.emit(list(self.selection))
+        if fid >= 0:                               # (after the selection changed: a panel may then show another one, as the align step does)
+            self.facePicked.emit(int(fid), bool(add))
 
     def click_at(self, x: float, y: float, add: bool = False):
         """A click at pixel (x, y) of the 3D view (as the mouse would): what is hit, or None."""
@@ -534,9 +547,9 @@ class Viewport(QWidget):
         if h is None:
             self.click_face(-1, add)
             return None
+        self.last_hit = h                          # (before the click is announced: the panel reads the point on the face from it)
         if h["kind"] == "face":
             self.click_face(h["face"], add)
-        self.last_hit = h
         if self.pick_mode == "point":
             self.pointPicked.emit(*h["point"])
         return h
@@ -558,6 +571,10 @@ class Viewport(QWidget):
     # (the mouse: a press and release that hardly moved is a click, anything else is the camera being turned)
     def _on_press(self, obj, event):
         self._press = tuple(self.iren.GetEventPosition())
+        if self.gizmo.press(self._press[0], self.gizmo._size()[1] - 1 - self._press[1]):    # a ring is taken: it turns the model, the camera stays
+            self._gizmo_drag = True
+            self.iren.SetInteractorStyle(None)
+            return
         i = self._label_at(*self._press) if self._label_state and self._style is not None else None
         if i is not None:                                   # a label is taken: it moves with the mouse and the camera stays where it is
             self._drag = (i, self._press, self._label_state[i]["off"], self._style)
@@ -565,6 +582,13 @@ class Viewport(QWidget):
 
     def _on_release(self, obj, event):
         p, self._press = self._press, None
+        if self._gizmo_drag:
+            self._gizmo_drag = False
+            q = self.iren.GetEventPosition()
+            self.gizmo.release(q[0], self.gizmo._size()[1] - 1 - q[1], bool(self.iren.GetShiftKey()))
+            if self._style is not None:
+                self.iren.SetInteractorStyle(self._style)
+            return
         if self._drag is not None:
             if self._drag[3] is not None:
                 self.iren.SetInteractorStyle(self._drag[3])
@@ -580,6 +604,9 @@ class Viewport(QWidget):
 
     def _on_move(self, obj, event):
         q = self.iren.GetEventPosition()
+        if self._gizmo_drag:
+            self.gizmo.drag_to(q[0], self.gizmo._size()[1] - 1 - q[1], bool(self.iren.GetShiftKey()))
+            return
         if self._drag is not None:
             i, p0, off0, _ = self._drag
             self.move_label(i, off0[0] + q[0] - p0[0], off0[1] + q[1] - p0[1])
@@ -590,6 +617,8 @@ class Viewport(QWidget):
         if now - self._hover_t < 0.05:
             return
         self._hover_t = now
+        if self.gizmo.on and self.gizmo.hover_at(q[0], self.gizmo._size()[1] - 1 - q[1]) is not None:
+            return                                          # (over a ring: the cursor is a hand, no face is hovered)
         over = bool(self._label_state) and self._label_at(*q) is not None        # (the cursor says that a label can be dragged)
         self.iren.setCursor(Qt.SizeAllCursor) if over else self.iren.unsetCursor()
         self.hover_at(q[0], self.iren.height() - 1 - q[1])
@@ -625,6 +654,8 @@ class Viewport(QWidget):
         self.air_on = bool(on)
         for a in self.air_actors:
             a.SetVisibility(self._geo_shown and self.air_on)
+        if not self.air_on and self.hover_id in {p[0] for p in self._air_parts}:    # (a wall that was under the pointer must not stay lit once the box is hidden:
+            self._set_hover(-1)                                                       #  its highlight is as big as the air volume and covers the model)
         self.geometry_info["air_visible"] = self.air_on and bool(self.air_actors)
         self.render()
 
@@ -698,6 +729,7 @@ class Viewport(QWidget):
             self.ren.AddActor(ea)
             self.edge_actors.append(ea)
         self._rebuild_marks()
+        self.gizmo.apply_preview()
         self.render()
 
     def _air_box(self, faces: list):

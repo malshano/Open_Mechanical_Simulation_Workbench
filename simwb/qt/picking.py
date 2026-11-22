@@ -116,3 +116,18 @@ class FaceIndex:
         if not pts:
             return np.zeros((0, 3)), np.zeros((0, 3), np.int64)
         return np.vstack(pts), np.vstack(tris)
+
+
+def long_segment(p0, p1, lo, hi):
+    """The ray from p0 through p1 (the near and far clipping planes under a pixel) made long enough to reach everything pickable: the camera's clipping
+    planes are fitted to the model, and a camera inside an air volume 50 times its size would otherwise never touch the far walls. lo, hi: the
+    corners of the box that holds everything that can be picked (the air volume included)."""
+    a = np.asarray(p0, float)
+    d = np.asarray(p1, float) - a
+    n = float(np.linalg.norm(d))
+    if n < 1e-15:
+        return list(a), list(np.asarray(p1, float))
+    d = d / n
+    lo, hi = np.asarray(lo, float), np.asarray(hi, float)
+    reach = float(np.linalg.norm(hi - lo)) + float(np.linalg.norm((lo + hi) / 2 - a))
+    return list(a), list(a + d * max(n, 1.5 * reach))
