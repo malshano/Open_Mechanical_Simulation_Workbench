@@ -1,18 +1,81 @@
 """Pieces shared by the step panels: small label helpers, a segmented button row, a KPI tile and the panel base class."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QPoint, QRect, QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QMessageBox,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
 from ..ids import wid
+
+
+class FlowLayout(QLayout):
+    """A row of widgets that goes on to the next line when the panel is too narrow (Qt has no wrapping row of its own): the buttons of a
+    card then never make the whole panel wider than its dock. Same calls as a QHBoxLayout: addWidget / addStretch is not needed."""
+
+    def __init__(self, parent=None, spacing: int = 6):
+        super().__init__(parent)
+        self._items: list = []
+        self._sp = spacing
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item):  # noqa: N802
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, i):  # noqa: N802
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i):  # noqa: N802
+        return self._items.pop(i) if 0 <= i < len(self._items) else None
+
+    def expandingDirections(self):  # noqa: N802
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self):  # noqa: N802
+        return True
+
+    def heightForWidth(self, w):  # noqa: N802
+        return self._layout(QRect(0, 0, w, 0), True)
+
+    def setGeometry(self, rect):  # noqa: N802
+        super().setGeometry(rect)
+        self._layout(rect, False)
+
+    def sizeHint(self):  # noqa: N802
+        return self.minimumSize()
+
+    def minimumSize(self):  # noqa: N802
+        w = h = 0
+        for it in self._items:
+            s = it.minimumSize()
+            w, h = max(w, s.width()), max(h, s.height())
+        m = self.contentsMargins()
+        return QSize(w + m.left() + m.right(), h + m.top() + m.bottom())
+
+    def _layout(self, rect, test: bool) -> int:
+        m = self.contentsMargins()
+        x0, y0 = rect.x() + m.left(), rect.y() + m.top()
+        right = rect.right() - m.right()
+        x, y, line_h = x0, y0, 0
+        for it in self._items:
+            s = it.sizeHint()
+            if x > x0 and x + s.width() > right + 1:
+                x, y, line_h = x0, y + line_h + self._sp, 0
+            if not test:
+                it.setGeometry(QRect(QPoint(x, y), QSize(min(s.width(), max(right - x0 + 1, 1)), s.height())))
+            x += s.width() + self._sp
+            line_h = max(line_h, s.height())
+        return y + line_h - rect.y() + m.bottom()
 
 
 def _h(text: str) -> QLabel:
@@ -127,6 +190,7 @@ class Section(QWidget):
         self.head = wid(QPushButton(), f"{prefix}.toggle")
         self.head.setObjectName("secHead")
         self.head.setCheckable(True)
+        self.head.setMinimumWidth(10)                      # (a long title is cut at the panel edge: it must not widen the panel)
         self.head.setToolTip(f"Show or hide: {title}")
         self.content = QWidget()
         self.body = QVBoxLayout(self.content)

@@ -188,7 +188,7 @@ class SetupPanel(_Panel):
         self.draw_marks()
 
     def _about(self, st, spec):
-        s = Section(f"About this simulation: {spec.get('label', '')}", "setup.about", expanded=True)
+        s = Section("About this simulation", "setup.about", expanded=True)
         s.body.addWidget(_muted(spec.get("explain", "") or spec.get("description", "")))
         needs = spec.get("needs") or []
         if needs:

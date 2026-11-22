@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel,
 
 from .forms import fmt_num
 from .ids import wid
-from .panels.common import _h, _muted
+from .panels.common import FlowLayout, _h, _muted
 from . import theme
 
 HELP = ("A mirror plane cuts the model (or the air volume of an external flow): only the side you keep is meshed and solved (half the "
@@ -222,9 +222,7 @@ class Symmetry:
         if self.draft:
             out.append(self._draft_card(aero, busy))
         row = QWidget()
-        hl = QHBoxLayout(row)
-        hl.setContentsMargins(0, 0, 0, 0)
-        hl.setSpacing(6)
+        hl = FlowLayout(row)
         full = len(planes) >= MAX_PLANES
         reason = why_busy or ("Three planes at most (an eighth of the model)" if full else "")
         for a in "xyz":
@@ -240,7 +238,6 @@ class Symmetry:
         fb.setEnabled(not reason)
         fb.toggled.connect(self.toggle_pick)
         hl.addWidget(fb)
-        hl.addStretch(1)
         out.append(row)
         if self.picking:
             out.append(_muted("Click a flat face in the 3D view: the symmetry plane goes through it. Press '＋ From a face' again to stop."))

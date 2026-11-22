@@ -181,3 +181,17 @@ def test_auto_inlet_and_outlet_of_a_cooling_study(ctl):
     r = ctl.do("setup.auto_inlet_outlet")
     names = r["result"]["bcs"]
     assert "Inlet" in names and "Outlet" in names and "assigned" in r["result"]["status"]
+
+
+def test_the_setup_panel_does_not_need_more_width_than_a_dock_gives(ctl):
+    """A one-line button or a row of several buttons in a rotor, zone or symmetry card used to make the whole panel 890 px wide, so
+    the text of every block was cut off at the dock's edge. Rows now wrap and long titles shrink."""
+    from simwb.qt.panels.common import FlowLayout
+    ctl.do("study.example", {"study": "external_aero"})
+    assert from_thread(ctl.app, lambda: ctl.wait_idle(300), 320)["idle"]
+    ctl.do("step.go", {"step": "setup"})
+    ctl._settle()
+    p = ctl.win.panels["setup"]
+    assert p.minimumSizeHint().width() <= 520, p.minimumSizeHint().width()          # (it was 893 with the same fonts)
+    row = ctl._index()["setup.rotor.detect"].parentWidget()
+    assert isinstance(row.layout(), FlowLayout)                                      # the rotor buttons wrap to a second line

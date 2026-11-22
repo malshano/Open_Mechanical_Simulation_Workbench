@@ -17,7 +17,7 @@ from .. import orient, studies
 from . import theme
 from .forms import ParamForm, fmt_num
 from .ids import wid
-from .panels.common import _h, _muted
+from .panels.common import FlowLayout, _h, _muted
 
 MZ_HELP = {
     "mrf": "MRF (moving reference frame): use with Analysis = steady. The mesh does NOT rotate: the air inside the zone is solved in a frame "
@@ -251,7 +251,7 @@ class Rotors:
             f.setEnabled(not busy)
             f.changed.connect(lambda k, val, i=i: self.set_rotor(i, **{k: val / 1000 if k == "radius" else val}))
             v.addWidget(f)
-            pk = _btn("⌖ Centre on a cylinder or circular edge…", f"setup.rotor.{i}.pick_axis", why or PICK_TIP, "toggle")
+            pk = _btn("⌖ Centre on a round edge…", f"setup.rotor.{i}.pick_axis", why or PICK_TIP, "toggle")
             pk.setCheckable(True)
             pk.setChecked(ap == ("rotor", i))
             pk.setEnabled(not busy)
@@ -259,9 +259,7 @@ class Rotors:
             v.addWidget(pk, 0, Qt.AlignLeft)
             out.append(card)
         row = QWidget()
-        hl = QHBoxLayout(row)
-        hl.setContentsMargins(0, 0, 0, 0)
-        hl.setSpacing(6)
+        hl = FlowLayout(row)
         det = _btn("✨ Detect on motor tops", "setup.rotor.detect", why or "Find the round flat tops of the motors and put a disc above each")
         det.setEnabled(not busy)
         det.clicked.connect(self.detect)
@@ -276,7 +274,6 @@ class Rotors:
         at.setEnabled(any_set and not busy)
         at.clicked.connect(self.auto_thrust)
         hl.addWidget(at)
-        hl.addStretch(1)
         out.append(row)
         return out
 
@@ -289,6 +286,7 @@ class Rotors:
         cth = max(math.cos(math.radians(float(s.get("pitch_deg") or 0))), 0.2)
         tot = sum(r["thrust_N"] if r.get("thrust_N") is not None else W / cth / len(rot) for r in rot)
         lab = wid(QLabel(f"Weight {fmt_num(round(W, 3))} N · rotor thrust {fmt_num(round(tot, 3))} N"), "setup.rotor.weight")
+        lab.setWordWrap(True)
         lab.setObjectName("muted")
         lab.setToolTip("The weight of the vehicle (mass × 9.81) and the thrust of all rotors together")
         return lab
@@ -311,7 +309,7 @@ class Rotors:
             msg.setWordWrap(True)
             msg.setStyleSheet(f"color: {theme.tokens()['warn_text']};")
             v.addWidget(msg)
-            r = QHBoxLayout()
+            r = FlowLayout()
             t = _btn("Turn the model", "setup.zone.turn", why or "Turn the model so the picked axis lies along the nearest axis (the geometry is rebuilt)", "primary")
             t.setEnabled(not busy)
             t.clicked.connect(self.turn_model)
@@ -319,7 +317,6 @@ class Rotors:
             k = _btn("Leave it", "setup.zone.keep", "Keep the model as it is")
             k.clicked.connect(self.keep_oblique)
             r.addWidget(k)
-            r.addStretch(1)
             v.addLayout(r)
             out.append(box)
         parts = sorted({f.get("part") or "(body)" for f in self.pr.faces() if f.get("kind") not in ("farfield", "enclosure")})
@@ -376,7 +373,7 @@ class Rotors:
             fit.currentIndexChanged.connect(lambda _=0, i=i, c=fit: self.fit_zone(i, c.currentData()) if c.currentData() else None)
             row.addWidget(fit, 1)
             v.addLayout(row)
-            pk = _btn("⌖ Centre on a cylinder or circular edge…", f"setup.zone.{i}.pick_axis", why or PICK_TIP, "toggle")
+            pk = _btn("⌖ Centre on a round edge…", f"setup.zone.{i}.pick_axis", why or PICK_TIP, "toggle")
             pk.setCheckable(True)
             pk.setChecked(ap == ("zone", i))
             pk.setEnabled(not busy)
