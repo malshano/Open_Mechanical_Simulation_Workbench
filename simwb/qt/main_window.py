@@ -644,7 +644,7 @@ class MainWindow(QMainWindow):
                 if names and r["field"] not in names:         # (the field of the study opened before this one: draw this study's first;
                     r = {**r, "field": names[0]}               #  the panel's own list follows when it refreshes)
                 if r["field"]:
-                    p = self.engine.result_surface(r["field"], section=r.get("section"))
+                    p = self.engine.result_surface(r["field"], time_index=r.get("time", -1), section=r.get("section"), hide=r.get("hide"))
                     info = next((f for f in self.panels["results"].fields if f["name"] == r["field"]), {})
                     flow = st["study"] in AIR_KINDS
                     if flow and r.get("flow") and (any(r["flow"][k]["on"] for k in ("iso", "volume", "vectors", "streams")) or r["flow"].get("planes")):
@@ -656,7 +656,7 @@ class MainWindow(QMainWindow):
                     self.view.show_geometry(False)
                     self.view.show_surface(p, name=r["field"], unit=info.get("unit", ""), cmap=r["cmap"], reverse=r["reverse"],
                                            bands=r["bands"], edges=r["edges"], deform=r["deform"], animate=r["animate"], vrange=rng,
-                                           contours=r.get("contours"))
+                                           contours=r.get("contours"), opacity=r.get("opacity", 1.0), outline=r.get("outline", False))
                     sec = r.get("section")
                     self.view.set_focus(self.engine.flow_focus(sec) if sec and flow else None)
                     if sec and st["study"] in AIR_KINDS:      # a flow cut open: seen straight on, from the side that is kept
