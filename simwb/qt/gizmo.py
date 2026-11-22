@@ -404,6 +404,7 @@ class RotateGizmo:
 
     def _cursor(self, shape):
         c = self.v.iren
+        shape = shape if shape is not None else getattr(self.v, "pick_cursor", None)      # (while a face is picked the pointer stays a pointing hand)
         c.setCursor(shape) if shape is not None else c.unsetCursor()
 
     def hover_at(self, x: float, y: float):

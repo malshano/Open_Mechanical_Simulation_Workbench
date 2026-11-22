@@ -15,6 +15,7 @@ from .common import _h, _muted, _Panel, clear_layout
 from ..align import AlignController
 from ..forms import fmt_num
 from ..airvolume import AirVolumeBox
+from ..alignguide import AlignGuide
 from ..cadedits import CadEditsBox
 from ..orient import OrientController, _item, _plain
 
@@ -69,12 +70,17 @@ class GeometryPanel(_Panel):
         self._sig = None
         if self.engine.pid:
             self.refresh(self.engine.state())
+        g = getattr(self, "guide", None)
+        if g is not None:
+            g.refresh()
 
     # ------------------------------------------------------------------ picking (the face to align)
     def bind(self, win):
         super().bind(win)
         win.view.facePicked.connect(self._face_picked)
         self.align.connect(win.view)
+        self.guide = AlignGuide(self.align, win.view)                    # the guided popup over the 3D picture
+        win.view.overlays.append(self.guide)
 
     def shown(self):
         self.view.set_pick_mode("face" if self.align.picking or self.align.face else None)
@@ -484,6 +490,21 @@ def register_actions(ctl):
         p.rebuild()
         return state(p)
 
+    def align_state():
+        p = gp()
+        g = p.guide.describe()
+        a = p.align.describe()
+        return {"step": a["step"], "surface": g["texts"][0] if a["step"] > 1 else None, "plane": g["texts"][1] if a["step"] > 2 else None,
+                "popup": g, "picking_surface": a["picking_face"], "picking_plane": a["picking_reference"], "face": a["face"],
+                "reference": a["reference"], "target": a["target"], "pending": a["pending"]}
+
+    def align_back():
+        p = gp()
+        p.align.back()
+        return align_state()
+    R("geometry.align_state", "Where the guided popup of 'Align a face to a plane...' is: step 0 (not aligning), 1 (click the surface), 2 (click the plane "
+      "to align it with), 3 (check the preview, Apply), what was chosen and whether the popup is shown.", {}, align_state)
+    R("geometry.align_back", "Back in the guided popup: step 3 to 2, or 2 to 1.", {}, align_back)
     R("geometry.align_start", "Align a face to a plane...: wait for a click on a face of the model.", {}, align_start)
     R("geometry.align_pick", "Click a face of the model (optionally at a point, in m: the point is used for 'normal at the click' on a curved "
       "face). Picks the face to turn, or the reference while one is being picked.",
