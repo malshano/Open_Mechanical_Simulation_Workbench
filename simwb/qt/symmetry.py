@@ -1,12 +1,15 @@
-"""Symmetry planes in the Setup step (as the web version's): a plane across x, y or z (a draft first: its axis, position and the side kept,
-then Set), a plane through a flat face picked in the 3D view, and for each plane: its position, Flip (keep the other side), Remove, and in
-an external flow whether the model beyond it is deleted too. Setting, moving, flipping or removing a plane rebuilds the geometry in a
-background job (simwb.project add_symmetry / update_symmetry / remove_symmetry)."""
+"""Symmetry planes in the Setup step: choose which way the plane cuts (across x, y or z, or through a flat face you click), and it is drawn at
+once in the 3D view as a translucent sheet with an arrow into the side that is kept. Move it by dragging the arrow along its axis (Shift snaps
+to round steps) or by typing its position, flip the side, then press Apply: only then is the geometry rebuilt, in a background job
+(simwb.project add_symmetry). The planes that are set have their position, Flip, Remove and, in an external flow, whether the model beyond
+the plane is deleted too (update_symmetry / remove_symmetry)."""
 from __future__ import annotations
 
+import numpy as np
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget
 
+from .. import symmetry as engine_sym
 from .forms import fmt_num
 from .ids import wid
 from .panels.common import FlowLayout, _h, _muted
@@ -14,7 +17,8 @@ from . import theme
 
 HELP = ("A mirror plane cuts the model (or the air volume of an external flow): only the side you keep is meshed and solved (half the "
         "cells for one plane), and the results can show the mirror image again. Use it when the shape AND the loads or the flow are "
-        "mirror-symmetric. Add a plane, type its position, flip it to keep the other side, then press Set.")
+        "mirror-symmetric. Choose which way the plane cuts, move it (drag the arrow or type its position), flip it to keep the other side, "
+        "then press Apply.")
 MAX_PLANES = 3
 
 
@@ -67,38 +71,67 @@ def _mm_field(value_m: float, id: str, tip: str) -> QLineEdit:
 
 
 class Symmetry:
-    """The symmetry-plane block of the Setup panel. `draft`: the plane being placed ({axis, pos (m), keep ±1, cut}); `picking`: the next
-    face clicked in the 3D view gets a plane through it."""
+    """The symmetry-plane block of the Setup panel. `draft`: the plane being placed - {axis ("x"|"y"|"z", or None for a plane at an angle),
+    normal (unit, toward the kept side), point (a point on it, m), origin/n0 (where a face-based plane started and its first normal: its
+    offset is measured from there), face (the face it follows, or None), keep (+1/-1), cut}; `picking`: the next flat face clicked in the 3D
+    view gives the draft its plane."""
 
     def __init__(self, panel):
         self.panel = panel
         self.draft: dict | None = None
         self.picking = False
+        self._pos_edit = None            # the position field of the draft card (updated while the arrow is dragged, without drawing the panel again)
 
-    # ------------------------------------------------------------------ what it does
+    # ------------------------------------------------------------------ the draft
     def _bbox(self):
         info = (self.panel.engine.state()["geometry"].get("info") or {})
         return info.get("parts_bbox") or info.get("bbox")
 
-    def start_draft(self, axis: str):
+    def _middle(self) -> np.ndarray:
         bb = self._bbox()
+        return np.array([(bb[k] + bb[k + 3]) / 2 for k in range(3)], float) if bb else np.zeros(3)
+
+    def start_draft(self, axis: str):
+        """A new plane across the axis, through the middle of the parts (the side kept and the choice to cut the model carry over)."""
         a = "xyz".index(axis)
         old = self.draft or {}
-        self.draft = {"axis": axis, "pos": (bb[a] + bb[a + 3]) / 2 if bb else 0.0, "keep": old.get("keep", 1), "cut": old.get("cut", False)}
+        keep = old.get("keep", 1)
+        e = np.zeros(3)
+        e[a] = 1.0
+        c = self._middle()
+        self.draft = {"axis": axis, "normal": (keep * e).tolist(), "point": c.tolist(), "origin": c.tolist(), "n0": e.tolist(), "face": None,
+                      "keep": keep, "cut": old.get("cut", False)}
         self.picking = False
         self.panel.redo()
 
+    def pos_mm(self) -> float:
+        """What the field shows: the coordinate on the axis for a plane across x, y or z; the offset from the face (positive: into the part)
+        for a plane that follows a face."""
+        d = self.draft
+        if d["axis"] and d.get("face") is None:
+            return d["point"]["xyz".index(d["axis"])] * 1000
+        return float((np.asarray(d["point"]) - np.asarray(d["origin"])) @ np.asarray(d["n0"])) * 1000
+
+    def set_pos_mm(self, v: float):
+        d = self.draft
+        if d["axis"] and d.get("face") is None:
+            pt = list(d["point"])
+            pt["xyz".index(d["axis"])] = float(v) / 1000
+            d["point"] = pt
+        else:
+            d["point"] = (np.asarray(d["origin"]) + np.asarray(d["n0"]) * float(v) / 1000).tolist()
+
     def draft_set(self, **kw):
         if self.draft is None:
-            raise ValueError("No new plane is being placed: press '+ Plane ⟂ x' (y, z) first")
+            raise ValueError("No new plane is being placed: choose which way it cuts first (across x, y or z, or through a face)")
         if "axis" in kw and kw["axis"] != self.draft["axis"]:
-            keep, cut = self.draft["keep"], self.draft["cut"]
             self.start_draft(kw.pop("axis"))
-            self.draft.update(keep=keep, cut=cut)
         if "pos_mm" in kw:
-            self.draft["pos"] = float(kw.pop("pos_mm")) / 1000
+            self.set_pos_mm(float(kw.pop("pos_mm")))
         if kw.pop("flip", False):
-            self.draft["keep"] *= -1
+            d = self.draft
+            d["normal"] = [-x for x in d["normal"]]
+            d["keep"] *= -1
         if "cut" in kw:
             self.draft["cut"] = bool(kw.pop("cut"))
         self.panel.redo()
@@ -106,8 +139,39 @@ class Symmetry:
     def cancel(self):
         self.draft = None
         self.picking = False
+        self.show_preview()
         self.panel.redo()
 
+    def _dragged(self, point, final: bool):
+        """The arrow was dragged in the 3D view: the position follows (the field shows it at once; the panel is drawn again when it is let go)."""
+        d = self.draft
+        if d is None:
+            return
+        d["point"] = [float(x) for x in point]
+        e = self._pos_edit
+        if e is not None:
+            try:
+                e.setText(fmt_num(round(self.pos_mm(), 3)))
+            except RuntimeError:                       # (the field was deleted by a redraw)
+                self._pos_edit = None
+        if final:
+            self.panel.redo()
+
+    def show_preview(self):
+        """Draw (or take away) the plane in the 3D view: the sheet, the arrow into the kept side and the handle to move it."""
+        v = self.panel.view
+        if v is None:
+            return
+        d = self.draft
+        bb = self._bbox() if self.panel.engine.pid else None
+        if d is None or not bb or self.panel.win is None or self.panel.win.step != "setup":
+            v.plane_handle.clear()
+            return
+        from .gizmo import nice_step_mm
+        size = max(bb[3] - bb[0], bb[4] - bb[1], bb[5] - bb[2])
+        v.plane_handle.set(d["point"], d["normal"], bb, self._dragged, nice_step_mm(size) / 1000.0)
+
+    # ------------------------------------------------------------------ what it does
     def _job(self, fn, msg):
         try:
             job = fn()
@@ -119,22 +183,47 @@ class Symmetry:
         return job
 
     def set_draft(self):
+        """Apply: rebuild the geometry with the plane."""
         d = self.draft
         if d is None:
             raise ValueError("No new plane to set")
+        pr = self.panel.engine.project
         self.draft = None
-        return self._job(lambda: self.panel.engine.project().add_symmetry(axis=d["axis"], pos_mm=d["pos"] * 1000, keep="+" if d["keep"] > 0 else "-",
-                                                                            cut_parts=bool(d["cut"])),
+        self.show_preview()
+        if d["axis"]:
+            mm = d["point"]["xyz".index(d["axis"])] * 1000
+            return self._job(lambda: pr().add_symmetry(axis=d["axis"], pos_mm=mm, keep="+" if d["keep"] > 0 else "-", cut_parts=bool(d["cut"])),
+                             "Rebuilding the geometry with the plane…")
+        return self._job(lambda: pr().add_symmetry(point=d["point"], normal=d["normal"], cut_parts=bool(d["cut"])),
                          "Rebuilding the geometry with the plane…")
 
     def from_face(self, fid: int):
+        """The face clicked while a plane through a face is wanted: a draft that follows it (flat faces only)."""
         self.picking = False
-        f = self.panel.engine.project().face_map().get(int(fid))
+        pr = self.panel.engine.project()
+        f = pr.face_map().get(int(fid))
         if f is None or "Plane" not in str(f.get("surface_type", "")):
-            self.panel.say(f"Face {fid} is not flat: a symmetry plane goes through a flat face. Press '+ From a face' and click a flat one.")
+            self.panel.say(f"Face {fid} is not flat: a symmetry plane goes through a flat face. Press 'Through a flat face' and click a flat one.")
             self.panel.redo()
             return None
-        return self._job(lambda: self.panel.engine.project().add_symmetry(faces=[int(fid)]), f"Rebuilding the geometry with a plane through face {fid}…")
+        try:
+            pl = engine_sym.plane_from_face(f, keep_toward=pr._parts_center())
+        except ValueError as e:
+            self.panel._fail(e)
+            return None
+        n, pt = np.asarray(pl["normal"], float), np.asarray(pl["point"], float)
+        old = self.draft or {}
+        axis = None
+        a = int(np.argmax(np.abs(n)))
+        keep = 1
+        if abs(n[a]) > 0.9999:                              # (a face across an axis: an ordinary x, y or z plane, with the coordinate as its position)
+            axis, keep = "xyz"[a], (1 if n[a] > 0 else -1)
+            n = np.eye(3)[a] * keep
+        self.draft = {"axis": axis, "normal": n.tolist(), "point": pt.tolist(), "origin": pt.tolist(), "n0": n.tolist(), "face": int(fid),
+                      "keep": keep, "cut": old.get("cut", False)}
+        self.panel.say(f"A plane through face {fid}: move it with the arrow in the 3D view or type an offset, then press Apply.")
+        self.panel.redo()
+        return self.draft
 
     def flip(self, pid):
         return self._job(lambda: self.panel.engine.project().update_symmetry(pid, flip=True), "Rebuilding the geometry: keeping the other side…")
@@ -155,7 +244,6 @@ class Symmetry:
     def toggle_pick(self, on: bool):
         self.picking = bool(on)
         if on:
-            self.draft = None
             self.panel.active = None
             self.panel.axis_pick = None
             self.panel.say("Click a flat face of the model in the 3D view: the symmetry plane goes through it.")
@@ -169,7 +257,8 @@ class Symmetry:
         h = _h("Symmetry planes")
         h.setToolTip(HELP)
         out.append(h)
-        out.append(_muted("Cut a symmetric model in half (or a quarter): fewer cells, the same answer."))
+        out.append(_muted("Cut a symmetric model in half (or a quarter): fewer cells, the same answer. Choose which way the plane cuts: "
+                          "it appears in the 3D view, move it, then press Apply."))
         why_busy = "A job is running: wait until it has finished" if busy else ""
         for i, pl in enumerate(planes):
             card = _card()
@@ -219,28 +308,35 @@ class Symmetry:
                 cb.toggled.connect(lambda on, pid=pl["id"]: self.set_cut(pid, on))
                 v.addWidget(cb)
             out.append(card)
-        if self.draft:
-            out.append(self._draft_card(aero, busy))
-        row = QWidget()
-        hl = FlowLayout(row)
         full = len(planes) >= MAX_PLANES
         reason = why_busy or ("Three planes at most (an eighth of the model)" if full else "")
+        if not full:
+            out.append(wid(_muted("Add a plane. Which way does it cut?"), "setup.sym.choose"))
+        row = QWidget()
+        hl = FlowLayout(row)
+        names = {"x": "YZ plane, across x", "y": "XZ plane, across y", "z": "XY plane, across z"}
         for a in "xyz":
-            b = _btn(f"＋ Plane ⟂ {a}", f"setup.sym.add_{a}", reason or f"A new plane across the {a} axis, through the middle of the parts: "
-                                                                          "set its position and side, then press Set")
+            b = _btn(names[a], f"setup.sym.add_{a}", reason or f"A plane across the {a} axis (the {names[a].split(',')[0]}), through the middle of "
+                                                           "the parts: it appears in the 3D view, move it there or type its position, then press Apply")
+            b.setCheckable(True)
+            b.setObjectName("toggle")
+            b.setChecked(bool(self.draft and self.draft["axis"] == a and self.draft.get("face") is None))
             b.setEnabled(not reason)
-            b.clicked.connect(lambda _=False, a=a: self.start_draft(a))
+            b.clicked.connect(lambda _=False, a=a: self.start_draft(a) if not (self.draft and self.draft["axis"] == a) else self.panel.redo())
             hl.addWidget(b)
-        fb = _btn("＋ From a face", "setup.sym.from_face", reason or "Then click a flat face of the model: the plane goes through it")
+        fb = _btn("Through a flat face", "setup.sym.from_face", reason or "Then click a flat face of the model: the plane follows it, and you can "
+                                                                         "move it parallel to the face")
         fb.setCheckable(True)
         fb.setObjectName("toggle")
-        fb.setChecked(self.picking)
+        fb.setChecked(self.picking or bool(self.draft and self.draft.get("face") is not None))
         fb.setEnabled(not reason)
         fb.toggled.connect(self.toggle_pick)
         hl.addWidget(fb)
         out.append(row)
         if self.picking:
-            out.append(_muted("Click a flat face in the 3D view: the symmetry plane goes through it. Press '＋ From a face' again to stop."))
+            out.append(_muted("Click a flat face in the 3D view: the symmetry plane goes through it. Press 'Through a flat face' again to stop."))
+        if self.draft:
+            out.append(self._draft_card(aero, busy))
         if planes:
             frac = {1: "Half", 2: "A quarter"}.get(len(planes), "An eighth")
             out.append(_muted(f"{frac} of the model is solved. " + (
@@ -255,47 +351,61 @@ class Symmetry:
         v.setContentsMargins(10, 8, 10, 8)
         v.setSpacing(6)
         head = QHBoxLayout()
-        head.addWidget(_swatch("#ffb703", "The plane being placed (not set yet)"))
-        t = QLabel("New plane")
+        head.addWidget(_swatch("#ffb703", "The plane being placed (not set yet): drawn in the 3D view"))
+        t = QLabel("New symmetry plane")
         t.setStyleSheet("font-weight: 600;")
         head.addWidget(t, 1)
-        k = wid(QLabel(f"keeps {'+' if d['keep'] > 0 else '−'}{d['axis']}"), "setup.sym.draft.keeps")
-        k.setObjectName("muted")
-        head.addWidget(k)
-        fl = _btn("⇄ Flip", "setup.sym.draft.flip", "Keep the other side")
-        fl.clicked.connect(lambda: self.draft_set(flip=True))
-        head.addWidget(fl)
         cx = _btn("✕", "setup.sym.draft.cancel", "Discard the new plane", "ghost")
         cx.setAccessibleName("Discard the new plane")
         cx.clicked.connect(self.cancel)
         head.addWidget(cx)
         v.addLayout(head)
+        if d.get("face") is not None:
+            what = f"Through face {d['face']}"
+        else:
+            what = f"Across the {d['axis']} axis"
+        v.addWidget(wid(_muted(f"{what}. It is the amber sheet in the 3D view: drag its arrow to move it (hold Shift for round steps), or type "
+                               "the position."), "setup.sym.draft.what"))
         row = QHBoxLayout()
-        row.addWidget(QLabel("Normal to"))
-        ax = wid(QComboBox(), "setup.sym.draft.axis")
-        ax.addItems(["x", "y", "z"])
-        ax.setCurrentText(d["axis"])
-        ax.setToolTip("The axis the plane is at right angles to")
-        ax.currentTextChanged.connect(lambda a: self.draft_set(axis=a))
-        row.addWidget(ax)
-        row.addWidget(QLabel("Position [mm]"))
-        pe = _mm_field(d["pos"], "setup.sym.draft.pos", f"Where the plane crosses the {d['axis']} axis")
+        if d["axis"] and d.get("face") is None:
+            row.addWidget(QLabel(f"Position {d['axis']} [mm]"))
+            tip = f"Where the plane crosses the {d['axis']} axis"
+        else:
+            row.addWidget(QLabel(f"Offset from face {d['face']} [mm]" if d.get("face") is not None else "Offset [mm]"))
+            tip = "How far the plane is moved from the face, parallel to it (positive: into the part, negative: out of it)"
+        pe = _mm_field(self.pos_mm() / 1000, "setup.sym.draft.pos", tip)
         pe.editingFinished.connect(lambda w=pe: self.draft_set(pos_mm=float(w.text())) if w.text() else None)
+        self._pos_edit = pe
         row.addWidget(pe, 1)
         v.addLayout(row)
+        kr = QHBoxLayout()
+        side = f"{'+' if d['keep'] > 0 else '−'}{d['axis']}" if d["axis"] else "the side the arrow points to"       # (an axis plane: the axis side)
+        k = wid(QLabel(f"keeps {side}"), "setup.sym.draft.keeps")
+        k.setObjectName("muted")
+        k.setToolTip("The arrow in the 3D view points into the side that stays")
+        kr.addWidget(k, 1)
+        fl = _btn("⇄ Flip", "setup.sym.draft.flip", "Keep the other side (the arrow turns round)")
+        fl.clicked.connect(lambda: self.draft_set(flip=True))
+        kr.addWidget(fl)
+        v.addLayout(kr)
         if aero:
-            v.addWidget(_muted("The air volume ends at the plane (the side the arrow in the 3D view points away from is left out). The model "
-                               "stays whole unless you tick the box."))
+            v.addWidget(_muted("The air volume ends at the plane (the side the arrow points away from is left out). The model stays whole "
+                               "unless you tick the box."))
             cb = wid(QCheckBox("Also delete the model beyond the plane"), "setup.sym.draft.cut")
             cb.setChecked(bool(d.get("cut")))
             cb.setToolTip("On: the part of the model beyond the plane is deleted from the geometry too")
             cb.toggled.connect(lambda on: self.draft.update(cut=bool(on)) if self.draft else None)
             v.addWidget(cb)
         else:
-            v.addWidget(_muted("The side the arrow in the 3D view points away from will be removed from the model."))
-        s = _btn("Set plane: trim the air volume" if aero else "Set plane: cut the model", "setup.sym.draft.set",
-                 "A job is running: wait until it has finished" if busy else "Rebuild the geometry with this plane", "primary")
+            v.addWidget(_muted("The side the arrow points away from will be removed from the model."))
+        br = QHBoxLayout()
+        s = _btn("Apply", "setup.sym.draft.set", "A job is running: wait until it has finished" if busy else
+                 "Rebuild the geometry with this plane (a few seconds)", "primary")
         s.setEnabled(not busy)
         s.clicked.connect(self.set_draft)
-        v.addWidget(s)
+        br.addWidget(s, 1)
+        c2 = _btn("Cancel", "setup.sym.draft.cancel2", "Discard the new plane", "ghostBorder")
+        c2.clicked.connect(self.cancel)
+        br.addWidget(c2)
+        v.addLayout(br)
         return card

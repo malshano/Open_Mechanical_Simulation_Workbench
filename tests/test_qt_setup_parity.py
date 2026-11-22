@@ -49,7 +49,7 @@ def test_a_symmetry_plane_is_added_flipped_and_removed(bracket):
     assert {"setup.sym.add_x", "setup.sym.add_y", "setup.sym.add_z", "setup.sym.from_face"} <= ids(c)
     c.widget_do("setup.sym.add_y", "click")
     assert c.win.panels["setup"].sym.draft["axis"] == "y" and "setup.sym.draft.set" in ids(c)
-    assert any("New plane" in la.GetInput() for la in c.win.view.label_actors)          # the draft is drawn on the model
+    assert c.win.view.plane_handle.on                                                 # the draft is drawn on the model: a sheet with an arrow
     c.widget_do("setup.sym.draft.flip", "click")
     assert c.widget_do("setup.sym.draft.keeps")["value"].endswith("−y")
     c.widget_do("setup.sym.draft.cancel", "click")

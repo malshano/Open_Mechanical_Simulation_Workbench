@@ -168,13 +168,7 @@ def marks(st: dict, faces: list, center, size: float, active: str | None = None,
     if pb:
         ctr = [(pb[k] + pb[k + 3]) / 2 for k in range(3)]
         planes = [dict(pl, draft=False) for pl in st.get("symmetry") or []]
-        if draft:
-            n = [0.0, 0.0, 0.0]
-            a = "xyz".index(draft["axis"])
-            n[a] = 1.0 if draft.get("keep", 1) > 0 else -1.0
-            p = list(ctr)
-            p[a] = draft["pos"]
-            planes.append({"name": "New plane", "normal": n, "point": p, "draft": True})
+        # (the plane being placed, `draft`, is drawn by the 3D view's plane handle: a sheet, an arrow and a handle to move it)
         for pl in planes:                                    # a plane: an arrow from it into the side that is kept
             n = pl["normal"]
             dd = sum((ctr[k] - pl["point"][k]) * n[k] for k in range(3))

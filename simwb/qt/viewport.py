@@ -30,6 +30,7 @@ import vtkmodules.vtkRenderingFreeType  # noqa: F401
 
 from . import colormaps, theme
 from .banner import Banner
+from .planehandle import PlaneHandle
 from .gizmo import RotateGizmo
 from .legend import Legend
 from .picking import FaceIndex, locator_for, long_segment
@@ -135,8 +136,10 @@ class Viewport(QWidget):
         self._overlay_index = None          # ... and over the drawn result surface
         self.edge_actors: list = []
         self.mark_actors: list = []         # selection, hover and tint highlights
+        self.plane_handle = PlaneHandle(self)      # the preview of a symmetry plane and its handle (planehandle.py)
         self.gizmo = RotateGizmo(self)      # the rings that turn the model, its preview and the align arrow (gizmo.py)
         self._gizmo_drag = False
+        self._plane_drag = False             # a symmetry plane's arrow is being dragged
         self.label_actors: list = []        # text hung on the model (what a boundary condition carries)
         self.arrow_actors: list = []        # loads and gravity as arrows
         self._label_items: list = []
@@ -613,6 +616,10 @@ class Viewport(QWidget):
             self._gizmo_drag = True
             self.iren.SetInteractorStyle(None)
             return
+        if self.plane_handle.on and self.plane_handle.press(self._press[0], self.gizmo._size()[1] - 1 - self._press[1]):     # the plane's arrow: it moves the plane
+            self._plane_drag = True
+            self.iren.SetInteractorStyle(None)
+            return
         i = self._label_at(*self._press) if self._label_state and self._style is not None else None
         if i is not None:                                   # a label is taken: it moves with the mouse and the camera stays where it is
             self._drag = (i, self._press, self._label_state[i]["off"], self._style)
@@ -624,6 +631,13 @@ class Viewport(QWidget):
             self._gizmo_drag = False
             q = self.iren.GetEventPosition()
             self.gizmo.release(q[0], self.gizmo._size()[1] - 1 - q[1], bool(self.iren.GetShiftKey()))
+            if self._style is not None:
+                self.iren.SetInteractorStyle(self._style)
+            return
+        if self._plane_drag:
+            self._plane_drag = False
+            q = self.iren.GetEventPosition()
+            self.plane_handle.release(q[0], self.gizmo._size()[1] - 1 - q[1], bool(self.iren.GetShiftKey()))
             if self._style is not None:
                 self.iren.SetInteractorStyle(self._style)
             return
@@ -645,6 +659,9 @@ class Viewport(QWidget):
         if self._gizmo_drag:
             self.gizmo.drag_to(q[0], self.gizmo._size()[1] - 1 - q[1], bool(self.iren.GetShiftKey()))
             return
+        if self._plane_drag:
+            self.plane_handle.drag_to(q[0], self.gizmo._size()[1] - 1 - q[1], bool(self.iren.GetShiftKey()))
+            return
         if self._drag is not None:
             i, p0, off0, _ = self._drag
             self.move_label(i, off0[0] + q[0] - p0[0], off0[1] + q[1] - p0[1])
@@ -657,6 +674,8 @@ class Viewport(QWidget):
         self._hover_t = now
         if self.gizmo.on and self.gizmo.hover_at(q[0], self.gizmo._size()[1] - 1 - q[1]) is not None:
             return                                          # (over a ring: the cursor is a hand, no face is hovered)
+        if self.plane_handle.on and self.plane_handle.hover_at(q[0], self.gizmo._size()[1] - 1 - q[1]):
+            return                                          # (over the plane's arrow: the cursor is a hand)
         over = bool(self._label_state) and self._label_at(*q) is not None        # (the cursor says that a label can be dragged)
         self.iren.setCursor(Qt.SizeAllCursor) if over else self.iren.unsetCursor()
         self.hover_at(*self._to_view(q))

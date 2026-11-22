@@ -421,6 +421,9 @@ class Shell(QObject):
             if sp.sym.picking:
                 return ("pick", "Click a flat face: the symmetry plane goes through it", 0, "Cancel",
                         lambda: (setattr(sp.sym, "picking", False), sp.redo()), "Stop choosing the face for the symmetry plane")
+            if sp.sym.draft:
+                return ("pick", "Drag the amber arrow to move the symmetry plane (hold Shift for round steps), or type its position; then press Apply", 0,
+                        "Cancel", lambda: sp.sym.cancel(), "Discard the new symmetry plane")
             if sp.active:
                 bc = next((b for b in (w.engine.state().get("bcs") or []) if b["id"] == sp.active), None)
                 if bc:

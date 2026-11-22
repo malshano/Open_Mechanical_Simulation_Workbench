@@ -688,11 +688,12 @@ gravity too). A line at the top of the panel says what the last action did, or w
   **Advanced settings** (Expert mode; the block is open).
 - **Boundary conditions** says what the **Other faces** get. In a cooling study with a fan, **✨ Auto-detect inlet & outlet** puts the inlet and
   outlet on the two end faces of the air volume. The condition of a symmetry plane is listed greyed out: change it with its plane.
-- **Symmetry planes**: **＋ Plane ⟂ x** (y, z) places a new plane through the middle of the parts; type its **Position [mm]**, **⇄ Flip** to keep the
-  other side (the arrow on the model points into the side kept), then **Set plane**. **＋ From a face**, then click a flat face, puts the plane
-  through that face (choosing **Symmetry plane** in the add list with no face selected does the same). Each plane has its position, **⇄ Flip**,
-  **✕** (remove: the removed side comes back) and, in an external flow, **Also delete the model beyond the plane**. Each change rebuilds the
-  geometry (a job); the buttons wait while it runs.
+- **Symmetry planes**: choose which way the plane cuts (**YZ plane, across x**, **XZ plane, across y**, **XY plane, across z**, or **Through a flat face**,
+  then click the face). The plane is drawn in the 3D view at once: an amber sheet with an arrow into the side that is kept. Move it by
+  dragging the arrow (hold Shift for round steps) or by typing the **Position [mm]** (for a face: the **Offset from the face**, positive into
+  the part). **⇄ Flip** keeps the other side. Nothing is rebuilt until you press **Apply**. Each plane that is set has its position,
+  **⇄ Flip**, **✕** (remove: the removed side comes back) and, in an external flow, **Also delete the model beyond the plane**; each
+  change rebuilds the geometry (a job), and the buttons wait while it runs.
 - **Rotors** (drone): **✨ Detect on motor tops**, **＋ Add rotor**, and for each rotor its **Radius**, **Thrust** (empty = automatic: the rotors
   together carry the weight), **⌖ Centre on a cylinder or circular edge…** (press it, then click a motor can or a round edge) and **✕**.
   **Reset thrusts to automatic** empties every thrust. The weight and the total thrust are written under the flow condition.
@@ -920,8 +921,8 @@ the air volume is cut as well, so a plane through the middle halves the cells an
 
 | Way | What to do |
 |---|---|
-| Place and drag | Press **＋ Plane ⟂ x / y / z**. A plane appears through the middle of the parts with a round handle. Drag the handle in the 3D view (it slides along the plane's normal) or type the **Position** in mm. A green arrow points to the side that is **kept**; the red side will be removed. **⇄ Flip** keeps the other side. When it is right, press **Set plane: cut the model**. |
-| From a flat face | Press **＋ From a face** and click a flat face of the model, or choose **Symmetry plane (mirror)** in **＋ Add boundary condition…** and click the face. The plane goes through the face; the side with the parts is kept (flip it if you want the other one). |
+| Across an axis | Press **YZ plane, across x** (or the XZ / XY one). The plane appears at once through the middle of the parts, as an amber sheet with an arrow and a round handle. Drag the arrow in the 3D view (it slides along the plane's axis; hold Shift for round steps) or type the **Position** in mm. The arrow points into the side that is **kept**; **⇄ Flip** keeps the other side. When it is right, press **Apply**. |
+| Through a flat face | Press **Through a flat face** and click a flat face of the model. The plane lies on the face and the side with the parts is kept (flip it for the other one). Move it parallel to the face by dragging the arrow or typing the **Offset from the face** (0 = on the face, positive = into the part), then **Apply**. Choosing **Symmetry plane (mirror)** in **＋ Add boundary condition…** and clicking a face does the same. |
 
 Setting the plane rebuilds the geometry in the background: **everything on the other side is removed** (parts are cut,
 parts wholly on that side disappear, the air volume is cut). Part names, materials and boundary conditions on faces

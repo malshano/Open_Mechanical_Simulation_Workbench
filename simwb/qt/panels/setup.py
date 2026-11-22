@@ -89,6 +89,7 @@ class SetupPanel(_Panel):
         self.active = None
         self.axis_pick = None
         self.sym.picking = False
+        self.view.plane_handle.clear()                              # (the draft plane itself is kept: it is shown again when the step is)
 
     def _picking_other(self) -> bool:
         return bool(self.axis_pick or self.sym.picking)
@@ -130,6 +131,7 @@ class SetupPanel(_Panel):
         arrows for loads and flows, the free stream, rotors and zones, heat sources, symmetry planes and gravity."""
         if self.win is None or self.win.step != "setup" or not self.engine.pid:
             return
+        self.sym.show_preview()
         st = self.engine.state()
         info = (st["geometry"].get("info") or {})
         bb = info.get("parts_bbox") or info.get("bbox")
