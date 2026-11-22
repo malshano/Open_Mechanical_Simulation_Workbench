@@ -634,10 +634,14 @@ class RotateGizmo:
         e = np.zeros(3)
         e[a] = 1.0
         base = self.c.copy()
-        x, y, _ = self.project(base + e * ARROW_SCALE * self._r * along_frac)
-        if not self.press(x, y) or self.drag["kind"] != "move" or self.drag["axis"] != a:
+        for frac in (along_frac, 0.8, 0.45, 0.95, 0.3):             # (somewhere along the arrow where it is the handle nearest to the pointer)
+            along_frac = frac
+            x, y, _ = self.project(base + e * ARROW_SCALE * self._r * frac)
+            if self.press(x, y) and self.drag["kind"] == "move" and self.drag["axis"] == a:
+                break
             if self.drag is not None:
                 self.release(x, y)
+        else:
             raise ValueError(f"The {'xyz'[a]} arrow cannot be taken from the camera's point of view: turn the 3D view so that it is not end-on")
         out = None
         for k in range(1, steps + 1):
