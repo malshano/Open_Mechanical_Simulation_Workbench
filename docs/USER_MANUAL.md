@@ -745,12 +745,18 @@ place inside the workspace, and move the file yourself afterwards. The `/` comma
 
 ### 15.7 Not in the desktop beta yet
 
-These are in the web version (use it for them; a study opens in both):
+Everything the web version's five steps offer now has a control in the desktop window. What is still missing is small:
 
-- Dragging the air volume's orange handles in the 3D view (type the sizes in the window instead).
-- Symmetry planes; detecting and editing rotors and moving zones; the flow-condition form (fluid, turbulence model, steady or transient)
-  beyond the settings generated for each study type.
-- The time bar and MP4 export for transient results; the modal spectrum, flutter and sweep plots.
+- **Dragging in the 3D view**: the orange handles of the air volume, and dragging a symmetry plane, a rotor disc or a rotating zone with the
+  mouse. Type the values in the panel instead.
+- **Symbols on the model**: the web version's block, roller and plate symbols for each kind of condition. The desktop window shows each
+  condition by its tint, its label and arrows.
+- **A per-part gizmo preview inside a flow study**: the model turns and moves as a whole there (a single part can be moved in heat,
+  structural and vibration studies from a STEP file).
+- **Results extras**: the promo look, the section-sweep video, the mirrored half of a symmetric model, the arrow length scale and the
+  particle dot size and tail.
+- **The application bar**: the Claude Code button and the `/` commands of section 11, a Cancel button in the status bar, the probe button
+  in the 3D view's bar, a selection-hint banner and toasts.
 
 `docs/QT_PARITY.md` lists every control of the web version and its state in the desktop version.
 

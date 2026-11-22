@@ -7,9 +7,9 @@ plus the toolbar and application bar. Status: ✅ done in the Qt app · 🟡 par
 
 
 > **Last reviewed:** after the fifth critic round of the Qt interface (overall 5.4 / 7). Rows marked ✅ have tests in `tests/test_qt_*.py`;
-> 🟡 rows say what is missing. The largest remaining gaps are: the air-volume drag handles (Geometry), symmetry planes, rotors and
-> moving zones (Setup), continue / extend runs, cores and advanced OpenFOAM numerics (Solve), and the time bar for transient results.
-> (The CFD result views - contours, vectors, vortex surfaces, volume cloud, particle paths - and the colour legend are done.)
+> 🟡 rows say what is missing. After merging the four porting branches (Setup, Mesh and Solve, Results, Geometry) the remaining gaps are small:
+> the application shell (Claude Code button and `/` commands, Cancel in the status bar, probe in the 3D view's bar, selection hint, toasts),
+> dragging the air volume, a symmetry plane, rotors and zones with the mouse, and the web version's symbols for each kind of condition.
 
 ## Application bar, view toolbar, status
 
