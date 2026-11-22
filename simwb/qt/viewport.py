@@ -884,11 +884,12 @@ class Viewport(QWidget):
     # ------------------------------------------------------------------ a field on a surface
     def show_surface(self, p: dict, *, name: str = "", unit: str = "", cmap: str = "turbo", reverse: bool = False,
                      bands: int = 0, vrange=None, edges: bool = False, deform: float | None = None, fixed_quality: bool = False,
-                     animate: bool = False, solid=None, contours=None):
+                     animate: bool = False, solid=None, contours=None, opacity: float = 1.0, outline: bool = False):
         """A surface payload {positions, indices, values, per, [categories, present, scale, disp, disp_kind]} coloured by
         its values. vrange: (lo, hi) or None for the payload's own; fixed_quality: the red-is-bad scale of cell quality. solid: (r, g, b) draws it
         in that colour instead (the object, when a flow tool shows its own field); no colour bar then. contours: {'on', 'n', 'levels'}: lines of
-        equal value, n evenly spaced between the lowest and highest value and any extra levels."""
+        equal value, n evenly spaced between the lowest and highest value and any extra levels. opacity: 0.1..1 (see-through surfaces);
+        outline: with a deformation drawn, the thin outline of the part before it deformed."""
         self.clear_overlay()
         if name != self._shown_name:
             self._shown_name = name
@@ -968,6 +969,33 @@ class Viewport(QWidget):
         act = self._actor(pd, mapper=m, color=solid)
         act.GetProperty().SetEdgeVisibility(1 if edges else 0)
         act.GetProperty().SetLineWidth(1.0)
+        op = min(max(float(opacity if opacity is not None else 1.0), 0.05), 1.0)
+        act.GetProperty().SetOpacity(op)
+        self.overlay_info["opacity"] = op
+        self.overlay_info["outline"] = False
+        if outline and (self._anim or info.get("deform")):          # the undeformed part as a thin outline (its sharp edges and border)
+            fe = vtkFeatureEdges()
+            fe.SetInputData(self._polydata(base, idx))
+            fe.BoundaryEdgesOn()
+            fe.FeatureEdgesOn()
+            fe.SetFeatureAngle(35)
+            fe.ManifoldEdgesOff()
+            fe.NonManifoldEdgesOff()
+            fe.ColoringOff()
+            fe.Update()
+            om = vtkPolyDataMapper()
+            om.SetInputData(fe.GetOutput())
+            oa = vtkActor()
+            oa.SetMapper(om)
+            oa.GetProperty().SetColor(*_rgb(theme.tokens()["vp_text"]))
+            oa.GetProperty().SetOpacity(0.55)
+            oa.GetProperty().SetLineWidth(1.0)
+            oa.GetProperty().SetLighting(False)
+            oa.PickableOff()
+            self.ren.AddActor(oa)
+            self.overlay_actors.append(oa)
+            self.overlay_info["outline"] = True
+            self.overlay_info["outline_segments"] = int(fe.GetOutput().GetNumberOfCells())
         # (flat per-face shading on the CAD facets, so the shape reads as a model)
         act.GetProperty().SetInterpolationToFlat()
         self.ren.AddActor(act)

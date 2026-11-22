@@ -150,9 +150,10 @@ class Engine(QObject):
     def result_fields(self) -> list:
         return self.project().results().field_info()
 
-    def result_surface(self, field: str, time_index: int = -1, section=None):
+    def result_surface(self, field: str, time_index: int = -1, section=None, hide=None):
         """The result field on the part's surface; with section=(axis 'x'|'y'|'z', fraction 0..1 of the part's extent) the part is cut there
-        and the cells on the low side are shown with the cut faces open (the inside of the part)."""
+        and the cells on the low side are shown with the cut faces open (the inside of the part). hide: result regions (parts) not drawn
+        (None: the study's own choice - the air of a cooling study is hidden)."""
         rs = self.project().results().at(time_index)
         flow = self.project().study in FLOW_STUDIES
         box = self._flow_box(rs) if flow else None            # (a flow result is looked at close to the object, not across the whole far field)
@@ -160,8 +161,9 @@ class Engine(QObject):
         if section:
             ax, pos = self._section_pos(rs, section, box)
         if flow:
-            return self._flow_surface(rs, field, ax, pos, box)
-        return rs.surface(field) if ax is None else rs.clip(field, ax, pos)
+            return self._flow_surface(rs, field, ax, pos, box, hide)
+        hide = tuple(hide or ())
+        return rs.surface(field, hide_regions=hide) if ax is None else rs.clip(field, ax, pos, hide_regions=hide)
 
     @staticmethod
     def _section_pos(rs, section, box):
@@ -228,13 +230,13 @@ class Engine(QObject):
             return None
         return self._flow_box(self.project().results(), 0.3, 0.8, axis, pos)
 
-    def _flow_surface(self, rs, field: str, ax, pos, box):
+    def _flow_surface(self, rs, field: str, ax, pos, box, hide=None):
         """A flow or cooling result: the outside of the air box would hide everything, so draw the object (what the solver says to show:
         the body of an aircraft, the solid parts of a cooled assembly); with a section, the field on the plane through the air as well,
         and only the half of the object on the low side, cut open at the plane."""
         s = self._flow_summary()
         groups = s.get("default_groups") or None
-        hide = tuple(s.get("default_hidden_regions") or ())
+        hide = tuple(s.get("default_hidden_regions") or ()) if hide is None else tuple(hide)
         obj = rs.surface(field, groups=groups, hide_regions=hide, below=None if ax is None else (ax, pos))
         if ax is None:
             return obj
@@ -305,7 +307,7 @@ class Engine(QObject):
             ax = "xyz".index(pl.get("axis", "y"))
             pos = box[ax] + min(max(float(pl.get("frac", 0.5)), 0.0), 1.0) * (box[3 + ax] - box[ax])
             pay = memo(("plane", f, ax, round(pos, 9)), lambda f=f, ax=ax, pos=pos: resample.plane_payload(rs, f, ax, pos, box, 0))
-            planes.append({"payload": pay, "field": f, "axis": pl.get("axis", "y"), "pos": pos,
+            planes.append({"payload": pay, "field": f, "axis": pl.get("axis", "y"), "pos": pos, "range": pl.get("range"),
                            "opacity": min(max(float(pl.get("opacity", 1.0)), 0.1), 1.0)})
         if planes:
             out["planes"] = planes

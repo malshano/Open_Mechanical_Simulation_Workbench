@@ -651,7 +651,7 @@ class MainWindow(QMainWindow):
                 if names and r["field"] not in names:         # (the field of the study opened before this one: draw this study's first;
                     r = {**r, "field": names[0]}               #  the panel's own list follows when it refreshes)
                 if r["field"]:
-                    p = self.engine.result_surface(r["field"], section=r.get("section"))
+                    p = self.engine.result_surface(r["field"], time_index=r.get("time", -1), section=r.get("section"), hide=r.get("hide"))
                     info = next((f for f in self.panels["results"].fields if f["name"] == r["field"]), {})
                     flow = st["study"] in AIR_KINDS
                     if flow and r.get("flow") and (any(r["flow"][k]["on"] for k in ("iso", "volume", "vectors", "streams")) or r["flow"].get("planes")):
@@ -663,7 +663,7 @@ class MainWindow(QMainWindow):
                     self.view.show_geometry(False)
                     self.view.show_surface(p, name=r["field"], unit=info.get("unit", ""), cmap=r["cmap"], reverse=r["reverse"],
                                            bands=r["bands"], edges=r["edges"], deform=r["deform"], animate=r["animate"], vrange=rng,
-                                           contours=r.get("contours"))
+                                           contours=r.get("contours"), opacity=r.get("opacity", 1.0), outline=r.get("outline", False))
                     sec = r.get("section")
                     self.view.set_focus(self.engine.flow_focus(sec) if sec and flow else None)
                     if sec and st["study"] in AIR_KINDS:      # a flow cut open: seen straight on, from the side that is kept
@@ -702,7 +702,9 @@ class MainWindow(QMainWindow):
         from ..results import merge_payloads
         from . import flowdraw
         t = r["flow"]
-        L = self.engine.flow_layers(t)
+        ti = r.get("time", -1)
+        L = self.engine.flow_layers(t, ti)
+        ft = self.panels["results"].flow
         fields = {f["name"]: f for f in self.panels["results"].fields}
         tab = flowdraw.table(r["cmap"], r["reverse"], r["bands"])
         legend = None
@@ -710,7 +712,7 @@ class MainWindow(QMainWindow):
         if "iso" in L:
             cf = t["iso"]["color"] if t["iso"]["color"] in fields else r["field"]
             f = fields.get(cf, {})
-            surf = merge_payloads(L["iso"], self.engine.flow_object(cf))
+            surf = merge_payloads(L["iso"], self.engine.flow_object(cf, ti))
             rng = (f["p01"], f["p99"]) if f.get("p99", 0) > f.get("p01", 0) else None
             self.view.show_surface(surf, name=f"Vortex surfaces, coloured by {cf}", unit=f.get("unit", ""), cmap=r["cmap"], reverse=r["reverse"],
                                    bands=r["bands"], vrange=rng)
@@ -720,18 +722,20 @@ class MainWindow(QMainWindow):
             cut = None
             if len(one) == 1 and not any(k in L for k in ("volume", "vectors", "paths")):
                 cut = ("xyz".index(one[0]["axis"]), one[0]["pos"])   # (one plane alone: the object is cut open there, as a section; its near half would hide the plane)
-            self.view.show_surface(self.engine.flow_object(r["field"], cut=cut), name="Object", unit="", edges=r["edges"], solid=(0.66, 0.70, 0.76))
+            self.view.show_surface(self.engine.flow_object(r["field"], ti, cut=cut), name="Object", unit="", edges=r["edges"], solid=(0.66, 0.70, 0.76))
         if "volume" in L:
             f = fields.get(t["volume"]["field"], {})
-            win = flowdraw.volume_window(L["volume"], t["volume"]["field"], L["free_stream"])
+            win = t["volume"].get("range") or flowdraw.volume_window(L["volume"], t["volume"]["field"], L["free_stream"])
+            ft.show_range("volume", *win)
             flowdraw.add_volume(self.view, L["volume"], tab, win, t["volume"]["density"], t["volume"]["style"])
             if not legend:
                 self.view.legend.set_scalar(t["volume"]["field"], f.get("unit", ""), win[0], win[1], tab, log=bool(L["volume"].get("log")))
                 legend = True
         n_lines = 0
-        for pl in L.get("planes", []):
+        for k, pl in enumerate(L.get("planes", [])):
             f = fields.get(pl["field"], {})
-            lo, hi = (f["p01"], f["p99"]) if f.get("p99", 0) > f.get("p01", 0) else (f.get("min", 0.0), f.get("max", 1.0))
+            lo, hi = pl.get("range") or ((f["p01"], f["p99"]) if f.get("p99", 0) > f.get("p01", 0) else (f.get("min", 0.0), f.get("max", 1.0)))
+            ft.show_range(k, lo, hi)
             n_lines += flowdraw.add_plane(self.view, pl["payload"], tab, lo, hi, pl["opacity"], r.get("contours"))
             if not legend:
                 self.view.legend.set_scalar(pl["field"], f.get("unit", ""), lo, hi, tab)
@@ -742,15 +746,25 @@ class MainWindow(QMainWindow):
         self.panels["results"].flow.set_box(L.get("box"))
         if "vectors" in L and L["vectors"]["n"]:
             v = L["vectors"]
-            flowdraw.add_arrows(self.view, v, tab, v["min"], v["max"], 1.2 * v["h"] / (v["p95"] or v["max"] or 1.0))
+            vlo, vhi = t["vectors"].get("range") or (v["min"], v["max"])
+            ft.show_range("vectors", vlo, vhi)
+            flowdraw.add_arrows(self.view, v, tab, vlo, vhi, 1.2 * v["h"] / (v["p95"] or v["max"] or 1.0))
             if not legend:
-                self.view.legend.set_scalar("Speed", v.get("unit", ""), v["min"], v["max"], tab)
+                self.view.legend.set_scalar("Speed", v.get("unit", ""), vlo, vhi, tab)
                 legend = True
         if "paths" in L:
             pth = L["paths"]
-            flowdraw.add_paths(self.view, pth, tab, pth["min"], pth["max"])
+            plo, phi = t["streams"].get("range") or (pth["min"], pth["max"])
+            ft.show_range("streams", plo, phi)
+            flowdraw.add_paths(self.view, pth, tab, plo, phi, width=1.2 if t["streams"].get("animate") else 2.2)
+            if getattr(self, "_dots", None) is not None:
+                self._dots.stop()
+                self._dots = None
+            if t["streams"].get("animate"):
+                self._dots = flowdraw.ParticleDots(self.view, pth, tab, plo, phi, t["streams"].get("speed", 1.0))
+                self.view.overlay_info["particles"] = {"dots": len(self._dots.cnt), "animated": True}
             if not legend:
-                self.view.legend.set_scalar("Speed", pth.get("unit", ""), pth["min"], pth["max"], tab)
+                self.view.legend.set_scalar("Speed", pth.get("unit", ""), plo, phi, tab)
                 legend = True
         self.view.overlay_info["flow_tools"] = [k for k in ("planes", "iso", "volume", "vectors", "paths") if k in L]
         only_planes = L.get("planes") and not any(k in L for k in ("iso", "volume", "vectors", "paths"))

@@ -271,3 +271,24 @@ def report_html(pr, image: str | None = None) -> str:
     h += ("<p class='foot'>Made with the Mechanical Simulation Workbench. A simulation is a model: check the "
           "assumptions and the warnings above before using the numbers for a decision.</p></body></html>")
     return h
+
+
+def encode_mp4(frames_dir: Path, fps: float, out: Path, pattern: str = "f%05d.jpg") -> Path:
+    """An H.264 MP4 from numbered pictures in frames_dir (f00000.jpg, f00001.jpg, ...) at fps frames per second (the same encoding the web
+    version's video route uses). Needs the imageio-ffmpeg package."""
+    import subprocess
+
+    try:
+        import imageio_ffmpeg
+    except ImportError as e:
+        raise ValueError("MP4 export needs the imageio-ffmpeg package (pip install imageio-ffmpeg)") from e
+    fps = min(max(float(fps), 1.0), 60.0)
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    r = subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error", "-framerate", f"{fps:g}", "-i", str(Path(frames_dir) / pattern),
+                        "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2:out_range=tv,format=yuv420p", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                        "-crf", "18", "-movflags", "+faststart", str(out)],
+                       capture_output=True, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if r.returncode or not out.exists():
+        raise ValueError(f"Video encoding failed: {(r.stderr or '').strip()[-300:]}")
+    return out

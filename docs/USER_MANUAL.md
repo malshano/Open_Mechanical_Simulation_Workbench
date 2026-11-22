@@ -590,10 +590,34 @@ The tabs are the ones of section 8, with these differences and additions.
     them; **Keep clear of walls** hides the surface near the object; **Smoothing** rounds it. For a wake use the whole air box, a weak
     setting and turn the view (**Z** for the top, **-X** from behind).
   - **Volume rendering**: the whole flow as a see-through cloud (field, density, colour map or smoke).
-  - **Arrows** on a plane (axis, position, number across) and **Particle paths** (number, where they start, steps). The paths are drawn
-    still, not animated as in the web version.
+  - **Arrows** on a plane (axis, position, number across) and **Particle paths** (number, where they start, steps). With **Animate the
+    particles** (on by default) dots run along the paths, as the air moves; **Dot speed** sets how fast.
+  - **Automatic colour range**: every plane, the cloud, the arrows and the paths have their own. Untick it and type **from** and **to**
+    to fix the colours of that tool; while it is ticked the boxes show the range used.
   - A Region of the whole air box with a fine grid needs more memory; if the window is slow, go back to a coarser grid.
 - **Probe**: pin values by clicking the coloured result; line plot between two points or from the minimum to the maximum.
+- **Time bar** (Display, under the field; transient results): the saved time shown, a slider over the saved times and **▶ Play** /
+  **❚❚ Pause**. Pinned values are cleared when the time changes; the line plot follows the time. A note says when the field hardly
+  changes over the saved times (the animation would look still).
+- **Video**: **● MP4** (transient) saves every saved time as drawn now, with the colour legend and the time on each picture; on a steady
+  result **● Turntable MP4** turns the camera around the model. Choose the **frames per second** and the camera **orbit** (degrees over
+  the video) beside the button; the button counts the pictures while it records.
+- **Distribution** (Display, under the range): how much of the surface has each value, in the colours of the map, with the mean. Drag
+  across the bars to set the colour range to that part; double-click to go back to the automatic range. The line under it says how
+  much of the surface is below and above the range.
+- **Model**: **Opacity** (see-through surfaces, to look behind them), **Hide the air** (cooling studies) and one tick box per part when
+  the result has several (untick one to hide it). **Deformation** adds **Outline of the undeformed part** (on by default) and a line
+  that says how much the deformation is exaggerated.
+- **Summary charts**: natural frequencies as stems (click a stem or a mode row to show it; each row gives the effective mass x / y / z),
+  the shake-test sweep (stress against frequency, both logarithmic, peaks dotted), flutter frequency and damping against the air speed
+  (the critical speed dashed), solver residuals for a flow, and forces or temperatures over time for transient runs. **Animate** under
+  the modes (and **Animate deformation** for a static result) is the same switch as the Display tab's.
+- **Temperatures and forces**: type an **Allowed temperature**: every part's bar shows its margin (or how far it is over) and the
+  Max temperature tile says over or under. **Where the heat goes** splits the heat in one bar. Flow results show the forces on the body
+  and its moments as bars from a centre line; a static result shows the force at each support.
+- **Checks**: the mesh-sensitivity table (each key result on the coarse and finer mesh, the change, and for **Three-level check (GCI)**
+  the grid-convergence index), the verdict, **Run mesh-sensitivity check** / **Check again**, the flow-model comparison of cooling
+  studies, the previous run, and the model assumptions. A button that cannot be used says why under it and in its tooltip.
 - **Export**: report (HTML), table (CSV) and VTK for ParaView, in the Results step.
 - The camera fits what you look at: switching a section on or off, or choosing another view, re-fits the view to the object or the cut.
 
