@@ -15,4 +15,4 @@ if ($LASTEXITCODE -ne 0) {
     [Windows.Forms.MessageBox]::Show("The desktop application's libraries (Qt and VTK) are missing. Run the setup again, or use the web icon.", 'Mechanical Simulation Workbench') | Out-Null
     exit 1
 }
-Start-Process -FilePath $py -ArgumentList @('-m', 'simwb.qt') -WorkingDirectory $Root
+Start-Process -FilePath $py -ArgumentList @('-m', 'simwb.qt') -WorkingDirectory $Root -WindowStyle Normal   # (not the hidden style of this script)

@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QApplication
 
 from . import theme
@@ -37,7 +37,12 @@ def main(argv=None) -> int:
     mode.set_simple(engine.settings.value("mode", "expert", type=str) == "simple")
     win = MainWindow(engine, bridge)
     win.resize(1500, 920)
-    win.show()
+    # Shown normal and in front, whatever the process was started with: Windows hands the 'show' setting of the starter on to the program
+    # (the desktop icon starts a hidden PowerShell), and Qt's first show() would obey it - the window opened minimised to the taskbar
+    win.setWindowState((win.windowState() & ~Qt.WindowMinimized) | Qt.WindowActive)
+    win.showNormal()
+    win.raise_()
+    win.activateWindow()
     debug = args.debug_api or os.environ.get("SIMWB_DEBUG_API") == "1"
     from .control import Control
 
