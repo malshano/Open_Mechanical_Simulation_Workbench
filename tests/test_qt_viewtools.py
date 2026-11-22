@@ -118,7 +118,9 @@ def test_picking_a_point_on_the_result_surface(ctl):
 # ------------------------------------------------------------------------------------------------------------ the toolbar
 def test_the_view_bar_has_the_web_versions_buttons(ctl):
     ids = {w["id"] for w in ctl.widgets("viewbar.")["widgets"]}
-    assert ids == {"viewbar.iso", "viewbar.x", "viewbar.y", "viewbar.z", "viewbar.fit", "viewbar.edges", "viewbar.picture"}
+    assert {"viewbar.iso", "viewbar.x", "viewbar.y", "viewbar.z", "viewbar.fit", "viewbar.edges", "viewbar.picture", "viewbar.probe"} <= ids
+    assert {"viewbar.section.off", "viewbar.section.x", "viewbar.section.y", "viewbar.section.z", "viewbar.section.pos", "viewbar.section.play",
+            "viewbar.section.hide_air"} <= ids                                    # (the section bar under the toolbar: Mesh and Results steps)
     assert ctl.coverage()["complete"]
 
 

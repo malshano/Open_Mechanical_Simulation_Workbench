@@ -128,6 +128,8 @@ class Shell(QObject):
         j = ev.get("job") or {}
         jid, st = j.get("id"), j.get("status")
         if st == "running":
+            if (self.jobs.get(jid) or {}).get("cancel_requested"):
+                j["cancel_requested"] = True
             self.jobs[jid] = j
         else:
             self.jobs.pop(jid, None)

@@ -540,10 +540,11 @@ The web icon still starts the web version. Both can be installed together; they 
 | Step bar | below that | **Geometry, Setup, Mesh, Solve, Results** with a tick for each finished step. |
 | Outline | left, upper | The model tree. Click a node to select it. |
 | Step panel | left, lower | The settings of the step. Results has the tabs **Summary, Display, Flow, Probe, Checks** (Flow only for flow and cooling studies). |
-| 3D view | centre | Left button turns, the wheel zooms, the middle button (or Shift + left button) pans. Its bar: **Iso, X, Y, Z, Fit**, **Edges**, **Air box** and **Picture** (a PNG with the colour scale). Click a face to select it; Ctrl-click adds. |
+| 3D view | centre | Left button turns, the wheel zooms, the middle button (or Shift + left button) pans. Its bar: **Iso, X, Y, Z, Fit**, **Edges**, **Air box**, **Probe** and **Picture** (a PNG with the colour scale); a second bar, **Section**, on the Mesh and Results steps (15.8a). Click a face to select it; Ctrl-click adds. Resting the pointer on a face shows its number, kind, part, area and the condition it carries. The bar under the picture says what to click next. |
 | Output | below the 3D view | **Messages** and **Solver log**. |
 | Claude dock | right | The assistant. |
-| Status bar | bottom | The study, its type, the mesh and solution state. |
+| Status bar | bottom | The study, its type, the mesh and solution state; while a job runs, what it is doing, a progress bar and **Cancel**. |
+| Notices | top right, over the window | Small **toasts** ("Saved at 12:30", "Mesh ready", "Cannot do that: ...") that fade after a few seconds, stay while the pointer is on them and close with their x or Esc. They are also in the log. |
 
 With no study open the window shows **What do you want to simulate?**: a card for every study type (what it does, which solver, **Use my
 CAD file** or **Try example**), **Open a saved study...**, **Import a study file...** and the studies opened lately. Docks that are in the
@@ -736,12 +737,23 @@ The Solve step follows the web version:
 
 ### 15.6 The Claude assistant in the window
 
-Same assistant as section 10: it sets up, meshes, runs and explains, with the same tools, and the chat is kept for each study. It
-has no shell and no access to your files. Whatever it writes or reads goes through checks: it saves files only inside the workspace or
-the temporary folder, never replaces an existing file or one of the workbench's own files, never uses a network path or a link, and reads
-only CAD files and exported studies by their full path (starting with a drive letter). If it says it may not use a path, give it a
-place inside the workspace, and move the file yourself afterwards. The `/` commands of section 11 are not in the desktop version: use
-**Log out**, **New chat** and **Stop** in the dock.
+Same assistant as section 10: it sets up, meshes, runs and explains, with the same tools. It has no shell and no access to your files.
+Whatever it writes or reads goes through checks: it saves files only inside the workspace or the temporary folder, never replaces an
+existing file or one of the workbench's own files, never uses a network path or a link, and reads only CAD files and exported studies by
+their full path (starting with a drive letter). If it says it may not use a path, give it a place inside the workspace, and move the file
+yourself afterwards.
+
+- **Stop** (next to **Send**) is always there. It is lit while Claude is answering or a command runs, and stops it; when nothing runs its
+  tooltip says so. While Claude answers, **Send** waits.
+- **Claude Code** opens Claude Code in a terminal window, in the study's folder (it finds a `CLAUDE.md` and the workbench tools there).
+  It needs a study; without one the button says so. Only you use this button: the built-in assistant cannot press it.
+- **The `/` commands.** A line in the message box that starts with `/` runs the Claude command line in the study's folder, and its output
+  appears in the conversation as a block: `/login` (or **Log in**), `/logout` (or **Log out**), `/status`, `/ask question`, `/version`
+  and `/help`. While a command waits for a code, the next line you type goes to it. Anything without `/` goes to Claude. Section 11
+  lists the commands in detail.
+- **The conversation is kept for each study** and is there again when you switch studies or restart the window. **New chat** forgets it.
+  Claude's answer in one study stays in that study if you switch while it is working.
+- **Ctrl+K** puts the cursor in the message box (and shows the dock if it was hidden).
 
 ### 15.7 Not in the desktop beta yet
 
@@ -755,10 +767,23 @@ Everything the web version's five steps offer now has a control in the desktop w
   structural and vibration studies from a STEP file).
 - **Results extras**: the promo look, the section-sweep video, the mirrored half of a symmetric model, the arrow length scale and the
   particle dot size and tail.
-- **The application bar**: the Claude Code button and the `/` commands of section 11, a Cancel button in the status bar, the probe button
-  in the 3D view's bar, a selection-hint banner and toasts.
-
 `docs/QT_PARITY.md` lists every control of the web version and its state in the desktop version.
+
+### 15.8a The 3D view's bar, status bar and keys
+
+- **Probe** (in the 3D view's bar, Results step): click it, then click the coloured result to pin the value there; it is the same switch as
+  the **Probe** tab's. Before the simulation has run it is greyed and its tooltip says why. The hint bar under the picture says "Probe is
+  on" with a **Stop probing** button.
+- **Section** (second bar, on the Mesh step once the mesh exists and on the Results step once the simulation has run): **Off, X, Y, Z**
+  choose the axis; the slider moves the plane and the label gives its place in mm; **play** (the triangle) sweeps the plane from one end
+  to the other and stops there; **Hide air** (cooling studies) draws only the solid parts. These move the panel's own section controls.
+- **The hint bar** under the picture says what to click next ("Click faces to add or remove them from ... (2 selected). Ctrl-click adds
+  more faces", "Click a flat face: the symmetry plane goes through it") with a **Done** or **Cancel** button; **Esc** presses it.
+- **The status bar** shows a running job's message and progress and a **Cancel** button that stops it. When a job finishes or fails a toast
+  says so.
+- **Keys**: Ctrl+1 Iso, Ctrl+2 / 3 / 4 look along X / Y / Z (again: from the other side), F fit, Ctrl+E edges, Ctrl+P picture,
+  Ctrl+Shift+P probe, Ctrl+Shift+Space play the section, Alt+1 to Alt+5 the steps, Ctrl+K write to Claude, Esc answer the hint or close a
+  toast. Each button's tooltip names its key. A control with the keyboard focus has a bright ring.
 
 ### 15.8 For people who script it
 
