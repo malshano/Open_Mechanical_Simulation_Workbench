@@ -207,41 +207,18 @@ async def pick_folder(body: dict = Body(default={})):
     return {"path": await asyncio.to_thread(run)}
 
 
-TERMINAL_ALLOWED = {("auth", "login"), ("auth", "logout"), ("auth", "status"), ("--help",), ("-h",), ("--version",),
-                    ("-v",), ("mcp", "list")}
-
-
-def terminal_args(args: list) -> list:
-    """The arguments the Claude terminal may pass to the claude CLI: a fixed list of commands, or one question
-    (-p "text") that runs without file-editing or shell tools. Any other flag is refused: flags such as
-    --dangerously-skip-permissions, --allowedTools, --mcp-config, --settings or --add-dir would turn the terminal
-    into a way to run commands."""
-    if tuple(args) in TERMINAL_ALLOWED:
-        return list(args)
-    if len(args) == 2 and args[0] in ("-p", "--print") and args[1] and not args[1].startswith("-"):
-        return ["-p", args[1], "--permission-mode", "default", "--disallowedTools", "Bash,Edit,Write,NotebookEdit,WebFetch"]
-    raise ValueError("This terminal runs: login, logout, status, --help, --version, mcp list, or one question as "
-                     "-p \"question\" (without shell or file-editing tools)")
+terminal_args = agent.terminal_args          # (the rules live in agent.py: the desktop window uses them too)
 
 
 @app.post("/api/projects/{pid}/terminal")
 def terminal_run(pid: str, body: dict = Body(...)):
     """One line typed in the Claude terminal. If a command is running the line goes to its input; otherwise it is
     run as arguments of the claude CLI in the project folder."""
-    import shlex
-
     P.open_project(pid)
     line = (body.get("line") or "").strip()
     if agent.TERMINAL.write(pid, line):
         return {"running": True, "stdin": True}
-    args = shlex.split(line, posix=False)
-    args = [a[1:-1] if len(a) > 1 and a[0] == a[-1] and a[0] in "\"'" else a for a in args]
-    if args and args[0].lower() in ("claude", "claude.exe"):
-        args = args[1:]
-    short = {"login": ["auth", "login"], "logout": ["auth", "logout"], "status": ["auth", "status"]}
-    if len(args) == 1 and args[0] in short:
-        args = short[args[0]]
-    args = terminal_args(args)
+    args = agent.terminal_line_args(line)
     cwd = agent.TERMINAL.run(pid, args, P.JOBS.emit)
     return {"running": True, "cwd": cwd, "args": args}
 

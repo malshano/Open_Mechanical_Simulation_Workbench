@@ -116,6 +116,10 @@ class Terminal:
             return False
         return True
 
+    def running(self, pid: str) -> bool:
+        proc = self.procs.get(pid)
+        return proc is not None and proc.poll() is None
+
     def stop(self, pid: str):
         proc = self.procs.get(pid)
         if proc is not None and proc.poll() is None:
@@ -123,6 +127,63 @@ class Terminal:
 
 
 TERMINAL = Terminal()
+
+
+TERMINAL_ALLOWED = {("auth", "login"), ("auth", "logout"), ("auth", "status"), ("--help",), ("-h",), ("--version",),
+                    ("-v",), ("mcp", "list")}
+
+TERM_HELP = ("Commands (they run the claude command line in the study folder):
+/login   log in to Claude
+/logout  log out
+"
+             "/status  who is logged in
+/ask question   one plain question to Claude (no study tools, no shell)
+/version, /help
+"
+             "Anything without a / goes to the assistant, which can set up and run your study.")
+
+
+def terminal_args(args: list) -> list:
+    """The arguments the Claude terminal may pass to the claude CLI: a fixed list of commands, or one question
+    (-p "text") that runs without file-editing or shell tools. Any other flag is refused: flags such as
+    --dangerously-skip-permissions, --allowedTools, --mcp-config, --settings or --add-dir would turn the terminal
+    into a way to run commands."""
+    if tuple(args) in TERMINAL_ALLOWED:
+        return list(args)
+    if len(args) == 2 and args[0] in ("-p", "--print") and args[1] and not args[1].startswith("-"):
+        return ["-p", args[1], "--permission-mode", "default", "--disallowedTools", "Bash,Edit,Write,NotebookEdit,WebFetch"]
+    raise ValueError("This terminal runs: login, logout, status, --help, --version, mcp list, or one question as "
+                     "-p \"question\" (without shell or file-editing tools)")
+
+
+def terminal_line_args(line: str) -> list:
+    """One line typed in the Claude terminal ("login", "status", "-p \"question\"") -> the checked arguments for the claude CLI."""
+    import shlex
+
+    args = shlex.split(line.strip(), posix=False)
+    args = [a[1:-1] if len(a) > 1 and a[0] == a[-1] and a[0] in "\"'" else a for a in args]
+    if args and args[0].lower() in ("claude", "claude.exe"):
+        args = args[1:]
+    short = {"login": ["auth", "login"], "logout": ["auth", "logout"], "status": ["auth", "status"]}
+    if len(args) == 1 and args[0] in short:
+        args = short[args[0]]
+    return terminal_args(args)
+
+
+def slash_command(text: str) -> tuple[str, str | None]:
+    """A chat line that starts with / ("/status", "/ask what is Q?", "/help") -> (kind, line): ("run", the line for terminal_line_args),
+    ("help", None) or ("unknown", None). The same commands as the web version's chat box."""
+    cmd, *rest = text[1:].strip().split()
+    arg = " ".join(rest)
+    if cmd in ("help", "?"):
+        return "help", None
+    if cmd == "ask":
+        return ("run", '-p "%s"' % arg.replace('"', "'")) if arg else ("unknown", None)
+    if cmd in ("login", "logout", "status"):
+        return "run", cmd
+    if cmd == "version":
+        return "run", "--version"
+    return "unknown", None
 
 
 class ChatSession:
