@@ -1,11 +1,15 @@
 """The tools that drive the desktop window name files only inside the workspace or the temp folder, and only the kinds the workbench
 makes (a model may have been steered by text in a study); a person or the REST window control is not limited."""
+import os
 import tempfile
 from pathlib import Path
 
 import pytest
 
 from simwb import project as P, tools, ui_bridge
+
+
+TEMP = os.path.realpath(tempfile.gettempdir())        # (the full name: a short one such as RUNNER~1 is refused on purpose, and a CI runner's temp folder has one)
 
 
 @pytest.fixture
@@ -38,7 +42,7 @@ def test_a_path_that_climbs_out_of_the_workspace_is_refused(window):
 
 def test_inside_the_workspace_or_temp_it_goes_through(window):
     ok = [("view.picture", {"path": str(Path(P.WORKSPACE) / "a.png")}),
-          ("study.export", {"path": str(Path(tempfile.gettempdir()) / "a.zip")})]
+          ("study.export", {"path": str(Path(TEMP) / "a.zip")})]
     for action, args in ok:
         tools.ui_do(None, {"action": action, "args": args})
     assert [c[1]["action"] for c in window] == ["view.picture", "study.export"]
@@ -48,7 +52,7 @@ def test_only_the_kinds_of_file_the_workbench_makes(window):
     with pytest.raises(ValueError, match="files only"):
         tools.ui_do(None, {"action": "view.picture", "args": {"path": str(Path(P.WORKSPACE) / "run.bat")}})
     with pytest.raises(ValueError, match="files only"):
-        tools.ui_do(None, {"action": "study.export", "args": {"path": str(Path(tempfile.gettempdir()) / "x.exe")}})
+        tools.ui_do(None, {"action": "study.export", "args": {"path": str(Path(TEMP) / "x.exe")}})
 
 
 def test_other_actions_are_untouched(window):

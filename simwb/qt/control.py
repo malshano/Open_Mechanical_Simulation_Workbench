@@ -427,7 +427,11 @@ class Control(QObject):
         else:
             raise ValueError("op must be get, click, set, select or text")
         self._settle()
-        e = self._entry(id, o)
+        try:
+            e = self._entry(id, o)
+        except RuntimeError:                                        # (the press rebuilt the panel and the control it pressed is gone: look for its successor)
+            o2 = self._index().get(id)
+            e = self._entry(id, o2) if o2 is not None else {"id": id, "gone": True, "visible": False, "enabled": False}
         e["new_log"] = self._new_problems(before)
         return e
 
