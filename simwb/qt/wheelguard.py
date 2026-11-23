@@ -1,9 +1,12 @@
 """Scrolling must only scroll. A drop-down, a slider or a number field under the pointer used to take the wheel (a laptop touchpad sends a stream of
 them) and change its value: an easy way to add a boundary condition or change a material by accident while scrolling a panel.
 
-One application-wide rule instead of a change in every control: a wheel over a combo box, spin box or slider that does not have the keyboard
-focus is handed to the scroll area it sits in (or dropped when there is none). A click (or Tab) gives the control the focus, and then the wheel
-changes it. The controls take the focus by click or Tab only, never by the wheel (their default would be to take it on the first notch)."""
+One application-wide rule instead of a change in every control:
+- a drop-down (combo box) never takes the wheel: it changes only when an entry is chosen from its open list (a click) or with the keyboard;
+  the wheel over it scrolls the panel, whether or not it was clicked;
+- a spin box or slider takes the wheel only after it was clicked (it has the keyboard focus); otherwise the wheel goes to the scroll area it
+  sits in (or is dropped when there is none).
+The controls take the focus by click or Tab only, never by the wheel (their default would be to take it on the first notch)."""
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QObject, Qt
@@ -43,8 +46,8 @@ class WheelGuard(QObject):
         if w.focusPolicy() == Qt.WheelFocus:                 # (the default of these controls: the wheel itself would give them the focus)
             w.setFocusPolicy(Qt.StrongFocus)
         fw = QApplication.focusWidget() or w.window().focusWidget()      # (the window's own choice when it is not the active window)
-        if w.hasFocus() or (fw is not None and (fw is w or w.isAncestorOf(fw))):
-            return False                                       # (the control was clicked: the wheel is for it)
+        if not isinstance(w, QComboBox) and (w.hasFocus() or (fw is not None and (fw is w or w.isAncestorOf(fw)))):
+            return False                                       # (a spin box or slider that was clicked: the wheel is for it; a drop-down never)
         sa = scroll_area_of(w)
         if sa is not None:
             self._forward(sa.viewport(), ev)

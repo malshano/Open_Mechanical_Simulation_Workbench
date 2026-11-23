@@ -121,3 +121,70 @@ def test_a_dragged_gizmo_changes_the_preview(aero):
     g.drag_to(*(start + (b - a) * 0.3))
     g.release(*(start + (b - a) * 0.3))
     assert abs(x.shift[0]) > 1e-6 and abs(x.shift[1]) < 1e-9
+
+
+# ------------------------------------------------------------------------------------------------------------ resizing a region
+def test_a_box_face_moves_out_and_the_opposite_face_stays():
+    g = np.zeros((3, 2))
+    g[0, 1], g[1, 0] = 0.5, 0.25
+    r = regions.grown(BOX, g)
+    assert np.allclose(r["min"], [0, -0.25, 0]) and np.allclose(r["max"], [2.5, 1, 1])
+    assert regions.size_of(r) == pytest.approx([2.5, 1.25, 1.0])
+
+
+def test_a_turned_box_grows_along_its_own_axes():
+    turned = regions.moved_and_turned(BOX, rz(90), [0, 0, 0])
+    handle = next(h for h in regions.face_handles(turned) if h["key"] == (0, 1))
+    assert np.allclose(handle["dir"], [0, 1, 0])                                                  # (its +x face now looks along world y)
+    g = np.zeros((3, 2))
+    g[0, 1] = 0.5
+    r = regions.grown(turned, g)
+    assert regions.size_of(r) == pytest.approx([2.5, 1.0, 1.0])
+    lo, hi = regions.bounds(r)
+    assert hi[1] - lo[1] == pytest.approx(2.5) and hi[0] - lo[0] == pytest.approx(1.0)           # (it got longer in y, not in x)
+
+
+def test_a_cylinder_grows_at_its_ends_and_in_radius_and_nothing_gets_smaller_than_the_minimum():
+    g = np.zeros((3, 2))
+    g[0, 1], g[1, 0] = 1.0, -0.2
+    r = regions.grown(CYL, g)
+    assert np.allclose(r["end"], [3, 0, 0]) and r["radius"] == pytest.approx(0.3)
+    small = regions.grown(BOX, np.array([[0, -5.0], [0, 0], [0, 0]]))
+    assert regions.size_of(small)[0] == pytest.approx(regions.MIN_SIZE)
+    assert [h["key"] for h in regions.face_handles(CYL)] == [("len", 0), ("len", 1), ("rad", 0)]
+    assert len(regions.face_handles(BOX)) == 6
+
+
+def test_resizing_in_the_session_by_handle_by_size_and_by_percentage(aero):
+    c = aero
+    c.do("mesh.region_add", {"kind": "box"})
+    before = c.engine.state()["mesh"]["regions"][0]
+    c.widget_do("mesh.region.0.xform", "set", True)
+    x, sh = c.win.panels["mesh"].adv.xform, c.win.view.scale_handles
+    assert sh.on and len(sh.handles) == 6
+    h = next(h for h in sh.handles if h["key"] == (0, 1))
+    a, b = np.array(sh._px(h["pos"])), np.array(sh._px(h["pos"] + h["dir"] * sh.length))
+    start = (a + b) / 2
+    assert sh.press(*start)
+    sh.drag_to(*(start + (b - a) * 0.5))
+    sh.release(*(start + (b - a) * 0.5))
+    assert x.grow[0, 1] > 1e-6 and not x.grow[0, 0] and not x.grow[1].any()                      # (only that face moved)
+    assert c.engine.state()["mesh"]["regions"][0] == before                                       # (nothing stored yet)
+    old = regions.size_of(before)
+    c.widget_do("mesh.region.0.xf.sy", "set", "500")
+    assert float(c.widget_do("mesh.region.0.xf.sy")["value"]) == pytest.approx(500)
+    c.widget_do("mesh.region.0.xf.reset", "click")
+    c.widget_do("mesh.region.0.xf.sc", "set", "200")
+    assert regions.size_of(x.preview()) == pytest.approx([2 * s for s in old])
+    c.widget_do("mesh.region.0.xf.apply", "click")
+    assert regions.size_of(c.engine.state()["mesh"]["regions"][0]) == pytest.approx([2 * s for s in old])
+    assert not sh.on
+
+
+def test_the_resize_handles_go_when_the_session_ends(aero):
+    c = aero
+    c.do("mesh.region_add", {"kind": "cylinder"})
+    c.widget_do("mesh.region.0.xform", "set", True)
+    assert [h["key"] for h in c.win.view.scale_handles.handles] == [("len", 0), ("len", 1), ("rad", 0)]
+    c.widget_do("mesh.region.0.xf.cancel", "click")
+    assert not c.win.view.scale_handles.on

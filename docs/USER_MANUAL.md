@@ -563,6 +563,9 @@ With no study open the window shows **What do you want to simulate?**: a card fo
 CAD file** or **Try example**), **Open a saved study...**, **Import a study file...** and the studies opened lately. Docks that are in the
 way can be closed from the **View** menu and come back when a study opens.
 
+Scrolling only scrolls. The mouse wheel or a touchpad over a **drop-down** never changes it: choose an entry by clicking it in the open list. A
+**slider** or a **number field** takes the wheel only after you have clicked it. The window is sized to your screen and kept inside it.
+
 ### 15.3 Saving, opening and sharing a study
 
 A study is written to its folder after every change, so nothing is lost when the window closes. The **File** menu:
@@ -720,7 +723,9 @@ layers** - and **Generate mesh**.
 - **Refinement regions are drawn in the 3D view** before you mesh: each box or cylinder (a ring too) as a translucent body with an outline, in
   the colour of its swatch in the list, with its name and cell size written on it; the region you edit is drawn stronger. **◎** zooms to a
   region, and **Show the regions in the 3D view** switches the drawing off. Edit the numbers and the drawing follows.
-- **Move / turn a region**: press **Move / turn…** on a region's card. A gizmo appears at the region's middle, as in the Geometry step: drag an
+- **Move / turn a region**: press **Move / turn…** on a region's card. Resize it in the same session: **square-ended arrows** on its faces (a box has six, a cylinder one at each end and one for the radius) move that face while the
+  opposite one stays (Shift: round steps), or type the **Size** (mm, in the region's own axes) or **Scale all** (a percentage of the stored region).
+  A gizmo appears at the region's middle, as in the Geometry step: drag an
   arrow to move it along x, y or z, the ball to move it freely, a ring to turn it about x, y or z (hold Shift for round steps); or type
   **Move by** (mm) and **Turn about** (degrees). The region is drawn as it would be; **Apply** stores it, **Reset** puts the preview back,
   **Cancel** leaves the region alone. A box keeps its turn (a note on its card says so; its corner numbers are the box before the turn);

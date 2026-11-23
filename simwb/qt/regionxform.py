@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBox
 
 from .. import regions as region_tools
 from .forms import fmt_num
-from .gizmo import rot_about
+from .gizmo import nice_step_mm, rot_about
 from .ids import wid
 
 M = 1000.0
@@ -39,6 +39,9 @@ class RegionTransform:
         self.shift = np.zeros(3)
         self.base = (np.eye(3), np.zeros(3))               # the change when the drag in progress started
         self.live = False
+        self.grow = np.zeros((3, 2))                       # how far each face was moved out (m): the box's six faces; a cylinder: start, end, radius
+        self.grow_base = np.zeros((3, 2))
+        self.scaling = False
         self.fields: dict = {}                              # "mx" ... "tz" -> the line edit (updated while a handle is dragged)
         self.readout: QLabel | None = None
 
@@ -58,6 +61,7 @@ class RegionTransform:
     def start(self, i: int):
         self.index = i
         self.R, self.shift, self.live = np.eye(3), np.zeros(3), False
+        self.grow, self.scaling = np.zeros((3, 2)), False
         self.adv.active_region = i
         self._gizmo()
         self._preview()
@@ -67,10 +71,12 @@ class RegionTransform:
         was = self.index is not None
         self.index = None
         self.R, self.shift, self.live = np.eye(3), np.zeros(3), False
+        self.grow, self.scaling = np.zeros((3, 2)), False
         self.fields = {}
         g = self.view.region_gizmo
         if g.on or was:
             g.clear()
+        self.view.scale_handles.clear()
         self.view.region_view.clear()
         if was:
             self.adv._sig = None
@@ -83,11 +89,11 @@ class RegionTransform:
         self.adv.panel.refresh(self.adv.engine.state())
 
     def pending(self) -> bool:
-        return not np.allclose(self.R, np.eye(3), atol=1e-9) or bool(np.abs(self.shift).max() > 1e-12)
+        return not np.allclose(self.R, np.eye(3), atol=1e-9) or bool(np.abs(self.shift).max() > 1e-12) or bool(np.abs(self.grow).max() > 1e-12)
 
     def preview(self) -> dict | None:
         r = self.region()
-        return None if r is None else region_tools.moved_and_turned(r, self.R, self.shift)
+        return None if r is None else region_tools.moved_and_turned(region_tools.grown(r, self.grow), self.R, self.shift)
 
     def apply(self):
         i, new = self.index, self.preview()
@@ -118,12 +124,18 @@ class RegionTransform:
         regs = self.adv._regions_state()
         if self.index is None or self.index >= len(regs):
             return
-        regs[self.index] = self.preview()
+        r0 = regs[self.index]
+        grown = region_tools.grown(r0, self.grow)
+        regs[self.index] = region_tools.moved_and_turned(grown, self.R, self.shift)
         self.view.region_view.set(regs, self.index)
         g = self.view.region_gizmo
+        g.center = region_tools.centre(grown)
         g.shift = self.shift.copy()
         if g.on and g.drag is None:
             g._draw()
+        lo, hi = region_tools.bounds(regs[self.index])
+        size = float(max(np.asarray(hi) - np.asarray(lo))) or 0.1
+        self.view.scale_handles.set(region_tools.face_handles(regs[self.index]), 0.1 * size, self.on_scale, nice_step_mm(size) / M)
         self._fill_fields()
         self.view.render()
 
@@ -155,12 +167,32 @@ class RegionTransform:
             self.live = False
             self._preview()
 
+    def on_scale(self, key, delta: float, final: bool):
+        """A resize handle is dragged: its face moves out by `delta` (called by the handles); the first call (zero, not final) starts the drag."""
+        if not final and not self.scaling:
+            self.grow_base = self.grow.copy()
+            self.scaling = True
+        self.grow = self.grow_base.copy()
+        self.grow[region_tools.growth_index(key)] += float(delta)
+        text = f"Moving this face {float(delta) * M:+.1f} mm"
+        self._preview()
+        self.view.region_gizmo.show_angle(text)
+        if self.readout is not None:
+            self.readout.setText(text)
+        if final:
+            self.view.region_gizmo.show_angle(None)
+            self.scaling = False
+
     # ------------------------------------------------------------------ typed numbers
     def _fill_fields(self):
         if not self.fields:
             return
         rx, ry, rz = euler_deg(self.R)
-        vals = {"mx": self.shift[0] * M, "my": self.shift[1] * M, "mz": self.shift[2] * M, "tx": rx, "ty": ry, "tz": rz}
+        vals = {"mx": self.shift[0] * M, "my": self.shift[1] * M, "mz": self.shift[2] * M, "tx": rx, "ty": ry, "tz": rz, "sc": 100.0}
+        p = self.preview()
+        if p is not None:
+            sz = region_tools.size_of(p)
+            vals.update({"sl": sz[0] * M, "sr": sz[1] * M} if p.get("shape") == "cylinder" else {"sx": sz[0] * M, "sy": sz[1] * M, "sz": sz[2] * M})
         for k, e in list(self.fields.items()):
             try:
                 if not e.hasFocus():
@@ -168,11 +200,33 @@ class RegionTransform:
             except RuntimeError:
                 self.fields.pop(k, None)
 
-    def typed(self):
-        """A number in the fields changed: the change is what the fields say."""
+    def typed(self, key: str | None = None):
+        """A number in the fields changed: the change is what the fields say (a size or the scale for the faces, the move and the turn otherwise)."""
         try:
             v = {k: float(e.text().replace(",", ".") or 0) for k, e in self.fields.items()}
         except (ValueError, RuntimeError):
+            return
+        r = self.region()
+        if r is None:
+            return
+        if key in ("sx", "sy", "sz", "sl", "sr", "sc"):
+            orig = region_tools.size_of(r)
+            g = np.zeros((3, 2))
+            if key == "sc":                                         # (all sizes by a percentage of the stored region)
+                f = max(v["sc"], 0.1) / 100.0
+                want = [orig[0] * f, orig[1] * f, orig[2] * f]
+            elif r.get("shape") == "cylinder":
+                want = [v["sl"] / M, v["sr"] / M, orig[2]]
+            else:
+                want = [v["sx"] / M, v["sy"] / M, v["sz"] / M]
+            if r.get("shape") == "cylinder":
+                g[0, :] = (want[0] - orig[0]) / 2
+                g[1, 0] = want[1] - orig[1]
+            else:
+                for k in range(3):
+                    g[k, :] = (want[k] - orig[k]) / 2
+            self.grow = g
+            self._preview()
             return
         self.shift = np.array([v["mx"], v["my"], v["mz"]]) / M
         self.R = rotation_from_euler(v["tx"], v["ty"], v["tz"])
@@ -183,6 +237,7 @@ class RegionTransform:
 
     def reset(self):
         self.R, self.shift, self.live = np.eye(3), np.zeros(3), False
+        self.grow, self.scaling = np.zeros((3, 2)), False
         self._preview()
 
     # ------------------------------------------------------------------ the block in the region's card
@@ -191,21 +246,26 @@ class RegionTransform:
         v = QVBoxLayout(box)
         v.setContentsMargins(0, 4, 0, 0)
         v.setSpacing(4)
-        note = QLabel("Drag an arrow to move the region, the ball to move it freely, a ring to turn it (Shift: round steps) - or type the numbers. "
-                      "Nothing is stored until you press Apply.")
+        note = QLabel("Drag an arrow to move the region, the ball to move it freely, a ring to turn it, or a square-ended arrow on a face to resize it "
+                      "(Shift: round steps) - or type the numbers. Nothing is stored until you press Apply.")
         note.setObjectName("muted")
         note.setWordWrap(True)
         v.addWidget(note)
         self.fields = {}
-        for title, keys, unit in (("Move by", ("mx", "my", "mz"), "mm"), ("Turn about", ("tx", "ty", "tz"), "°")):
+        cyl = (self.region() or {}).get("shape") == "cylinder"
+        rows = [("Move by", ("mx", "my", "mz"), "mm", "xyz"), ("Turn about", ("tx", "ty", "tz"), "°", "xyz"),
+                ("Size", ("sl", "sr") if cyl else ("sx", "sy", "sz"), "mm", ("length", "radius") if cyl else "xyz"), ("Scale all", ("sc",), "%", ("",))]
+        tips = {"Move by": " (the region is moved by this much)", "Turn about": " (the region is turned this much about its middle)",
+                "Size": " (in the region's own axes; the region grows or shrinks about its middle)", "Scale all": " (a percentage of the region as it is stored)"}
+        for title, keys, unit, names in rows:
             row = QHBoxLayout()
             row.addWidget(QLabel(f"{title} [{unit}]"))
-            for k, ax in zip(keys, "xyz"):
-                e = wid(QLineEdit("0"), f"mesh.region.{i}.xf.{k}")
+            for k, ax in zip(keys, names):
+                e = wid(QLineEdit("100" if k == "sc" else "0"), f"mesh.region.{i}.xf.{k}")
                 e.setValidator(QDoubleValidator(-1e7, 1e7, 4, e))
-                e.setToolTip(f"{title} {ax} [{unit}]" + (" (the region is moved by this much)" if title == "Move by" else " (the region is turned this much about its middle)"))
-                e.setAccessibleName(f"{title} {ax}")
-                e.editingFinished.connect(self.typed)
+                e.setToolTip(f"{title} {ax} [{unit}]".replace("  ", " ") + tips[title])
+                e.setAccessibleName(f"{title} {ax}".strip())
+                e.editingFinished.connect(lambda k=k: self.typed(k))
                 row.addWidget(e, 1)
                 self.fields[k] = e
             v.addLayout(row)
