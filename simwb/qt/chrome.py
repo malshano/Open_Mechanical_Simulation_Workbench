@@ -8,7 +8,7 @@ from PySide6.QtGui import QAction, QResizeEvent
 from PySide6.QtWidgets import (QApplication, QComboBox, QHBoxLayout, QMenu, QMessageBox, QPushButton, QSizePolicy, QToolButton, QWidget)
 
 from .. import project as P
-from . import mode
+from . import mode, theme
 from .ids import wid
 
 
@@ -56,6 +56,19 @@ def install(win, bar):
         b.clicked.connect(lambda _=False, k=key: mode.set_simple(k == "simple"))
         sr.addWidget(b)
         win.mode_btns[key] = b
+    tb = wid(QPushButton(), "chrome.theme")                     # (the dark / light switch: it says what a click does)
+    tb.setObjectName("ghostBorder")
+
+    def theme_label(*_):
+        dark = theme.effective() == "dark"
+        tb.setText("☀ Light mode" if dark else "☾ Dark mode")
+        tb.setToolTip(("Switch to the light theme" if dark else "Switch to the dark theme") + " (View > Theme also has 'Follow the system')")
+        tb.setAccessibleName("Switch to the light theme" if dark else "Switch to the dark theme")
+    tb.clicked.connect(lambda: win.set_theme("light" if theme.effective() == "dark" else "dark"))
+    theme.bus.changed.connect(theme_label)
+    theme_label()
+    win.theme_btn = tb
+    cr.addWidget(tb)
     cr.addWidget(seg)
     mode.bus.changed.connect(lambda s: (win.mode_btns["simple"].setChecked(s), win.mode_btns["expert"].setChecked(not s),
                                         win.engine.settings.setValue("mode", "simple" if s else "expert"), _on_mode(win)))

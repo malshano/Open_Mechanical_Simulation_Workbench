@@ -18,10 +18,10 @@ DARK = {
     **COMMON,
     "bg": "#16181d", "panel": "#1d2026", "panel2": "#242830", "raised": "#2b303a",
     "line": "#323844", "line_strong": "#6b7587",
-    "ink": "#e6e9ef", "muted": "#9aa3b2", "disabled": "#7a8394",
-    "accent": "#2f6fdb", "accent_hi": "#2459bc", "accent_soft": "#1f3a66", "accent_text": "#7db0ff", "focus": "#7db0ff",
+    "ink": "#e6e9ef", "muted": "#a3acbb", "disabled": "#9fa8b7",
+    "accent": "#2f6fdb", "accent_hi": "#2459bc", "accent_soft": "#1f3a66", "accent_text": "#a6ccff", "focus": "#7db0ff",
     "ok": "#3fb950", "warn": "#d29922", "bad": "#f85149",                 # (marks and stripes)
-    "ok_text": "#4cc263", "warn_text": "#e0ac3a", "bad_text": "#ff7b72",  # (as text)
+    "ok_text": "#7ee794", "warn_text": "#f4c95e", "bad_text": "#ffa39b",  # (as text)
     "vp_top": "#3b4760", "vp_bottom": "#667791", "vp_text": "#ffffff", "air_edge": "#cfe6ff", "edge": "#0d1017",
 }
 
@@ -29,10 +29,10 @@ LIGHT = {
     **COMMON,
     "bg": "#f1f3f8", "panel": "#ffffff", "panel2": "#eceff5", "raised": "#e2e7ef",
     "line": "#c9d0dc", "line_strong": "#7a8598",
-    "ink": "#1b2230", "muted": "#566175", "disabled": "#767f91",
-    "accent": "#1f5fcf", "accent_hi": "#174cb0", "accent_soft": "#dbe7fb", "accent_text": "#1a56bd", "focus": "#1a56bd",
+    "ink": "#1b2230", "muted": "#4b5568", "disabled": "#586376",
+    "accent": "#1f5fcf", "accent_hi": "#174cb0", "accent_soft": "#dbe7fb", "accent_text": "#143f94", "focus": "#1a56bd",
     "ok": "#1a7f37", "warn": "#9a6700", "bad": "#c62828",
-    "ok_text": "#17692e", "warn_text": "#855a00", "bad_text": "#b3261e",
+    "ok_text": "#0f5224", "warn_text": "#654300", "bad_text": "#8f1912",
     "vp_top": "#c3cfe2", "vp_bottom": "#f4f7fb", "vp_text": "#1b2230", "air_edge": "#2f5d9e", "edge": "#2a3140",
 }
 

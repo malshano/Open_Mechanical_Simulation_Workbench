@@ -80,6 +80,7 @@ Settings are read from environment variables (all optional):
 | Messages / Solver log | bottom | What is ready or missing; the live log of the running job. |
 | Claude panel | right | One chat box for the assistant and for Claude commands that start with `/` (sections 10 and 11). |
 | Status bar | bottom | Study name, mesh size, solution state, progress of the running job with **Cancel**. |
+| **☀ Light mode / ☾ Dark mode** | top right, left of Simple / Expert | Switches between the dark and the light theme with one click; the button names the theme it switches to. The choice is remembered. **View > Theme** also has *Follow the system*. All text is at least 4.5:1 against its background in both themes (messages, boxes and dialogs 7:1). |
 | **Simple / Expert** | top right | **Simple** shows the essential settings and a **Next step** hint on top of the details panel (what is still missing, with a button that takes you there). **Expert** shows every setting and tool: part sizing, refinement regions, wall layers, solver numerics, case files, the solver choice, extra checks. Switching changes only what is shown, never a value. A new installation starts in Simple. |
 | **Probe**, **Picture** | above the 3D view | **Probe** (Results step): click a point of the coloured result to pin its value there; click **Probe** again to stop. The labels stay until the field, the time or the section changes. **Picture** saves the 3D view as a PNG with the colour scale. |
 
