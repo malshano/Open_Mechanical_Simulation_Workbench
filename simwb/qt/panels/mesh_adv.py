@@ -2,9 +2,9 @@
 cylinders) and wall layers (flow studies). Built on the engine's set_mesh; every field is in mm, the engine works in metres."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QDoubleValidator
-from PySide6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget
 
 from .. import theme
 from ..forms import ParamForm, fmt_num
@@ -41,6 +41,9 @@ class MeshAdvanced(QWidget):
         self.v.setSpacing(8)
         self._sig = None
         self._open: dict = {}               # which sections the user has open (kept when the content is rebuilt)
+        self.show_regions = True            # the refinement regions are drawn in the 3D view
+        self.active_region: int | None = None   # the one being edited or looked at: drawn stronger
+        self.pick_btn = None
 
     def _sec(self, title, prefix, default):
         s = Section(title, prefix, expanded=self._open.get(prefix, default))
@@ -55,6 +58,7 @@ class MeshAdvanced(QWidget):
     def refresh(self, st):
         m = st["mesh"]
         sig = repr([st["study"], m.get("size_max"), m.get("size_min"), m.get("defeature"), m.get("refinements"), m.get("regions"), m.get("layers"),
+                    self.show_regions, self.active_region, getattr(self.panel, "picking_part", False),
                     [(b["id"], b["name"]) for b in st["body_list"]], st.get("moving_zones"), st.get("flow_dir"), m.get("method"),
                     theme.effective()])
         if sig == self._sig:
@@ -124,18 +128,70 @@ class MeshAdvanced(QWidget):
         row = QHBoxLayout()
         self.part_pick = wid(QComboBox(), "mesh.part.pick")
         self.part_pick.setToolTip("The part to size")
-        for b in st["body_list"]:
-            if b["role"] == "solid":
-                self.part_pick.addItem(b["name"], b["id"])
-        self.part_pick.addItem("Selected faces (pick them in the 3D view)", None)
+        for kind, key, name in self.parts_to_size(st):
+            self.part_pick.addItem(name, f"{kind}:{key}")
+        self.part_pick.addItem("Faces selected in the 3D view", None)
         add = wid(QPushButton("＋ Part sizing"), "mesh.part.add")
         add.setObjectName("ghostBorder")
-        add.setToolTip("Set a cell size on a part, or on the faces selected in the 3D view")
+        add.setToolTip("Set a cell size on the part chosen here, or on the faces selected in the 3D view")
         add.clicked.connect(self._part_add)
         row.addWidget(self.part_pick, 1)
         row.addWidget(add)
         s.body.addLayout(row)
+        self.pick_btn = wid(QPushButton("Pick a part in the 3D view"), "mesh.part.pick_3d")
+        self.pick_btn.setObjectName("toggle")
+        self.pick_btn.setCheckable(True)
+        self.pick_btn.setChecked(bool(getattr(self.panel, "picking_part", False)))
+        self.pick_btn.setToolTip("Then click the part in the 3D view: all its faces get a cell size (you can change it here afterwards)")
+        self.pick_btn.toggled.connect(self.panel.set_picking_part)
+        s.body.addWidget(self.pick_btn)
+        s.body.addWidget(_muted("The faces that have a part sizing are tinted in the 3D view."))
         self.v.addWidget(s)
+
+    def parts_to_size(self, st) -> list:
+        """[(kind, key, name)] of what can be sized: the solid parts of a structural or heat study (bodies), and the parts of the object in a flow
+        study (named on their faces: the object is not a body there, the only body is the air)."""
+        out = [("body", b["id"], b["name"]) for b in st["body_list"] if b["role"] == "solid"]
+        seen = {n for _k, _i, n in out}
+        for f in self.engine.project().faces():
+            n = f.get("part")
+            if n and f.get("kind") not in ("farfield", "enclosure") and n not in seen:
+                seen.add(n)
+                out.append(("part", n, n))
+        return out
+
+    def _faces_of(self, kind: str, key):
+        """The faces of a part to size: its own surface, never the walls of the air volume."""
+        out = []
+        for f in self.engine.project().faces():
+            if f.get("kind") in ("farfield", "enclosure"):
+                continue
+            if kind == "body" and int(key) in (f.get("volumes") or []):
+                out.append(f["id"])
+            elif kind == "part" and f.get("part") == key:
+                out.append(f["id"])
+        return out
+
+    def part_from_face(self, fid: int):
+        """A face was clicked while 'Pick a part in the 3D view' is on: its whole part gets a cell size."""
+        try:
+            f = self.engine.project().face_map().get(int(fid))
+            if f is None:
+                return
+            if f.get("kind") in ("farfield", "enclosure"):
+                raise ValueError("That is the air volume, not a part: click the object itself")
+            if f.get("part"):
+                kind, key, name = "part", f["part"], f["part"]
+            else:
+                bid = (f.get("volumes") or [None])[0]
+                body = next((b for b in self.engine.state()["body_list"] if b["id"] == bid), None)
+                kind, key, name = "body", bid, (body["name"] if body else f"Part {bid}")
+            faces = self._faces_of(kind, key)
+            self.panel.set_picking_part(False)
+            self._add_sizing(faces, name)
+            self.panel.view.set_selection(faces)
+        except Exception as e:  # noqa: BLE001
+            self.panel._fail(e)
 
     def _refs(self):
         return [dict(r) for r in (self.engine.state()["mesh"].get("refinements") or [])]
@@ -147,20 +203,26 @@ class MeshAdvanced(QWidget):
 
     def _part_add(self):
         try:
-            bid = self.part_pick.currentData()
-            if bid is None:
+            data = self.part_pick.currentData()
+            if data is None:
                 faces = list(self.panel.view.selection)
                 if not faces:
-                    raise ValueError("Select faces in the 3D view first, or choose a part")
-                part = None
-            else:
-                faces = [f["id"] for f in self.engine.project().faces() if bid in (f.get("volumes") or []) and f.get("kind") not in ("farfield", "enclosure")]
-                part = self.part_pick.currentText()
-            size = (self.engine.state()["mesh"].get("size_max") or 0.01) / 2
-            refs = self._refs() + [{"faces": faces, "size": size, **({"part": part} if part else {})}]
-            self._save_refs(refs)
+                    raise ValueError("Select faces in the 3D view first (or press 'Pick a part in the 3D view'), or choose a part")
+                self._add_sizing(faces, None)
+                return
+            kind, key = str(data).split(":", 1)
+            self._add_sizing(self._faces_of(kind, int(key) if kind == "body" else key), self.part_pick.currentText())
         except Exception as e:  # noqa: BLE001
             self.panel._fail(e)
+
+    def _add_sizing(self, faces: list, part: str | None):
+        if not faces:
+            raise ValueError("That part has no faces to size")
+        refs = self._refs()
+        if part and any(r.get("part") == part for r in refs):
+            raise ValueError(f"{part} already has a part sizing: change its size in the list")
+        size = (self.engine.state()["mesh"].get("size_max") or 0.01) / 2
+        self._save_refs(refs + [{"faces": faces, "size": size, **({"part": part} if part else {})}])
 
     def _part_size(self, i, text):
         try:
@@ -181,17 +243,33 @@ class MeshAdvanced(QWidget):
         s = self._sec(f"Refinement regions ({len(regs)})", "mesh.regions", bool(regs))
         s.body.addWidget(_muted("Boxes or cylinders of finer cells (bodies of influence), e.g. round a propeller, in a wake or a gap; the "
                                 "cells grow smoothly to the surrounding size outside them."))
+        sw = wid(QCheckBox("Show the regions in the 3D view"), "mesh.regions.show")
+        sw.setChecked(self.show_regions)
+        sw.setToolTip("Draw each region as a translucent box or cylinder over the model, in its own colour (the one you are editing is stronger)")
+        sw.toggled.connect(self._show_regions)
+        s.body.addWidget(sw)
         for i, r in enumerate(regs):
             card = _item()
             cv = QVBoxLayout(card)
             cv.setContentsMargins(8, 6, 8, 6)
             cv.setSpacing(4)
             head = QHBoxLayout()
+            from ..regionview import colour_of
+            sw_c = QLabel("")
+            sw_c.setFixedSize(14, 14)
+            sw_c.setStyleSheet(f"background: {colour_of(i)}; border: 1px solid {theme.tokens()['line_strong']}; border-radius: 3px;")
+            sw_c.setToolTip("Its colour in the 3D view")
+            head.addWidget(sw_c)
             name = wid(QLineEdit(r["name"]), f"mesh.region.{i}.name")
             name.setToolTip("Name of this refinement region")
             name.editingFinished.connect(lambda i=i, w=name: self._region_edit(i, name=w.text()))
             head.addWidget(name, 1)
             head.addWidget(_muted("cylinder" if r.get("shape") == "cylinder" else "box"))
+            look = wid(QPushButton("◎"), f"mesh.region.{i}.show")
+            look.setObjectName("ghost")
+            look.setToolTip("Show this region in the 3D view: zoom to it and draw it stronger")
+            look.clicked.connect(lambda _=False, i=i: self._region_look(i))
+            head.addWidget(look)
             d = wid(QPushButton("✕"), f"mesh.region.{i}.delete")
             d.setObjectName("ghost")
             d.setToolTip("Remove this refinement region")
@@ -254,6 +332,26 @@ class MeshAdvanced(QWidget):
             if not zones:
                 s.body.addWidget(_muted("Wake and tip-vortex regions are made from the rotating zones: add one in Setup to use them."))
         self.v.addWidget(s)
+
+    def _show_regions(self, on: bool):
+        self.show_regions = bool(on)
+        self._sig = None
+        self.panel.draw_marks()
+
+    def _region_look(self, i):
+        """Zoom to a region and draw it stronger."""
+        try:
+            r = self._regions_state()[i]
+            self.active_region = i
+            self.show_regions = True
+            v = self.panel.view
+            v.set_focus(list(r["min"]) + list(r["max"]))
+            v.fit()
+            QTimer.singleShot(250, lambda: v.set_focus(None))        # (after the fit has settled: the Fit button shows everything again)
+            self._sig = None
+            self.panel.draw_marks()
+        except Exception as e:  # noqa: BLE001
+            self.panel._fail(e)
 
     def _region_fit(self, i, body_id):
         try:

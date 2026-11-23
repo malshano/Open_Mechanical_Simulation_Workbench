@@ -53,8 +53,62 @@ class MeshPanel(_Panel):
               ("volume", "Cell volume", "Colour each cell by its volume (mm³)")]
     TET_ONLY = ("size", "aspect", "growth", "volume")
 
+    def bind(self, win):
+        super().bind(win)
+        win.view.facePicked.connect(self._face_picked)
+
+    def shown(self):
+        self.draw_marks()
+
+    def left(self):
+        self.set_picking_part(False)
+        v = self.view
+        v.region_view.clear()
+        v.set_labels([])
+        v.set_face_tints({})
+        v.set_selection([])
+
+    def set_picking_part(self, on: bool):
+        """Clicking a part in the 3D view gives it a cell size (Part sizing)."""
+        on = bool(on)
+        if on == getattr(self, "picking_part", False):
+            return
+        self.picking_part = on
+        if self.view is not None:
+            self.view.set_pick_mode("face" if on else None)
+            self.view.set_selection([])
+        b = getattr(self.adv, "pick_btn", None)
+        if b is not None and b.isChecked() != on:
+            b.blockSignals(True)
+            b.setChecked(on)
+            b.blockSignals(False)
+        if self.win is not None:
+            self.win.shell.sync()
+
+    def _face_picked(self, fid, add):
+        if getattr(self, "picking_part", False) and self.win is not None and self.win.step == "mesh":
+            self.adv.part_from_face(int(fid))
+
+    def draw_marks(self):
+        """The refinement regions as translucent boxes and cylinders with their names, and the faces that have a part sizing in colour."""
+        if self.win is None or self.win.step != "mesh" or not self.engine.pid:
+            return
+        st = self.engine.state()
+        m = st["mesh"]
+        regs = (m.get("regions") or []) if self.adv.show_regions else []
+        self.view.region_view.set(regs, self.adv.active_region)
+        from ..regionview import colour_of
+        self.view.set_labels([{"point": self.view.region_view.label_point(r), "text": f"{r.get('name', '')}: {fmt_num(round(r['size'] * 1000, 3))} mm",
+                               "color": colour_of(i), "key": f"region{i}"} for i, r in enumerate(regs)] if regs else [])
+        tints = {}
+        for r in m.get("refinements") or []:
+            for f in r.get("faces") or []:
+                tints[int(f)] = "#14b8a6"
+        self.view.set_face_tints(tints)
+
     def __init__(self, engine, parent=None):
         super().__init__(engine, parent)
+        self.picking_part = False
         self.color = "quality"
         self.axis = ""
         self.frac = 0.5
@@ -341,6 +395,7 @@ class MeshPanel(_Panel):
         self.slider.setEnabled(bool(self.axis))
         if not (self.poor_on and s):
             self.poor_info.setText("")          # (when they are shown, the window writes how many cells are below the threshold)
+        self.draw_marks()
 
     def _budget(self, st, have):
         """The cell budget of a tetrahedral mesh (computed once per mesh)."""

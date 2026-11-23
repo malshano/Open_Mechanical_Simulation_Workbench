@@ -709,6 +709,12 @@ The Mesh step has the same settings as section 6, in the same order: **Mesh type
 **Resolution**, then the folded advanced options - **Advanced sizes and defeaturing**, **Part sizing**, **Refinement regions** and **Wall
 layers** - and **Generate mesh**.
 
+- **Part sizing**: choose the part in the drop-down (in a flow study that is the object: the parts of your STEP file by name) and press
+  **＋ Part sizing**, or press **Pick a part in the 3D view** and click the part: all its faces get a cell size, which you then change in
+  the list. The faces that have a part sizing are tinted in the 3D view. A part has one sizing; change its size instead of adding another.
+- **Refinement regions are drawn in the 3D view** before you mesh: each box or cylinder (a ring too) as a translucent body with an outline, in
+  the colour of its swatch in the list, with its name and cell size written on it; the region you edit is drawn stronger. **◎** zooms to a
+  region, and **Show the regions in the 3D view** switches the drawing off. Edit the numbers and the drawing follows.
 - **Refinement regions**: **＋ Box** and **＋ Cylinder** as before; each region now shows roughly how many cells it alone makes (in the
   warning colour above three million), and a box has **Fit around part…** to put it round a part. In a flow study with rotating zones,
   **＋ Wake behind rotating zones** adds a cylinder of zone-size cells two diameters downstream of each zone, and **＋ Tip-vortex rings**

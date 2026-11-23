@@ -430,6 +430,10 @@ class Shell(QObject):
                     n = len(bc.get("faces") or [])
                     return ("pick", f"Click faces to add or remove them from {bc['name']} ({n} selected). Ctrl-click adds more faces", 0, "Done",
                             lambda: (setattr(sp, "active", None), sp.redo()), "Finish picking faces for this condition")
+        if w.step == "mesh" and getattr(w.panels["mesh"], "picking_part", False):
+            mp = w.panels["mesh"]
+            return ("pick", "Click a part in the 3D view: all its faces get a cell size (change it in Part sizing afterwards)", 0, "Cancel",
+                    lambda: mp.set_picking_part(False), "Stop picking a part")
         if w.step == "results" and v.pick_mode == "point":
             rp = w.panels["results"]
             if rp.line_pick:
