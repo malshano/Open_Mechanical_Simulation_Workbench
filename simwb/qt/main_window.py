@@ -330,6 +330,26 @@ class MainWindow(QMainWindow):
         self.engine.new_study(name, key, self._save_dir())
         self.engine.import_step(path)
 
+    def fit_to_screen(self, width: int | None = None, height: int | None = None):
+        """Keep the whole window on the screen it is on: no bigger than the usable area (the taskbar excluded) and moved inside it. A fixed size
+        left the bottom and the right edge of the window - the status bar, the chat box, the lower drop-downs of a panel - off a laptop screen."""
+        from PySide6.QtGui import QGuiApplication
+        scr = self.screen() or QGuiApplication.primaryScreen()
+        if scr is None:
+            return
+        av = scr.availableGeometry()
+        fr = self.frameGeometry()
+        ex, ey = max(fr.width() - self.width(), 0), max(fr.height() - self.height(), 0)       # (the frame and title bar: known once shown)
+        if not self.isVisible():
+            ex, ey = ex or 16, ey or 40
+        w = min(width or self.width(), av.width() - ex)
+        h = min(height or self.height(), av.height() - ey)
+        self.setMinimumSize(min(1100, w), min(700, h))                                          # (a small screen may be below the usual minimum)
+        self.resize(w, h)
+        x = min(max(self.x() if self.isVisible() else av.left() + (av.width() - w - ex) // 2, av.left()), av.right() - w - ex + 1)
+        y = min(max(self.y() if self.isVisible() else av.top() + (av.height() - h - ey) // 2, av.top()), av.bottom() - h - ey + 1)
+        self.move(x, y)
+
     def default_layout(self):
         """Sizes the docks sensibly for the window: the 3D view gets the width, the step panel the height."""
         w, h = self.width(), self.height()
@@ -341,7 +361,11 @@ class MainWindow(QMainWindow):
         super().showEvent(e)
         if not getattr(self, "_laid_out", False):
             self._laid_out = True
+            QTimer.singleShot(0, self.fit_to_screen)                  # (the frame is known now: the window is made to fit it)
             QTimer.singleShot(0, self.default_layout)
+            h = self.windowHandle()
+            if h is not None:
+                h.screenChanged.connect(lambda *_: QTimer.singleShot(0, self.fit_to_screen))       # (moved to another, smaller screen)
 
     def show_home(self, on: bool):
         """The start screen while no study is open (the working docks and the step bar are put away), the study's views otherwise."""

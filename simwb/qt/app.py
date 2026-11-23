@@ -36,7 +36,7 @@ def main(argv=None) -> int:
     from . import mode
     mode.set_simple(engine.settings.value("mode", "expert", type=str) == "simple")
     win = MainWindow(engine, bridge)
-    win.resize(1500, 920)
+    win.fit_to_screen(1500, 920)           # (the usual size, but never bigger than the screen)
     # Shown normal and in front, whatever the process was started with: Windows hands the 'show' setting of the starter on to the program
     # (the desktop icon starts a hidden PowerShell), and Qt's first show() would obey it - the window opened minimised to the taskbar
     win.setWindowState((win.windowState() & ~Qt.WindowMinimized) | Qt.WindowActive)
