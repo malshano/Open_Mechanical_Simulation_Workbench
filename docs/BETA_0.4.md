@@ -20,6 +20,8 @@ the local control interface; nothing needs a browser.
 - **Installer**: one icon, and the setup window asks for the folder (default `C:\SimWB`) and whether to put an icon on the desktop.
 
 ## Fixed
+- **"Access is denied" when saving a study** (it could stop a solver run): saving now waits a moment when a virus scanner, the search indexer or another
+  program has the study file open, and tries again.
 - A layer shell that could point inwards, an align popup that could run off a small 3D view, and a few buttons without a hint text.
 - Windows left open by the program's own tests made long test runs very slow; the automatic test run on GitHub now finishes in about 21 minutes.
 
