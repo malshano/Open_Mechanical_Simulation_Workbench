@@ -712,6 +712,11 @@ layers** - and **Generate mesh**.
 - **Part sizing**: choose the part in the drop-down (in a flow study that is the object: the parts of your STEP file by name) and press
   **＋ Part sizing**, or press **Pick a part in the 3D view** and click the part: all its faces get a cell size, which you then change in
   the list. The faces that have a part sizing are tinted in the 3D view. A part has one sizing; change its size instead of adding another.
+- **Wall layers** (flow studies; the block is open): the number of layers, the growth ratio and the first layer (0 = automatic, from the
+  flow). A line under the fields says what they come to - the first and the total thickness and how many layers lie inside the boundary
+  layer - and **Show the layers in the 3D view** draws a translucent shell round the object as thick as all the layers together
+  (an approximation at sharp corners). A tetrahedral mesh gets its layers from OpenFOAM just before the run, so they are in the run's
+  mesh, not in the one drawn here; a hex-dominant mesh has them in the mesh itself.
 - **Refinement regions are drawn in the 3D view** before you mesh: each box or cylinder (a ring too) as a translucent body with an outline, in
   the colour of its swatch in the list, with its name and cell size written on it; the region you edit is drawn stronger. **◎** zooms to a
   region, and **Show the regions in the 3D view** switches the drawing off. Edit the numbers and the drawing follows.

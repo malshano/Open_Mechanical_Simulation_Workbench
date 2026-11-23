@@ -42,6 +42,7 @@ class MeshAdvanced(QWidget):
         self._sig = None
         self._open: dict = {}               # which sections the user has open (kept when the content is rebuilt)
         self.show_regions = True            # the refinement regions are drawn in the 3D view
+        self.show_layers = True             # the wall layers are drawn in the 3D view (a shell of their total thickness)
         self.active_region: int | None = None   # the one being edited or looked at: drawn stronger
         self.pick_btn = None
 
@@ -58,7 +59,7 @@ class MeshAdvanced(QWidget):
     def refresh(self, st):
         m = st["mesh"]
         sig = repr([st["study"], m.get("size_max"), m.get("size_min"), m.get("defeature"), m.get("refinements"), m.get("regions"), m.get("layers"),
-                    self.show_regions, self.active_region, getattr(self.panel, "picking_part", False),
+                    self.show_regions, self.show_layers, self.active_region, st.get("settings"), getattr(self.panel, "picking_part", False),
                     [(b["id"], b["name"]) for b in st["body_list"]], st.get("moving_zones"), st.get("flow_dir"), m.get("method"),
                     theme.effective()])
         if sig == self._sig:
@@ -69,7 +70,7 @@ class MeshAdvanced(QWidget):
         self._parts(st, m)
         self._regions(st, m)
         if st["study"] == "external_aero":
-            self._layers(m)
+            self._layers(st, m)
 
     def _num(self, text, prefix, value_m, tip, auto=True):
         row = QHBoxLayout()
@@ -422,21 +423,50 @@ class MeshAdvanced(QWidget):
         self._save_regions(regs)
 
     # ---- wall layers
-    def _layers(self, m):
+    def _layers(self, st, m):
         ly = m.get("layers") or {}
-        s = self._sec("Wall layers (prism / inflation)", "mesh.layers", bool(ly.get("n")))
+        s = self._sec("Wall layers (inflation / prism)", "mesh.layers", True)       # (open: this is where the layers are set)
         s.body.addWidget(_muted("Thin cells stacked on the walls to resolve the boundary layer (friction, separation, y+). 0 layers = off. "
                                 + ("They are made together with the hex-dominant mesh (snappyHexMesh); the statistics report how much of the "
                                    "wall got them." if m.get("method") == "hex" else
-                                   "OpenFOAM adds them before the run (snappyHexMesh, layer-only); where the space is too tight it leaves "
-                                   "them out, and the run log reports the coverage.")))
+                                   "For the tetrahedral mesh OpenFOAM adds them just before the run (snappyHexMesh, layer-only), so you see them in "
+                                   "the run's mesh, not in the mesh drawn here; where the space is too tight it leaves them out, and the run log "
+                                   "reports the coverage.")))
         f = ParamForm([{"key": "n", "label": "number of layers", "unit": "", "default": 0, "min": 0, "max": 20},
                        {"key": "growth", "label": "growth ratio", "unit": "", "default": 1.2, "min": 1.0, "max": 2.0},
                        {"key": "first", "label": "first layer thickness (0 = automatic)", "unit": "mm", "default": 0.0, "min": 0.0}],
                       {"n": ly.get("n", 0), "growth": ly.get("growth", 1.2), "first": (ly.get("first") or 0) * M}, "mesh.layers")
         f.changed.connect(lambda k, v, f=f: self._layers_set(f.values()))
         s.body.addWidget(f)
+        from ..meshtools import layer_numbers
+        ln = layer_numbers(st)
+        if ln:
+            txt = (f"{ln['n']} layers, growing by {fmt_num(round(ln['growth'], 3))}: the first is {fmt_num(round(ln['first'] * M, 4))} mm"
+                   f"{' (automatic)' if not ly.get('first') else ''}, all together {fmt_num(round(ln['total'] * M, 3))} mm.")
+            if ln.get("delta"):
+                txt += (f" The boundary layer is about {fmt_num(round(ln['delta'] * M, 2))} mm thick: {fmt_num(round(ln['cells_across_delta'], 1))} "
+                        f"of the layers lie inside it" + (" (a laminar boundary layer needs about ten)." if ln.get("laminar") else "."))
+        elif int(ly.get("n") or 0) > 0:
+            txt = "Set a flow speed above 0 in the Setup step to see the thickness of the layers."
+        else:
+            txt = "No layers: the cells next to the walls are as big as the surface cells."
+        summ = wid(QLabel(txt), "mesh.layers.summary")
+        summ.setWordWrap(True)
+        summ.setObjectName("muted")
+        s.body.addWidget(summ)
+        sw = wid(QCheckBox("Show the layers in the 3D view"), "mesh.layers.show")
+        sw.setChecked(self.show_layers)
+        sw.setEnabled(int(ly.get("n") or 0) > 0)
+        sw.setToolTip("Draw a translucent shell round the object as thick as all the layers together (an approximation at sharp corners)"
+                      if sw.isEnabled() else "Set a number of layers first")
+        sw.toggled.connect(self._show_layers)
+        s.body.addWidget(sw)
         self.v.addWidget(s)
+
+    def _show_layers(self, on: bool):
+        self.show_layers = bool(on)
+        self._sig = None
+        self.panel.draw_marks()
 
     def _layers_set(self, v):
         try:

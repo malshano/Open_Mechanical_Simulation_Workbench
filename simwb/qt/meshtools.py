@@ -180,6 +180,28 @@ def tip_rings(st: dict) -> list:
     return regs
 
 
+def layer_numbers(st: dict) -> dict | None:
+    """What the wall-layer settings come to: {n, growth, first, total, delta, cells_across_delta, laminar} in metres, from the same plan the
+    run uses (cases.layer_plan), or None when there are no layers or no flow to plan them for."""
+    ly = (st["mesh"].get("layers") or {})
+    n = int(ly.get("n") or 0)
+    if st.get("study") != "external_aero" or n <= 0:
+        return None
+    se = st.get("settings") or {}
+    V = float(se.get("speed") or 0)
+    L = float(((st.get("geometry") or {}).get("info") or {}).get("ref_length") or 0)
+    if V <= 0 or L <= 0:
+        return None
+    from .. import materials
+    from ..solvers.openfoam import cases
+    fl = materials.FLUIDS.get(se.get("fluid") or "air") or materials.FLUIDS["air"]
+    try:
+        return cases.layer_plan(V, L, fl["mu"] / fl["rho"], se.get("turbulence", "kOmegaSST"), n, float(ly.get("growth", 1.2)),
+                                st.get("moving_zones") or [], ly.get("first"))
+    except Exception:  # noqa: BLE001 - the readout is a help: it never stops the panel
+        return None
+
+
 def fit_box(bbox: list) -> tuple:
     """(min, max) of a box round a part's bounding box [x0, y0, z0, x1, y1, z1], 15 % of its largest extent clear of it."""
     lo, hi = bbox[:3], bbox[3:]

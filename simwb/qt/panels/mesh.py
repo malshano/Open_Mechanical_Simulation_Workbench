@@ -64,6 +64,7 @@ class MeshPanel(_Panel):
         self.set_picking_part(False)
         v = self.view
         v.region_view.clear()
+        v.layer_view.clear()
         v.set_labels([])
         v.set_face_tints({})
         v.set_selection([])
@@ -97,6 +98,10 @@ class MeshPanel(_Panel):
         m = st["mesh"]
         regs = (m.get("regions") or []) if self.adv.show_regions else []
         self.view.region_view.set(regs, self.adv.active_region)
+        from ..meshtools import layer_numbers
+        lay = layer_numbers(st) if self.adv.show_layers else None
+        faces = [f for f in self.engine.project().faces() if f.get("kind") == "body"] if lay else []
+        self.view.layer_view.set(faces, lay["total"] if lay else 0.0, (self.engine.pid, st["geometry"].get("updated")))
         from ..regionview import colour_of
         self.view.set_labels([{"point": self.view.region_view.label_point(r), "text": f"{r.get('name', '')}: {fmt_num(round(r['size'] * 1000, 3))} mm",
                                "color": colour_of(i), "key": f"region{i}"} for i, r in enumerate(regs)] if regs else [])

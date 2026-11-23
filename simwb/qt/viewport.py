@@ -31,6 +31,7 @@ import vtkmodules.vtkRenderingFreeType  # noqa: F401
 from . import colormaps, theme
 from .banner import Banner
 from .planehandle import PlaneHandle
+from .layerview import LayerView
 from .regionview import RegionView
 from .gizmo import RotateGizmo
 from .legend import Legend
@@ -137,6 +138,7 @@ class Viewport(QWidget):
         self._overlay_index = None          # ... and over the drawn result surface
         self.edge_actors: list = []
         self.mark_actors: list = []         # selection, hover and tint highlights
+        self.layer_view = LayerView(self)           # the wall layers as a shell round the object (layerview.py)
         self.region_view = RegionView(self)         # the refinement regions of the Mesh step (regionview.py)
         self.plane_handle = PlaneHandle(self)      # the preview of a symmetry plane and its handle (planehandle.py)
         self.gizmo = RotateGizmo(self)      # the rings that turn the model, its preview and the align arrow (gizmo.py)
