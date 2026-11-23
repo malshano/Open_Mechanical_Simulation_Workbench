@@ -52,6 +52,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.engine, self.bridge = engine, bridge
         self.step = "geometry"
+        from PySide6.QtWidgets import QApplication
+        from . import wheelguard
+        wheelguard.install(QApplication.instance())     # (scrolling only scrolls: a control takes the wheel after it was clicked)
         self.setMinimumSize(1100, 700)
         self.view = wid(Viewport(), "view.canvas")
         wid(self.view.legend, "view.legend")
