@@ -39,7 +39,7 @@ def test_advanced_sizes_and_defeaturing(ctl, solved):
 def test_part_sizing(ctl, solved):
     c = open_mesh(ctl, solved)
     open_sections(c, "parts")
-    assert c.widget_do("mesh.part.pick")["value"]["items"][-1].startswith("Selected faces")
+    assert c.widget_do("mesh.part.pick")["value"]["items"][-1].startswith("Faces selected")
     c.widget_do("mesh.part.add", "click")                                               # the first part: all its faces
     refs = mesh(c)["refinements"]
     assert len(refs) == 1 and refs[0]["part"] == "Camera bracket" and len(refs[0]["faces"]) >= 10
@@ -49,7 +49,7 @@ def test_part_sizing(ctl, solved):
     assert mesh(c)["refinements"] == []
     first = c.engine.project().faces()[0]["id"]
     c.win.view.set_selection([first])                                                   # faces picked in the 3D view
-    c.widget_do("mesh.part.pick", "set", "Selected faces (pick them in the 3D view)")
+    c.widget_do("mesh.part.pick", "set", "Faces selected in the 3D view")
     c.widget_do("mesh.part.add", "click")
     assert mesh(c)["refinements"][0]["faces"] == [first]
 

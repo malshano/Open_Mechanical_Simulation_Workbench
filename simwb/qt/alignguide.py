@@ -187,7 +187,8 @@ class AlignGuide(QFrame):
         self.setFixedWidth(w)
         self.setFixedHeight(max(self.layout().totalHeightForWidth(w), self.layout().minimumSize().height()))
         x = iren.x() + (iren.width() - w) // 2
-        self.move(max(0, x), iren.y() + 10)
+        y = max(iren.y(), min(iren.y() + 10, iren.y() + iren.height() - self.height()))      # (inside the picture even in a small window)
+        self.move(max(0, x), y)
         if self.view.rw is not None:
             self.raise_()
 

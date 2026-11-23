@@ -23,6 +23,7 @@ class Banner(QFrame):
         self.label.setMinimumWidth(0)
         self.button = wid(QPushButton(""), "view.banner.button")
         self.button.setObjectName("ghostBorder")
+        self.button.setToolTip("Finish or stop what this hint is asking for")        # (replaced by the hint's own words while one is shown)
         row.addWidget(self.label, 1)
         row.addWidget(self.button)
         self._items: dict = {}          # key -> (priority, text, button text, callback)

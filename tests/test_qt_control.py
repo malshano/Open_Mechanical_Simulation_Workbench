@@ -211,7 +211,7 @@ def test_an_action_reports_the_problems_it_caused(ctl):
 
     ctl.actions["boom"] = type(ctl.actions["study.save"])("boom", "x", {}, lambda: logging.getLogger("x").warning("careful") or {})
     r = ctl.do("boom")
-    assert [e["text"] for e in r["new_log"]] == ["careful"]
+    assert [e["text"] for e in r["new_log"] if "propagateSizeHints" not in e["text"]] == ["careful"]     # (Qt's own offscreen warning is not ours)
 
 
 def test_screenshot_files(ctl, tmp_path):
@@ -318,7 +318,7 @@ def test_import_mesh_and_inspect_through_the_window(ctl):
     s = ctl.state()
     assert s["study"]["geometry"] == "ready" and len(s["study"]["bodies"]) == 2
     assert s["view"]["geometry"]["faces"] > 5 and s["view"]["geometry"]["bodies"] == 2
-    mat_ids = [w["id"] for w in ctl.widgets("setup.material")["widgets"]]
+    mat_ids = [w["id"] for w in ctl.widgets("setup.material")["widgets"] if w["id"].rsplit(".", 1)[1].isdigit()]      # (one drop-down per body; the add-material button is another control)
     assert len(mat_ids) == 2
     ctl.do("step.go", {"step": "setup"})
     ctl.do("setup.material", {"body_id": int(mat_ids[0].rsplit(".", 1)[1]), "material": "Aluminium 6061"})
@@ -357,6 +357,7 @@ def test_start_screen_has_a_card_per_study_type(ctl):
 
 def test_an_example_card_opens_a_study_and_the_views(ctl):
     ctl.widget_do("home.example.heat_conduction.0", "click")
+    ctl.win._new_study_dialog.ok.click()                                  # (a new study asks where to save it first)
     s = ctl.state()
     assert s["window"]["screen"] == "study" and s["study"]["study"] == "heat_conduction"
     assert from_thread(ctl.app, lambda: ctl.wait_idle(300), 320)["idle"]

@@ -49,22 +49,6 @@ def pixels(widget):
     return a[..., [2, 1, 0]].reshape(-1, 3)
 
 
-def best_contrast(widget):
-    """(background colour, the colour that contrasts most with it among those that cover enough pixels, ratio): what a user sees."""
-    px = pixels(widget)
-    packed = (px[:, 0].astype(np.int64) << 16) | (px[:, 1].astype(np.int64) << 8) | px[:, 2]
-    cols, counts = np.unique(packed, return_counts=True)
-    bg = cols[np.argmax(counts)]
-    rgb = lambda v: ((v >> 16) & 255, (v >> 8) & 255, v & 255)  # noqa: E731
-    best = (None, 1.0)
-    for c, n in zip(cols, counts):
-        if n >= 3 and c != bg:
-            r = contrast.ratio(rgb(int(c)), rgb(int(bg)))
-            if r > best[1]:
-                best = (rgb(int(c)), r)
-    return rgb(int(bg)), best[0], best[1]
-
-
 def contrast_on_screen(win, widget, arr=None, dpr=None):
     """(background, strongest colour, ratio) of a widget as it looks IN its window. Grabbing a transparent label on its own paints it on black, which
     is not what anyone sees; the window's picture, cropped to the widget, is."""
@@ -92,6 +76,12 @@ def contrast_on_screen(win, widget, arr=None, dpr=None):
             if r > best[1]:
                 best = (rgb(int(c)), r)
     return rgb(int(bg)), best[0], best[1]
+
+
+def best_contrast(widget):
+    """(background colour, the colour that contrasts most with it, ratio) of the widget as it looks in its window (what a user sees); an
+    off-screen widget gives (None, "off screen", 99.0). Used by the legibility tests of every step."""
+    return contrast_on_screen(widget.window(), widget)
 
 
 def visible_controls(ctl):

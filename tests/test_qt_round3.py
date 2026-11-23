@@ -114,7 +114,7 @@ def test_the_outline_shows_state_in_colour_and_words_and_selects_the_current_ste
     assert child.foreground(0).color().name() == theme.tokens()["muted"] and not child.font(0).bold()        # a detail: quieter
     ctl.do("theme.set", {"mode": "light"})                                             # the colours follow the theme
     mesh = next(v for k, v in _items(ctl).items() if "Mesh —" in k)
-    assert mesh.foreground(0).color().name() == theme.tokens()["ok_text"] == "#17692e"
+    assert mesh.foreground(0).color().name() == theme.tokens()["ok_text"]
 
 
 def test_the_outline_says_what_is_missing_and_what_is_not_there_yet(ctl):

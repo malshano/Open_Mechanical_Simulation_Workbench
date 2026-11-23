@@ -182,6 +182,7 @@ def test_probe_in_the_bar_drives_the_results_probe(ctl):
     assert ctl.do("view.hint")["result"]["button"] == "Stop probing"
     ctl.do("view.hint_button")                                                                          # ... and its button stops it
     assert not ctl._index()["viewbar.probe"].isChecked() and ctl.win.view.pick_mode is None
+    ctl.do("results.tab", {"name": "probe"})                                                            # (the panel's button is on the Probe tab)
     ctl.widget_do("results.probe", "click")                                                             # the other way round: the panel's button
     ctl.win.shell.sync()
     assert ctl._index()["viewbar.probe"].isChecked()

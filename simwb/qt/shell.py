@@ -113,6 +113,7 @@ class Shell(QObject):
         self.job_msg.setToolTip("What the running job (meshing, solving ...) is doing")
         self.cancel = wid(QPushButton("Cancel"), "status.cancel")
         self.cancel.setObjectName("viewbtn")
+        self.cancel.setToolTip("Stop the running job (a stopped run keeps no results)")      # (the running job's own name replaces this while it runs)
         self.cancel.clicked.connect(self.cancel_job)
         self.job_msg.setMinimumWidth(240)
         for x in (w.progress, w.lbl_saved):               # (the right end, in this order: what the job says, its bar, Cancel, when it was saved)

@@ -533,7 +533,9 @@ def test_after_the_first_click_the_plane_pick_starts_by_itself_and_the_camera_st
     assert st["picking_reference"]                                                                    # (no extra 'Pick the plane' press)
     assert "now click the plane" in c.widget_do("view.banner")["value"].lower() and "air volume" in c.widget_do("view.banner")["value"]
     assert c.win.chk_air.isChecked() and view.air_on                                                  # the air volume is shown ...
-    assert view.camera()["position"] == cam0["position"] and view.camera()["focal_point"] == cam0["focal_point"]   # ... the camera did not move
+    cam1 = view.camera()                                                                              # ... the view zoomed out so every wall can be seen and clicked
+    far = lambda cam: float(np.linalg.norm(np.subtract(cam["position"], cam["focal_point"])))  # noqa: E731
+    assert far(cam1) > far(cam0)
     # a click on a wall previews the turn at once
     wall = next(w for w in pr.air_walls() if "top" in w["name"])
     assert c.widget_do("geometry.align.summary")["visible"]
@@ -541,11 +543,12 @@ def test_after_the_first_click_the_plane_pick_starts_by_itself_and_the_camera_st
     s = c.do("geometry.state")["result"]
     assert s["pending"] and np.allclose(_normal_after(c), wall["normal"], atol=1e-6)
     assert "→ Air volume: top" in c.widget_do("geometry.align.summary")["value"] and "facing the wall" in c.widget_do("geometry.align.summary")["value"]
-    assert view.camera()["position"] == cam0["position"]
+    assert view.camera()["position"] == cam1["position"]                                              # (a click on a wall does not move the camera)
     c.widget_do("geometry.align.away", "click")
     assert "facing away" in c.widget_do("geometry.align.summary")["value"]
     c.widget_do("geometry.align.done", "click")
     assert not c.win.chk_air.isChecked() and c.widget_do("view.banner")["value"].lower().startswith("drag a ring")   # (the air toggle is put back; the gizmo hint is back)
+    assert np.allclose(view.camera()["position"], cam0["position"])                                   # (and the camera is back on the model)
     c.widget_do("geometry.rotate.cancel", "click")
 
 
