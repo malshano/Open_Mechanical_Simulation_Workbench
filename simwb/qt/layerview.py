@@ -14,19 +14,27 @@ DIGITS = 7                              # vertices that are the same point to th
 
 
 def shell_points(faces: list, thickness: float):
-    """(points, triangles, base points) of the object's surface pushed out by `thickness` (m) along its vertex normals, or None."""
-    pts, tris, off = [], [], 0
+    """(points, triangles, base points) of the object's surface pushed out by `thickness` (m) along its vertex normals, or None. Each face is turned
+    so that its triangles look away from the middle of the object (the tessellation of one face need not agree with the next about which way is
+    out), then the faces share their edge vertices and one normal there."""
+    parts = []
     for f in faces:
         m = f.get("mesh") or {}
         if not m.get("vertices") or not m.get("triangles"):
             continue
-        v = np.asarray(m["vertices"], float).reshape(-1, 3)
-        t = np.asarray(m["triangles"], np.int64).reshape(-1, 3)
+        parts.append((np.asarray(m["vertices"], float).reshape(-1, 3), np.asarray(m["triangles"], np.int64).reshape(-1, 3)))
+    if not parts:
+        return None
+    middle = np.vstack([v for v, _t in parts]).mean(axis=0)
+    pts, tris, off = [], [], 0
+    for v, t in parts:
+        fn = np.cross(v[t[:, 1]] - v[t[:, 0]], v[t[:, 2]] - v[t[:, 0]])
+        out = float(np.sum(fn * (v[t].mean(axis=1) - middle)))
+        if out < 0:                                              # (this face looks inwards: reverse its triangles)
+            t = t[:, [0, 2, 1]]
         pts.append(v)
         tris.append(t + off)
         off += len(v)
-    if not pts:
-        return None
     p = np.vstack(pts)
     t = np.vstack(tris)
     _u, first, inv = np.unique(np.round(p, DIGITS), axis=0, return_index=True, return_inverse=True)
@@ -39,8 +47,6 @@ def shell_points(faces: list, thickness: float):
         np.add.at(n, t[:, k], fn)
     ln = np.linalg.norm(n, axis=1)
     n = n / np.where(ln > 0, ln, 1.0)[:, None]
-    if float(np.sum(n * (p - p.mean(axis=0)))) < 0:               # (the normals must point away from the object: out into the air)
-        n = -n
     return p + n * float(thickness), t, p
 
 

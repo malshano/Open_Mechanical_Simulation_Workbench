@@ -60,7 +60,8 @@ def test_the_look_button_draws_that_region_stronger_and_leaving_the_step_takes_t
     c.widget_do("mesh.region.1.show", "click")
     assert c.win.view.region_view.active == 1
     c.do("step.go", {"step": "setup"})
-    assert not c.win.view.region_view.actors and not c.win.view.label_actors
+    assert not c.win.view.region_view.actors
+    assert not any("region" in la.GetInput() for la in c.win.view.label_actors)                   # (the Setup step draws its own labels, not the regions')
     c.do("step.go", {"step": "mesh"})
     assert c.win.view.region_view.actors
 
@@ -68,6 +69,8 @@ def test_the_look_button_draws_that_region_stronger_and_leaving_the_step_takes_t
 def test_a_solid_body_is_offered_for_part_sizing_and_sized_once(bracket):
     c = bracket
     from PySide6.QtWidgets import QComboBox
+    c.widget_do("mesh.parts.toggle", "click")                                                       # (the Part sizing block starts folded)
+    c._settle()
     cb = next(w for w in c.win.panels["mesh"].findChildren(QComboBox) if w.property("wid") == "mesh.part.pick")
     assert cb.count() >= 2 and cb.itemText(cb.count() - 1).startswith("Faces selected")
     c.widget_do("mesh.part.add", "click")
