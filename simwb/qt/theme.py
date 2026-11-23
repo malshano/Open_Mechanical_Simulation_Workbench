@@ -49,6 +49,40 @@ class _Bus(QObject):
 bus = _Bus()
 
 
+def follow(owner, fn, signal=None):
+    """Call fn(owner, *args) whenever the theme (or another signal, e.g. the Simple/Expert switch) changes, for as long as `owner` lives.
+
+    A lambda connected straight to the signal is never disconnected: it keeps its widget (and the whole window) alive and runs on every change
+    after the widget is gone. This one drops itself as soon as the owner is deleted."""
+    import weakref
+
+    import shiboken6
+    sig = signal if signal is not None else bus.changed
+    ref = weakref.ref(owner)
+
+    def slot(*args):
+        o = ref()
+        if o is None or not shiboken6.isValid(o):
+            try:
+                sig.disconnect(slot)
+            except (TypeError, RuntimeError):
+                pass
+            return
+        fn(o, *args)
+    sig.connect(slot)
+    try:
+        owner.destroyed.connect(lambda *_: _drop(sig, slot))
+    except (AttributeError, RuntimeError):
+        pass
+
+
+def _drop(sig, slot):
+    try:
+        sig.disconnect(slot)
+    except (TypeError, RuntimeError):
+        pass
+
+
 def tokens() -> dict:
     """The colours of the theme in use now."""
     return THEMES[_state["effective"]]

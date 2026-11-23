@@ -111,7 +111,7 @@ class ToastHost(QObject):
         self.history: list[dict] = []          # every toast ever shown (kind, text, time): the log's short form, for the control API
         self.box.hide()
         win.installEventFilter(self)
-        theme.bus.changed.connect(lambda _m: self._style())
+        theme.follow(self, lambda o, _m=None: o._style())
         self._style()
 
     # ------------------------------------------------------------------ showing

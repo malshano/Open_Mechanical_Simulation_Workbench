@@ -49,7 +49,11 @@ def ctl(tmp_path, monkeypatch):
     P.JOBS.listeners.remove(eng._on_event)
     bridge.shutdown()
     win.view.close()
+    win.close()
     win.deleteLater()
+    from PySide6.QtCore import QCoreApplication, QEvent
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)      # (a test never runs the real event loop, so the delete would wait forever: every window of
+    app.processEvents()                                                       # every test stayed open with its timers, and the later tests of a long run got slower and slower)
 
 
 def from_thread(app, fn, timeout=60):

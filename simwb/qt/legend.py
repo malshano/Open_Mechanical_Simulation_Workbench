@@ -33,7 +33,7 @@ class Legend(QWidget):
         self.setFixedHeight(0)
         self.spec = None
         self.setAttribute(Qt.WA_StyledBackground, True)
-        theme.bus.changed.connect(lambda _: self.update())
+        theme.follow(self, lambda o, _m=None: o.update())
 
     def clear(self):
         self.spec = None

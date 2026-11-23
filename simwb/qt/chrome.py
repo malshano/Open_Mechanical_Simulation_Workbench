@@ -65,13 +65,13 @@ def install(win, bar):
         tb.setToolTip(("Switch to the light theme" if dark else "Switch to the dark theme") + " (View > Theme also has 'Follow the system')")
         tb.setAccessibleName("Switch to the light theme" if dark else "Switch to the dark theme")
     tb.clicked.connect(lambda: win.set_theme("light" if theme.effective() == "dark" else "dark"))
-    theme.bus.changed.connect(theme_label)
+    theme.follow(tb, lambda _o, *a: theme_label())
     theme_label()
     win.theme_btn = tb
     cr.addWidget(tb)
     cr.addWidget(seg)
-    mode.bus.changed.connect(lambda s: (win.mode_btns["simple"].setChecked(s), win.mode_btns["expert"].setChecked(not s),
-                                        win.engine.settings.setValue("mode", "simple" if s else "expert"), _on_mode(win)))
+    theme.follow(win, lambda w, s: (w.mode_btns["simple"].setChecked(s), w.mode_btns["expert"].setChecked(not s),
+                                    w.engine.settings.setValue("mode", "simple" if s else "expert"), _on_mode(w)), signal=mode.bus.changed)
     win.jobs_btn = wid(QToolButton(), "chrome.jobs")
     win.jobs_btn.setPopupMode(QToolButton.InstantPopup)
     win.jobs_btn.setToolTip("Jobs running in all studies: stop them here (the status bar also has Cancel for the study you are in)")

@@ -288,7 +288,7 @@ class MainWindow(QMainWindow):
             grp.addAction(a)
             tm.addAction(a)
             self.theme_actions[key] = a
-        theme.bus.changed.connect(lambda _: self._on_theme())
+        theme.follow(self, lambda o, _m=None: o._on_theme())
         h = mb.addMenu("&Help")
         act(h, "&About", lambda: self.toasts.show(f"Mechanical Simulation Workbench {__version__} (desktop). Open source, GPLv3.", "info", 9),
             None, "help.about")

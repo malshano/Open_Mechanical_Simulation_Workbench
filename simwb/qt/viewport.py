@@ -179,7 +179,7 @@ class Viewport(QWidget):
             self.iren.Initialize()
             self.iren.Start()
         self.apply_theme()
-        theme.bus.changed.connect(lambda _: self.apply_theme())
+        theme.follow(self, lambda o, _m=None: o.apply_theme())
         if self.rw is not None:
             self.iren.AddObserver("LeftButtonPressEvent", self._on_press, 100)
             self.iren.AddObserver("LeftButtonReleaseEvent", self._on_release, 100)

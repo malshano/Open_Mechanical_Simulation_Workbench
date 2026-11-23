@@ -21,7 +21,7 @@ class HBar(QWidget):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setAccessibleName(f"{label}: {value_text}")
         self.setToolTip(f"{label}: {value_text}")
-        theme.bus.changed.connect(lambda _: self.update())
+        theme.follow(self, lambda o, _m=None: o.update())
 
     def paintEvent(self, _e):  # noqa: N802
         t = theme.tokens()
@@ -64,7 +64,7 @@ class LineChart(QWidget):
         self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.MinimumExpanding)
         self.setAccessibleName("Line plot")
-        theme.bus.changed.connect(lambda _: self.update())
+        theme.follow(self, lambda o, _m=None: o.update())
 
     def set_data(self, x, y, xlabel="", ylabel=""):
         self.x = np.asarray(x, float)
@@ -180,7 +180,7 @@ class QualityHist(QWidget):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setAccessibleName("Cell quality histogram")
         self.setToolTip("How many cells have each quality (0 = poor, 1 = perfect)")
-        theme.bus.changed.connect(lambda _: self.update())
+        theme.follow(self, lambda o, _m=None: o.update())
 
     def set_counts(self, counts):
         self.counts = list(counts or [])
@@ -235,7 +235,7 @@ class _Plot(QWidget):
         self.setAccessibleName(name)
         if tip:
             self.setToolTip(tip)
-        theme.bus.changed.connect(lambda _: self.update())
+        theme.follow(self, lambda o, _m=None: o.update())
 
     def _area(self):
         return QRectF(50, 8, max(self.width() - 60, 10), max(self.height() - 30, 10))
@@ -502,7 +502,7 @@ class FieldHist(QWidget):
         self.setAccessibleName("Distribution of the field")
         self.setToolTip("How much of the surface has each value (square-root scale), over the colour range shown. Drag across the bars to set "
                         "the colour range to that part; double-click to go back to the automatic range.")
-        theme.bus.changed.connect(lambda _: self.update())
+        theme.follow(self, lambda o, _m=None: o.update())
 
     def set_data(self, bins, lo, hi, mean=None, tab=None):
         self.bins = np.asarray(bins, float)
@@ -590,7 +590,7 @@ class SignedBar(QWidget):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setAccessibleName(f"{label}: {value_text}")
         self.setToolTip(f"{label}: {value_text} (bars grow from the centre line; to the right is positive)")
-        theme.bus.changed.connect(lambda _: self.update())
+        theme.follow(self, lambda o, _m=None: o.update())
 
     def paintEvent(self, _e):  # noqa: N802
         t = theme.tokens()
@@ -628,7 +628,7 @@ class StackBar(QWidget):
         txt = "; ".join(f"{q['label']}: {q['v']:.3g} {unit} ({100 * q['v'] / self.total:.3g} %)" for q in self.parts)
         self.setAccessibleName(txt)
         self.setToolTip(txt)
-        theme.bus.changed.connect(lambda _: self.update())
+        theme.follow(self, lambda o, _m=None: o.update())
 
     def paintEvent(self, _e):  # noqa: N802
         t = theme.tokens()
