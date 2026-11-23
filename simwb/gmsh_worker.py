@@ -832,6 +832,21 @@ def cylinder_size_expr(start, end, radius, v_in, v_out, thickness, inner=0.0) ->
     return f"({v_in:.9g})+({v_out - v_in:.9g})*min(1,{d}/({thickness:.9g}))"
 
 
+def box_size_expr(lo, hi, rotation, v_in, v_out, thickness) -> str:
+    """Size-field expression (gmsh MathEval) for a box turned about its middle: v_in inside, growing linearly to v_out over `thickness`
+    outside it, like the Box field of an axis-aligned refinement box. `lo` / `hi`: the box before the turn; `rotation`: local -> world."""
+    lo, hi = np.asarray(lo, float), np.asarray(hi, float)
+    c, h = (lo + hi) / 2, (hi - lo) / 2
+    R = np.asarray(rotation, float)
+    p = [f"(x-({c[0]:.9g}))", f"(y-({c[1]:.9g}))", f"(z-({c[2]:.9g}))"]
+    parts = []
+    for k in range(3):                                      # (the point in the box's own axes: R^T (x - c); how far it is outside along each)
+        u = "(" + "+".join(f"{p[j]}*({R[j, k]:.9g})" for j in range(3)) + ")"
+        parts.append(f"max(0,max({u},-{u})-({h[k]:.9g}))^2")
+    d = "sqrt(" + "+".join(parts) + ")"
+    return f"({v_in:.9g})+({v_out - v_in:.9g})*min(1,{d}/({thickness:.9g}))"
+
+
 def merge_small_faces(gmsh, faces, max_area, skip=(), min_cluster=3, only=None):
     """Virtual topology (as in Ansys): faces smaller than max_area (embossed text, logos, slivers of a converted
     model) are meshed together with the face they sit on, as one gmsh compound surface. The mesher then ignores
@@ -1219,6 +1234,11 @@ def task_mesh(job: dict) -> dict:
                                       r.get("inner_radius", 0.0))
             fb = fields.add("MathEval")
             fields.setString(fb, "F", expr)
+            use.append(fb)
+            continue
+        if r.get("rotation"):                               # (a box that is turned: the size expression; the Box field cannot turn)
+            fb = fields.add("MathEval")
+            fields.setString(fb, "F", box_size_expr(r["min"], r["max"], r["rotation"], r["size"], size_far, r["size"] * 8))
             use.append(fb)
             continue
         fb = fields.add("Box")

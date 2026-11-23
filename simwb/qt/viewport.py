@@ -141,8 +141,10 @@ class Viewport(QWidget):
         self.layer_view = LayerView(self)           # the wall layers as a shell round the object (layerview.py)
         self.region_view = RegionView(self)         # the refinement regions of the Mesh step (regionview.py)
         self.plane_handle = PlaneHandle(self)      # the preview of a symmetry plane and its handle (planehandle.py)
+        self.region_gizmo = RotateGizmo(self)    # moves and turns a refinement region (its own: the model is not previewed with it)
         self.gizmo = RotateGizmo(self)      # the rings that turn the model, its preview and the align arrow (gizmo.py)
         self._gizmo_drag = False
+        self._gz = self.gizmo                # the gizmo that took the press
         self._plane_drag = False             # a symmetry plane's arrow is being dragged
         self.label_actors: list = []        # text hung on the model (what a boundary condition carries)
         self.arrow_actors: list = []        # loads and gravity as arrows
@@ -616,10 +618,12 @@ class Viewport(QWidget):
     # (the mouse: a press and release that hardly moved is a click, anything else is the camera being turned)
     def _on_press(self, obj, event):
         self._press = tuple(self.iren.GetEventPosition())
-        if self.gizmo.press(self._press[0], self.gizmo._size()[1] - 1 - self._press[1]):    # a ring is taken: it turns the model, the camera stays
-            self._gizmo_drag = True
-            self.iren.SetInteractorStyle(None)
-            return
+        for g in (self.gizmo, self.region_gizmo):
+            if g.press(self._press[0], self.gizmo._size()[1] - 1 - self._press[1]):         # a ring is taken: it turns the model, the camera stays
+                self._gz = g
+                self._gizmo_drag = True
+                self.iren.SetInteractorStyle(None)
+                return
         if self.plane_handle.on and self.plane_handle.press(self._press[0], self.gizmo._size()[1] - 1 - self._press[1]):     # the plane's arrow: it moves the plane
             self._plane_drag = True
             self.iren.SetInteractorStyle(None)
@@ -634,7 +638,7 @@ class Viewport(QWidget):
         if self._gizmo_drag:
             self._gizmo_drag = False
             q = self.iren.GetEventPosition()
-            self.gizmo.release(q[0], self.gizmo._size()[1] - 1 - q[1], bool(self.iren.GetShiftKey()))
+            self._gz.release(q[0], self.gizmo._size()[1] - 1 - q[1], bool(self.iren.GetShiftKey()))
             if self._style is not None:
                 self.iren.SetInteractorStyle(self._style)
             return
@@ -661,7 +665,7 @@ class Viewport(QWidget):
     def _on_move(self, obj, event):
         q = self.iren.GetEventPosition()
         if self._gizmo_drag:
-            self.gizmo.drag_to(q[0], self.gizmo._size()[1] - 1 - q[1], bool(self.iren.GetShiftKey()))
+            self._gz.drag_to(q[0], self.gizmo._size()[1] - 1 - q[1], bool(self.iren.GetShiftKey()))
             return
         if self._plane_drag:
             self.plane_handle.drag_to(q[0], self.gizmo._size()[1] - 1 - q[1], bool(self.iren.GetShiftKey()))
@@ -676,7 +680,7 @@ class Viewport(QWidget):
         if now - self._hover_t < 0.05:
             return
         self._hover_t = now
-        if self.gizmo.on and self.gizmo.hover_at(q[0], self.gizmo._size()[1] - 1 - q[1]) is not None:
+        if any(g.on and g.hover_at(q[0], self.gizmo._size()[1] - 1 - q[1]) is not None for g in (self.gizmo, self.region_gizmo)):
             return                                          # (over a ring: the cursor is a hand, no face is hovered)
         if self.plane_handle.on and self.plane_handle.hover_at(q[0], self.gizmo._size()[1] - 1 - q[1]):
             return                                          # (over the plane's arrow: the cursor is a hand)

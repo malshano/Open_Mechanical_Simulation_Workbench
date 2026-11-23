@@ -62,6 +62,7 @@ class MeshPanel(_Panel):
 
     def left(self):
         self.set_picking_part(False)
+        self.adv.xform.stop()
         v = self.view
         v.region_view.clear()
         v.layer_view.clear()
@@ -97,7 +98,10 @@ class MeshPanel(_Panel):
         st = self.engine.state()
         m = st["mesh"]
         regs = (m.get("regions") or []) if self.adv.show_regions else []
-        self.view.region_view.set(regs, self.adv.active_region)
+        if self.adv.xform.active:
+            self.adv.xform._preview()                                 # (a region is being moved or turned: the preview, not the stored one)
+        else:
+            self.view.region_view.set(regs, self.adv.active_region)
         from ..meshtools import layer_numbers
         lay = layer_numbers(st) if self.adv.show_layers else None
         faces = [f for f in self.engine.project().faces() if f.get("kind") == "body"] if lay else []

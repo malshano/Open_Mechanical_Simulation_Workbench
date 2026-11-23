@@ -720,6 +720,11 @@ layers** - and **Generate mesh**.
 - **Refinement regions are drawn in the 3D view** before you mesh: each box or cylinder (a ring too) as a translucent body with an outline, in
   the colour of its swatch in the list, with its name and cell size written on it; the region you edit is drawn stronger. **◎** zooms to a
   region, and **Show the regions in the 3D view** switches the drawing off. Edit the numbers and the drawing follows.
+- **Move / turn a region**: press **Move / turn…** on a region's card. A gizmo appears at the region's middle, as in the Geometry step: drag an
+  arrow to move it along x, y or z, the ball to move it freely, a ring to turn it about x, y or z (hold Shift for round steps); or type
+  **Move by** (mm) and **Turn about** (degrees). The region is drawn as it would be; **Apply** stores it, **Reset** puts the preview back,
+  **Cancel** leaves the region alone. A box keeps its turn (a note on its card says so; its corner numbers are the box before the turn);
+  a cylinder moves its end points. The tetrahedral mesh follows a turned box exactly; the hex-dominant mesh refines the box round it.
 - **Refinement regions**: **＋ Box** and **＋ Cylinder** as before; each region now shows roughly how many cells it alone makes (in the
   warning colour above three million), and a box has **Fit around part…** to put it round a part. In a flow study with rotating zones,
   **＋ Wake behind rotating zones** adds a cylinder of zone-size cells two diameters downstream of each zone, and **＋ Tip-vortex rings**

@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import materials, studies
+from . import materials, regions as region_tools, studies
 from . import axisfit, cad_edit, orient
 from . import symmetry as sym
 from .jobs import Cancelled, Job, JobManager, run_gmsh_task
@@ -2714,7 +2714,11 @@ class Project:
                 hi = [studies.finite(x, f"{nm} max") for x in r.get("max", [])]
                 if len(lo) != 3 or len(hi) != 3 or any(b <= a for a, b in zip(lo, hi)):
                     raise ValueError(f"{nm}: the box needs min < max in x, y and z")
-                out.append({"name": nm, "min": lo, "max": hi, "size": size})
+                box = {"name": nm, "min": lo, "max": hi, "size": size}
+                turn = region_tools.check_rotation(r["rotation"]) if r.get("rotation") is not None else None
+                if turn is not None:          # (a box that is turned: min / max are the box before the turn, about its middle)
+                    box["rotation"] = turn
+                out.append(box)
             m["regions"] = out
         if layers is not None:  # prism (inflation) layers on the walls, added by OpenFOAM before the run
             if self.study != "external_aero":

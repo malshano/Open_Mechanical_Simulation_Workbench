@@ -6,6 +6,7 @@ from __future__ import annotations
 import math
 
 import numpy as np
+from .. import regions as region_tools
 from vtkmodules.util.numpy_support import numpy_to_vtk, numpy_to_vtkIdTypeArray
 from vtkmodules.vtkCommonCore import vtkPoints
 from vtkmodules.vtkCommonDataModel import vtkCellArray, vtkPolyData
@@ -121,6 +122,9 @@ class RegionView:
                     pts, tris, lines = cylinder_geometry(r["start"], r["end"], float(r["radius"]), float(r.get("inner_radius") or 0))
                 else:
                     pts, tris, lines = box_geometry(r["min"], r["max"])
+                    if region_tools.is_turned(r):                      # (a box that is turned about its middle)
+                        c = (np.asarray(r["min"], float) + np.asarray(r["max"], float)) / 2
+                        pts = (c + (np.asarray(pts, float) - c) @ region_tools.rotation_of(r).T).tolist()
             except (KeyError, TypeError, ValueError):
                 continue                                    # (a region that is half typed is not drawn)
             hot = active == i

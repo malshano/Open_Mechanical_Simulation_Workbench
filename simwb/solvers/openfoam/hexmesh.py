@@ -166,7 +166,10 @@ def make_plan(data: dict, faces: list, info: dict, surf2patch: dict, patches: li
         regions.append({"name": "wake", "min": a.tolist(), "max": b.tolist(), "level": max(levels - 2, 1)})
     for r in ms.get("regions") or []:
         lev = int(np.clip(round(math.log2(base / float(r["size"]))), 0, levels + 1))
-        regions.append({**{k: r[k] for k in r if k not in ("size", "name")}, "name": sanitize(r["name"]), "level": lev})
+        regions.append({**{k: r[k] for k in r if k not in ("size", "name", "rotation")}, "name": sanitize(r["name"]), "level": lev})
+        if r.get("rotation") and r.get("shape") != "cylinder":      # (snappyHexMesh's searchableBox cannot turn: the box round the turned one)
+            from ... import regions as region_tools
+            regions[-1]["min"], regions[-1]["max"] = region_tools.bounds(r)
 
     lay = ms.get("layers") or {}
     n_lay = int(lay.get("n") or 0)

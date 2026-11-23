@@ -10,6 +10,7 @@ from .. import theme
 from ..forms import ParamForm, fmt_num
 from ..ids import wid
 from ..meshtools import fit_box, region_cells, tip_rings, wake_regions
+from ..regionxform import RegionTransform
 from .common import Section, _h, _muted, clear_layout
 
 M = 1000.0         # metres -> mm
@@ -45,6 +46,7 @@ class MeshAdvanced(QWidget):
         self.show_layers = True             # the wall layers are drawn in the 3D view (a shell of their total thickness)
         self.active_region: int | None = None   # the one being edited or looked at: drawn stronger
         self.pick_btn = None
+        self.xform = RegionTransform(self)   # moving and turning a region (regionxform.py)
 
     def _sec(self, title, prefix, default):
         s = Section(title, prefix, expanded=self._open.get(prefix, default))
@@ -59,7 +61,7 @@ class MeshAdvanced(QWidget):
     def refresh(self, st):
         m = st["mesh"]
         sig = repr([st["study"], m.get("size_max"), m.get("size_min"), m.get("defeature"), m.get("refinements"), m.get("regions"), m.get("layers"),
-                    self.show_regions, self.show_layers, self.active_region, st.get("settings"), getattr(self.panel, "picking_part", False),
+                    self.show_regions, self.show_layers, self.active_region, self.xform.index, st.get("settings"), getattr(self.panel, "picking_part", False),
                     [(b["id"], b["name"]) for b in st["body_list"]], st.get("moving_zones"), st.get("flow_dir"), m.get("method"),
                     theme.effective()])
         if sig == self._sig:
@@ -288,6 +290,15 @@ class MeshAdvanced(QWidget):
                           {**vals, "size": r["size"] * M}, f"mesh.region.{i}.param")
             f.changed.connect(lambda k, v, i=i, f=f: self._region_edit(i, values=f.values()))
             cv.addWidget(f)
+            xf = wid(QPushButton("Move / turn…"), f"mesh.region.{i}.xform")
+            xf.setObjectName("toggle")
+            xf.setCheckable(True)
+            xf.setChecked(self.xform.index == i)
+            xf.setToolTip("Move and turn this region with the arrows and rings in the 3D view, or by typing numbers; then Apply")
+            xf.toggled.connect(lambda on, i=i: self._xform_toggle(i, on))
+            cv.addWidget(xf)
+            if self.xform.index == i:
+                cv.addWidget(self.xform.build(i))
             n, txt, big = region_cells(r)
             est = wid(QLabel(txt), f"mesh.region.{i}.cells")
             est.setWordWrap(True)
@@ -334,6 +345,17 @@ class MeshAdvanced(QWidget):
                 s.body.addWidget(_muted("Wake and tip-vortex regions are made from the rotating zones: add one in Setup to use them."))
         self.v.addWidget(s)
 
+    def _xform_toggle(self, i: int, on: bool):
+        if on:
+            if self.xform.active and self.xform.index != i:
+                self.xform.stop()
+            self.show_regions = True
+            self._sig = None
+            self.xform.start(i)
+            self.refresh(self.engine.state())
+        elif self.xform.index == i:
+            self.xform.cancel()
+
     def _show_regions(self, on: bool):
         self.show_regions = bool(on)
         self._sig = None
@@ -359,6 +381,7 @@ class MeshAdvanced(QWidget):
             b = next(b for b in self.engine.state()["body_list"] if b["id"] == body_id)
             regs = self._regions_state()
             regs[i]["min"], regs[i]["max"] = fit_box(b["bbox"])
+            regs[i].pop("rotation", None)                              # (fitted round a part: straight again)
             self._save_regions(regs)
         except Exception as e:  # noqa: BLE001
             self.panel._fail(e)
@@ -418,6 +441,7 @@ class MeshAdvanced(QWidget):
             self.panel._fail(e)
 
     def _region_delete(self, i):
+        self.xform.stop()
         regs = self._regions_state()
         del regs[i]
         self._save_regions(regs)
