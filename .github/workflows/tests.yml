@@ -13,9 +13,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  pytest:
+  # The test files are split over four jobs that run at the same time: the whole suite in one job took more than an hour on a hosted runner.
+  # Add a new test file to any group (the lists below are balanced by how long each file takes).
+  tests:
+    name: tests (${{ matrix.name }})
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: group-1
+            files: >-
+              tests/test_api.py tests/test_calculix.py tests/test_flutter.py tests/test_flutter_study.py tests/test_materials.py tests/test_meshviz.py tests/test_qt_chrome.py tests/test_qt_layers.py tests/test_qt_setup.py tests/test_qt_theme.py tests/test_ui_tool_paths.py
+          - name: group-2
+            files: >-
+              tests/test_edge_refine.py tests/test_flutter_cfd.py tests/test_location.py tests/test_lumped.py tests/test_qt_click_path.py tests/test_qt_geometry_parity.py tests/test_qt_mesh_preview.py tests/test_qt_results.py tests/test_qt_setup_parity.py tests/test_slivers.py tests/test_symmetry.py tests/test_thermal.py
+          - name: group-3
+            files: >-
+              tests/test_casefile.py tests/test_hexmesh.py tests/test_mcp_content.py tests/test_mesh_ram.py tests/test_qt_geometry.py tests/test_qt_newstudy.py tests/test_qt_results_parity.py tests/test_qt_round3.py tests/test_qt_shell.py tests/test_qt_solve_mesh_parity.py tests/test_qt_symmetry_draft.py tests/test_qt_wheelguard.py tests/test_regions_turn.py tests/test_zip_import_safety.py
+          - name: group-4
+            files: >-
+              tests/test_cad_edit.py tests/test_installer.py tests/test_layer_plan.py tests/test_memwatch.py tests/test_pipeline.py tests/test_qt_app.py tests/test_qt_control.py tests/test_qt_flow_results.py tests/test_qt_mesh.py tests/test_qt_screenfit.py tests/test_qt_solve.py tests/test_qt_viewtools.py tests/test_results_view.py tests/test_transient_domain.py
     steps:
       - uses: actions/checkout@v4
         with:
@@ -31,4 +50,14 @@ jobs:
         env:
           SIMWB_AUTO_OPENFOAM: "0"
           SIMWB_NO_BROWSER: "1"
-        run: python -m pytest tests -q -p no:cacheprovider
+        run: python -m pytest ${{ matrix.files }} -v --durations=25 -p no:cacheprovider
+
+  # The check that the repository's ruleset requires is called "pytest": it passes when every group passed.
+  pytest:
+    needs: tests
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: All test groups passed
+        run: |
+          if [ "${{ needs.tests.result }}" != "success" ]; then echo "tests: ${{ needs.tests.result }}"; exit 1; fi
