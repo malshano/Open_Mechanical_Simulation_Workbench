@@ -25,7 +25,7 @@ jobs:
         include:
           - name: group-1
             files: >-
-              tests/test_api.py tests/test_calculix.py tests/test_flutter.py tests/test_flutter_study.py tests/test_materials.py tests/test_meshviz.py tests/test_qt_chrome.py tests/test_qt_layers.py tests/test_qt_setup.py tests/test_qt_theme.py tests/test_ui_tool_paths.py
+              tests/test_api.py tests/test_calculix.py tests/test_flutter.py tests/test_flutter_study.py tests/test_materials.py tests/test_meshviz.py tests/test_qt_chrome.py tests/test_qt_layers.py tests/test_qt_setup.py tests/test_qt_theme.py tests/test_save_retry.py tests/test_ui_tool_paths.py
           - name: group-2
             files: >-
               tests/test_edge_refine.py tests/test_flutter_cfd.py tests/test_location.py tests/test_lumped.py tests/test_qt_click_path.py tests/test_qt_geometry_parity.py tests/test_qt_mesh_preview.py tests/test_qt_results.py tests/test_qt_setup_parity.py tests/test_slivers.py tests/test_symmetry.py tests/test_thermal.py

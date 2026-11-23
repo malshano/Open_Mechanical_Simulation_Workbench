@@ -87,6 +87,20 @@ _OPEN: dict[str, "Project"] = {}
 _LOCK = threading.RLock()
 
 
+def replace_file(src, dst, tries: int = 40) -> None:
+    """Move `src` over `dst` (the last step of an atomic save). On Windows this fails with 'Access is denied' (WinError 5) or a sharing violation
+    (32) for as long as anything has `dst` open: the window reading the study, a virus scanner, the search indexer, a backup program. They let go
+    within a moment, so it is tried again for a few seconds before giving up."""
+    for i in range(tries):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if i == tries - 1:
+                raise
+            time.sleep(min(0.02 * (i + 1), 0.25))
+
+
 _PID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,80}$")
 
 
@@ -289,7 +303,7 @@ def export_project(pid: str, zip_path: str, keep_results: bool = True) -> Path:
             if f.is_dir() or any(fnmatch.fnmatch(part, pat) for part in rel.parts for pat in skip):
                 continue
             z.write(f, rel.as_posix())
-    tmp.replace(out)
+    replace_file(tmp, out)
     return out
 
 
@@ -550,9 +564,17 @@ class Project:
             except ValueError:
                 self._load()  # drop the bad in-memory change
                 raise ValueError("Invalid number (NaN or infinity) in the project data - change not saved")
-            tmp = self.dir / "project.json.tmp"
-            tmp.write_text(text)
-            tmp.replace(self.dir / "project.json")
+            tmp = self.dir / f"project.json.{os.getpid()}.{threading.get_ident()}.tmp"      # (one name per writer: two writers never share a temp file)
+            try:
+                tmp.write_text(text)
+                replace_file(tmp, self.dir / "project.json")
+            finally:
+                try:
+                    tmp.unlink()                                          # (only left over when the save failed)
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    pass
             self._mtime = (self.dir / "project.json").stat().st_mtime
         if not quiet:
             JOBS.emit({"type": "project_changed", "project": self.id})
