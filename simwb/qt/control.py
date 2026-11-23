@@ -957,7 +957,7 @@ class Control(QObject):
         ex = example or (spec.get("examples") or [None])[0]
         if ex is None or ex not in (spec.get("examples") or []):
             raise ValueError(f"'{example}' is not an example of {study}. Examples: {spec.get('examples')}")
-        self.win.new_from_card(study, ex)
+        self.win.new_from_card(study, ex, ask=False)         # (scripted: no dialog to answer)
         return {"study": self.engine.pid, "example": ex}
 
     def _set_mode(self, mode):

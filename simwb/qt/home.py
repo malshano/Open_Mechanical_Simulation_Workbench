@@ -70,8 +70,9 @@ class Card(QFrame):
         v.addStretch(1)
         row = QHBoxLayout()
         row.setSpacing(8)
-        b = wid(QPushButton("Use my CAD file"), f"home.new.{key}")
+        b = wid(QPushButton("New study…"), f"home.new.{key}")
         b.setObjectName("primary")
+        b.setToolTip("Choose where to save the study, then import your 3D model inside it")
         b.clicked.connect(lambda _=False: on_new(key))
         row.addWidget(b)
         exs = spec.get("examples") or []

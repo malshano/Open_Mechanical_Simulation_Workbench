@@ -88,19 +88,19 @@ Settings are read from environment variables (all optional):
 
 ## 3. Create a study and choose where it is saved
 
-1. Open the start page (click the **SimWorkbench** logo).
-2. In the box **Save the study in**, either:
-   - leave it empty: the study goes into the workbench's own folder (the grey placeholder shows which), or
-   - type the full path of a folder, for example `D:\Simulations`, or
-   - click **Browse...** and pick a folder.
-3. Click a study card, then **Use my STEP file** (empty study) or **Try example**.
-4. The study gets its own sub-folder, named after the study, inside the chosen folder. If that name is taken, `-2`, `-3`... is added.
-5. The program remembers the last folder you used.
+1. Open the start page (**File > New study**, or the **＋ New** button in the top bar).
+2. On the card of the kind of study you want, press **New study…** (or **Try example**).
+3. A small window asks **where to save it**: a **Name** and a **Save in** folder (type it, or press **Browse…**). It shows the exact folder the
+   study will be. Press **Create study**; **Cancel** makes nothing.
+4. The study gets its own sub-folder, named after the study, inside the folder you chose (the folder is made if it does not exist). If that
+   name is taken, `-2`, `-3`... is added. The program remembers the folder for the next study.
+5. The study opens on the **Geometry** step. Now import your 3D model: press **Import CAD file (STEP, STL, OBJ)…**, or use **File > Import 3D
+   model…** (Ctrl+I) at any time (with a model already there it replaces it). The model is copied into the study's folder.
 6. **Duplicate** (⧉ next to the study name): a copy of the open study with its geometry, setup and mesh, but no results. Use it for variants, for example the same propeller at another speed, or a transient run of a steady setup. The mesh stays valid, so the copy can be solved at once.
 
 Rules:
 
-- The path must be a full path (starts with a drive letter, or `/` on Linux/macOS). A relative path is refused.
+- The folder must be a full path (starts with a drive letter, or `/` on Linux/macOS). A relative path is refused; the window says so and stays open.
 - The folder is created if it does not exist. It must be writable; otherwise you get the message "Cannot save in ...".
 - The path of every study is shown in the list of recent studies on the start page, and in the output of `/status` and `/login` (they run in that folder).
 

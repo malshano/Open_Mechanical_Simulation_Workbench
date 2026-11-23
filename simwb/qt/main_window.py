@@ -240,6 +240,8 @@ class MainWindow(QMainWindow):
             menu.addAction(a)
             return a
         self.act_new = act(f, "&New study (start screen)", self.new_study, QKeySequence.New, "file.new")
+        self.act_importmodel = act(f, "Import &3D model…", self.import_model, "Ctrl+I", "file.import_model")
+        self.act_importmodel.setToolTip("Import the CAD file (STEP, STL, OBJ) of the study's model")
         self.act_open = act(f, "&Open study folder…", self.open_folder, QKeySequence.Open, "file.open_folder")
         self.menu_workspace = f.addMenu("Open from the &workspace")
         self.menu_workspace.setObjectName("menu.workspace")
@@ -294,7 +296,7 @@ class MainWindow(QMainWindow):
 
     def _gate(self):
         on = bool(self.engine.pid)
-        for a in (self.act_save, self.act_saveas, self.act_export, self.act_close):
+        for a in (self.act_save, self.act_saveas, self.act_export, self.act_close, self.act_importmodel):
             a.setEnabled(on)
 
     def _try(self, fn):
@@ -313,22 +315,38 @@ class MainWindow(QMainWindow):
             self.engine.save()
         self.engine.close_study()
 
-    def new_from_card(self, key: str, example: str = ""):
-        """A card of the start screen. A bundled example is imported at once. Your own CAD file is asked for first: the study is made
-        from it and named after it (cancel the chooser and nothing is created). Studies go in the folder last used for Save as (the
-        workspace at first); File > Save as moves one."""
+    def new_from_card(self, key: str, example: str = "", ask: bool = True):
+        """A card of the start screen. First it asks where to save the study (its name and the folder; the last folder used at first), makes the
+        study there and opens it on the Geometry step, where the 3D model is imported. A bundled example is imported for you. `ask=False`
+        (the control API and scripts) makes the study at once in the folder last used, with the default name."""
         spec = studies.STUDIES[key]
-        if example:
-            name = f"{spec['label']} - {example.replace('.step', '').replace('_', ' ')}"
-            path = str(P.EXAMPLES / example)
-        else:
-            path, _ = QFileDialog.getOpenFileName(self, f"CAD file for the {spec['label']} study", "",
-                                                  "CAD files (*.step *.stp *.stl *.obj);;All files (*)")
-            if not path:
-                return
-            name = Path(path).stem.replace("_", " ").strip() or spec["label"]
-        self.engine.new_study(name, key, self._save_dir())
-        self.engine.import_step(path)
+        name = (f"{spec['label']} - {example.replace('.step', '').replace('_', ' ')}" if example else spec["label"])
+
+        def create(nm: str, folder: str):
+            self.engine.settings.setValue("saveDir", folder)               # (the next study starts in the same folder)
+            self.engine.new_study(nm, key, folder)
+            if example:
+                self.engine.import_step(str(P.EXAMPLES / example))
+            else:
+                self.go("geometry")
+
+        if not ask:
+            create(name, self._save_dir())
+            return
+        from .newstudy import NewStudyDialog
+        d = NewStudyDialog(self, spec["label"], name, self._save_dir(), example)
+        d.accepted.connect(lambda: self._try(lambda: create(*d.values())))
+        self._new_study_dialog = d                                       # (kept: a dialog with no owner goes away at once)
+        d.open()
+        return d
+
+    def import_model(self):
+        """File > Import 3D model: the CAD chooser of the Geometry step (it replaces the model when there is one)."""
+        if not self.engine.pid:
+            raise ValueError("Create or open a study first (File > New study)")
+        self.go("geometry")
+        g = self.panels["geometry"]
+        (g._import_replace if (self.engine.state()["geometry"].get("status") == "ready") else g._import)()
 
     def fit_to_screen(self, width: int | None = None, height: int | None = None):
         """Keep the whole window on the screen it is on: no bigger than the usable area (the taskbar excluded) and moved inside it. A fixed size
