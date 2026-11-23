@@ -1,7 +1,7 @@
 ---
 title: Mechanical Simulation Workbench - User Manual
 audience: engineers who use the workbench (not people who change its code; for that read TECHNICAL_MANUAL.md)
-product_version: 0.4.0b1
+product_version: 0.4.0b3
 document_version: 2
 format: Markdown, one topic per section, UI labels in **bold**, file names and commands in `code`
 how_to_use_this_file_with_an_llm: >
@@ -795,7 +795,7 @@ yourself afterwards.
 
 What is still missing in the window is small:
 
-- **Dragging in the 3D view**: the orange handles of the air volume, and dragging a symmetry plane, a rotor disc or a rotating zone with the
+- **Dragging in the 3D view**: the orange handles of the air volume, and dragging a rotor disc or a rotating zone with the
   mouse. Type the values in the panel instead.
 - **Symbols on the model**: block, roller and plate symbols for each kind of condition. The desktop window shows each
   condition by its tint, its label and arrows.

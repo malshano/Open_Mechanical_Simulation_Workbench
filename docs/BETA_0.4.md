@@ -1,26 +1,35 @@
-# Version 0.4.0 beta 1
+# Version 0.4.0 beta 3
 
-A first test version of the **desktop application**: the same workbench in its own window (Qt and VTK) instead of the browser.
-The web version is still installed and has its own icon; nothing in your saved studies changes.
+The third test version of the **desktop application**. The browser version is gone: the workbench is now one window (Qt and VTK) with one
+icon, **Mechanical Simulation Workbench**. Your saved studies open as before. The Claude assistant and scripts still reach the program through
+the local control interface; nothing needs a browser.
 
-## What is new
-- **A desktop window** with an outline of the study, the five steps (geometry, setup, mesh, solve, results), a 3D view you can turn,
-  zoom and pick in, dark and light themes, simple and expert modes, and the Claude assistant in a dock.
-- **Save and open cases**: save as a full copy, export a study to one `.zip` file, import it again.
-- **Results**: colour maps, cuts, contour lines with their values written on them, labels of the highest and lowest value that you can
-  move, animation, probes. For flow and cooling studies: vortex surfaces, a volume cloud, vector arrows and particle paths over the object.
-- **Mesh views**: colour the mesh by quality, cell size or region, cut through it, show the cells below a quality threshold (the web version
-  also colours by aspect ratio, size jump and volume and shows a cell budget).
-- **Safer assistant**: the assistant (and an MCP client) can only write files inside the workspace or the temp folder, never replace
-  a file, and cannot reach network or device paths; a saved study that is opened is unpacked with its entry names checked.
+## What is new since beta 2
+- **A new study asks where to save it** first (a name and a folder, with Browse...), then opens on the Geometry step. Import your 3D model there,
+  or later with **File > Import 3D model** (Ctrl+I).
+- **Align a face to a plane or to the air volume**, with the real mouse: a guided three-step popup, the air volume drawn with its edges and each
+  wall in its own colour, and a menu when several walls lie on the same spot.
+- **Symmetry planes**: choose the direction and a preview plane appears; drag its arrow or type the offset (also parallel to a picked face), then Apply.
+- **Refinement regions**: move, turn and resize them by number or by dragging arrows, rings and face handles; a region is drawn as you work.
+  **Part sizing** can be picked by name or by clicking the part, and the **wall layers** show as a translucent shell round the object.
+- **Materials**: drop-downs for solids and for fluids (a short library of liquids and gases), and you can add your own.
+- **Dark and light themes** with a visible switch in the top bar; every message box and window was checked for readable text in both.
+- **Safer menus**: drop-downs never change when you scroll over them, and the window fits your screen.
+- **The rest of the former browser version** is in the window: CAD edits, the air-volume editor, rotors and moving zones, continue
+  runs, the transient time bar, contour planes, vortex surfaces and more. Every control of the old version and where it is now: `docs/QT_PARITY.md`.
+- **Installer**: one icon, and the setup window asks for the folder (default `C:\SimWB`) and whether to put an icon on the desktop.
 
-## Start it
-Use the new icon **Mechanical Simulation Workbench (beta desktop)** (desktop and Start menu), or run `run_workbench_qt.bat`.
+## Fixed
+- A layer shell that could point inwards, an align popup that could run off a small 3D view, and a few buttons without a hint text.
+- Windows left open by the program's own tests made long test runs very slow; the automatic test run on GitHub now finishes in about 21 minutes.
 
 ## Known limits of this beta
-- Windows only, like the rest. The first install is about 1.1 GB (Python, solvers, Qt and VTK) plus OpenFOAM and CalculiX.
-- A very rare failure of the mesher to start on a machine short of memory shows a "job failed" box; run it again.
-- Particle paths are drawn still (not animated); contour lines do not follow an animated deformation.
-- The lift and drag coefficients of a flow study use the frontal area of the object, which is not the wing area of a wing: for a
-  wing, work from the forces themselves.
-- Please report problems with the saved study attached (File > Export).
+- Windows only. The first install is about 1.1 GB (Python, solvers, Qt and VTK) plus OpenFOAM and CalculiX.
+- **Not in the window yet** (type the values instead): dragging the orange handles of the air volume, and dragging a rotor disc or a rotating
+  zone. Block, roller and plate symbols for conditions (each condition has its tint, label and arrows). A per-part gizmo preview inside a flow
+  study. Results extras: the promo look, the section-sweep video, the mirrored half of a symmetric model, the arrow length scale and the
+  particle dot size and tail.
+- **Aligning a refinement region with a face of the model** is not built yet (move, turn and resize are).
+- Particle paths are drawn still; contour lines do not follow an animated deformation.
+- The lift and drag coefficients of a flow study use the frontal area, which is not the wing area of a wing.
+- Please report problems with the saved study attached (File > Export study to one file).
