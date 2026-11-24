@@ -1,7 +1,7 @@
 ---
 title: Mechanical Simulation Workbench - User Manual
 audience: engineers who use the workbench (not people who change its code; for that read TECHNICAL_MANUAL.md)
-product_version: 0.4.0b4
+product_version: 0.4.0b5
 document_version: 2
 format: Markdown, one topic per section, UI labels in **bold**, file names and commands in `code`
 how_to_use_this_file_with_an_llm: >

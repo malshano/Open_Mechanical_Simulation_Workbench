@@ -3,4 +3,4 @@
 STEP import -> face tagging -> meshing -> solve (built-in FEM or OpenFOAM) -> results.
 """
 
-__version__ = "0.4.0b4"
+__version__ = "0.4.0b5"

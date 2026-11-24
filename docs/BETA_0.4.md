@@ -1,9 +1,10 @@
-# Version 0.4.0 beta 4
+# Version 0.4.0 beta 5
 
-The fourth test version of the **desktop application** (Qt and VTK; the browser version is gone). One icon, **Mechanical Simulation Workbench**. Your saved studies open as before.
-Beta 3 was the first without the browser version; this beta adds a much better mesh for a body in a flow.
+The fifth test version of the **desktop application** (Qt and VTK; the browser version is gone). One icon, **Mechanical Simulation Workbench**. Your saved studies open as before.
+Beta 3 was the first without the browser version; this beta adds a much better mesh for a body in a flow (beta 4 was built but never released: its changes are in this one).
 
 ## What is new since beta 3
+- **Part sizing on picked faces.** *Pick faces in the 3D view* collects faces one click at a time (a second click takes one out), and *Size the selected faces* gives them a cell size of their own; pick the next group and add another. Any number of sizings on the faces of one part, each listed by its faces with its own size, a button to show its faces, and one to remove it.
 - **A mesh advisor for flow studies** (Mesh step, under the resolution buttons). It reads the body the way the flow sees it (its length along the flow, its width, its thinnest part), says
   what a good mesh needs, and after meshing gives a **mesh score** with one line per check (wall cells, cells across the thin part, the near field, the wake, how smoothly the cells grow,
   the distance to the domain walls, the wall layers and their y+, non-orthogonality, skewness, the poorest cell) and advice for each one that is not ok.
