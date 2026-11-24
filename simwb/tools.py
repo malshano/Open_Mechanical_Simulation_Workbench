@@ -560,8 +560,13 @@ TOOLS = [
                           "edge_refinement: true (or a factor 2-20, default 6; false = off) refines the mesh along "
                           "sharp edges across the flow (leading / trailing edges, which carry much of the friction "
                           "of a thin body) with a capped number of extra cells (see mesh.stats.edge_refine). layers: "
-                          "{n, growth, tolerant} wall layers; tolerant = looser limits so thin or sharp parts keep "
-                          "their layers.",
+                          "{n, growth, first_mm, y_plus, tolerant} wall layers (flow studies); y_plus = the target of the "
+                          "first cell (empty = automatic, about 30 for the wall-function models; about 1 resolves the "
+                          "viscous sublayer and needs many more layers); tolerant = looser limits so thin or sharp "
+                          "parts keep their layers. A tetrahedral mesh gets its layers when the mesh is generated "
+                          "(OpenFOAM installed): mesh.stats.layers says how many were made on each surface, their "
+                          "thickness and the share of the wall that got them; GET /mesh/view?metric=layers colours "
+                          "that mesh by layer.",
      {"type": "object", "properties": {"preset": STR, "size_max_mm": NUM, "size_min_mm": NUM, "method": STR,
                                        "edge_refinement": {"description": "true | false | factor 2-20"},
                                        "layers": {"type": "object"},
@@ -572,7 +577,7 @@ TOOLS = [
                      "the share of cells and of the volume: where the cells - and the memory - are spent) and plain "
                      "findings (abrupt size jumps, slivers, too many fine cells). Use it after generate_mesh to "
                      "judge whether a mesh is accurate for its cell count. In the viewer the same metrics colour the "
-                     "mesh: GET /mesh/view?metric=size|aspect|growth|volume|quality.",
+                     "mesh: GET /mesh/view?metric=size|aspect|growth|volume|quality|region|layers.",
      {"type": "object", "properties": {}}, mesh_metrics),
     ("generate_mesh", "Generate the mesh (waits until done). Returns cell count and quality.",
      {"type": "object", "properties": {"timeout_s": NUM}}, generate_mesh),

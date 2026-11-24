@@ -453,20 +453,26 @@ class MeshAdvanced(QWidget):
         s.body.addWidget(_muted("Thin cells stacked on the walls to resolve the boundary layer (friction, separation, y+). 0 layers = off. "
                                 + ("They are made together with the hex-dominant mesh (snappyHexMesh); the statistics report how much of the "
                                    "wall got them." if m.get("method") == "hex" else
-                                   "For the tetrahedral mesh OpenFOAM adds them just before the run (snappyHexMesh, layer-only), so you see them in "
-                                   "the run's mesh, not in the mesh drawn here; where the space is too tight it leaves them out, and the run log "
-                                   "reports the coverage.")))
+                                   "For the tetrahedral mesh they are added when the mesh is generated (OpenFOAM, snappyHexMesh in its layer-only "
+                                   "mode: the same step the run would do), so the mesh you see and count is the mesh the solver runs; colour the mesh "
+                                   "by Wall layers to see them. Where the space is too tight it leaves them out; the statistics say how much of the "
+                                   "wall got them.")))
         f = ParamForm([{"key": "n", "label": "number of layers", "unit": "", "default": 0, "min": 0, "max": 20},
                        {"key": "growth", "label": "growth ratio", "unit": "", "default": 1.2, "min": 1.0, "max": 2.0},
-                       {"key": "first", "label": "first layer thickness (0 = automatic)", "unit": "mm", "default": 0.0, "min": 0.0}],
-                      {"n": ly.get("n", 0), "growth": ly.get("growth", 1.2), "first": (ly.get("first") or 0) * M}, "mesh.layers")
+                       {"key": "first", "label": "first layer thickness (0 = automatic)", "unit": "mm", "default": 0.0, "min": 0.0},
+                       {"key": "y_plus", "label": "target y+ of the first cell (0 = automatic, about 30)", "unit": "", "default": 0.0, "min": 0.0,
+                        "max": 300.0}],
+                      {"n": ly.get("n", 0), "growth": ly.get("growth", 1.2), "first": (ly.get("first") or 0) * M, "y_plus": ly.get("y_plus") or 0},
+                      "mesh.layers")
         f.changed.connect(lambda k, v, f=f: self._layers_set(f.values()))
         s.body.addWidget(f)
         from ..meshtools import layer_numbers
         ln = layer_numbers(st)
         if ln:
+            aim = f" (automatic, for y+ ≈ {fmt_num(round(ln['y_plus'], 3))})" if (ln.get("y_plus") and not ly.get("first")) else (
+                " (automatic)" if not ly.get("first") else "")
             txt = (f"{ln['n']} layers, growing by {fmt_num(round(ln['growth'], 3))}: the first is {fmt_num(round(ln['first'] * M, 4))} mm"
-                   f"{' (automatic)' if not ly.get('first') else ''}, all together {fmt_num(round(ln['total'] * M, 3))} mm.")
+                   f"{aim}, all together {fmt_num(round(ln['total'] * M, 3))} mm.")
             if ln.get("delta"):
                 txt += (f" The boundary layer is about {fmt_num(round(ln['delta'] * M, 2))} mm thick: {fmt_num(round(ln['cells_across_delta'], 1))} "
                         f"of the layers lie inside it" + (" (a laminar boundary layer needs about ten)." if ln.get("laminar") else "."))
@@ -474,6 +480,13 @@ class MeshAdvanced(QWidget):
             txt = "Set a flow speed above 0 in the Setup step to see the thickness of the layers."
         else:
             txt = "No layers: the cells next to the walls are as big as the surface cells."
+        feat = ((m.get("stats") or {}).get("sizes") or {}).get("feature")
+        if ln and feat:
+            from ...solvers.openfoam.layermesh import layers_that_fit
+            fit = layers_that_fit(ln["first"] * M, ln["growth"], feat * M)
+            if fit is not None and ln["n"] > fit:
+                txt += (f" ⚠ The thinnest part is {fmt_num(round(feat * M, 2))} mm and a layer grows from each side of it: {fit} layer{'s' if fit != 1 else ''} "
+                        f"of this growth fit{'s' if fit == 1 else ''}, more run into each other and are removed.")
         summ = wid(QLabel(txt), "mesh.layers.summary")
         summ.setWordWrap(True)
         summ.setObjectName("muted")
@@ -494,7 +507,8 @@ class MeshAdvanced(QWidget):
 
     def _layers_set(self, v):
         try:
-            self.engine.project().set_mesh(layers={"n": int(v["n"]), "growth": v["growth"], "first_mm": v["first"] or None})
+            self.engine.project().set_mesh(layers={"n": int(v["n"]), "growth": v["growth"], "first_mm": v["first"] or None,
+                                                   "y_plus": v["y_plus"] or None})
             self.engine.changed.emit()
         except Exception as e:  # noqa: BLE001
             self.panel._fail(e)

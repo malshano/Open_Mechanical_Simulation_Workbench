@@ -152,7 +152,7 @@ Top-level keys (type, meaning):
 | `rotors` | list | Actuator disks. |
 | `moving_zones` | list | `{name, method: "mrf"|"sliding", rpm, axis, center[3], radius, length, cell size ...}`; axis stored as a name (`"-x"`) and expanded to a vector by `state()`. |
 | `settings` | dict | Study settings (keys in `studies.STUDIES[...]["settings"]`), e.g. `turbulence`, `speed`, `analysis`, `end_time`, `n_frames`, `n_procs`. |
-| `mesh` | dict | `preset`, `size_max`, `size_min`, `refinements` (face sizing), `regions` (boxes and cylinders), `layers`, `status`, `stats`. A cylinder region: `{name, shape:"cylinder", start[3], end[3], radius, inner_radius?, size, min, max}`. |
+| `mesh` | dict | `preset`, `size_max`, `size_min`, `refinements` (face sizing), `regions` (boxes and cylinders), `layers` (`{n, growth, first, y_plus, tolerant}`), `status`, `stats` (`stats.layers`: see Wall layers made with the tetrahedral mesh). A cylinder region: `{name, shape:"cylinder", start[3], end[3], radius, inner_radius?, size, min, max}`. |
 | `solve` | dict | `status`, `backend`, `finished`, `summary` (engineering numbers, `default_groups`, `default_hidden_regions`, `coefficients`, `transient`, ...), `case_dir`. |
 | `foam_advanced` | dict | Advanced OpenFOAM numerics, e.g. `n_outer`. |
 | `mesh_check`, `model_check`, `hidden` | dict/bool | Mesh sensitivity and model comparison state; `hidden` marks internal twin projects. |
@@ -207,7 +207,7 @@ All paths start with `/api`. `{pid}` = project id. Bodies are JSON. Payload arra
 
 | Method path | Purpose |
 |---|---|
-| `POST /projects/{pid}/mesh/settings` | Body keys: `preset`, `size_max_mm`, `size_min_mm`, `refinements`, `regions`, `layers`, `defeature_mm`. Validated in `Project.set_mesh`. |
+| `POST /projects/{pid}/mesh/settings` | Body keys: `preset`, `size_max_mm`, `size_min_mm`, `refinements`, `regions`, `layers` (`{n, growth, first_mm, y_plus, tolerant}`), `defeature_mm`. Validated in `Project.set_mesh`. |
 | `POST /projects/{pid}/mesh` | Start the mesh job. |
 | `GET /projects/{pid}/mesh/view?poor=0.1` | Poor-cell overlay payload. |
 | `POST /projects/{pid}/solve`, `/solve/stop` | Start / stop the solve job. Body: `export_only`, `continue_iterations`, `init_from` (study id: initial flow from its latest solution; external aero, same parts bounding box; checked in `Project.init_source`). |
@@ -273,6 +273,38 @@ An optional mesher for `external_aero` (`mesh.method == "hex"`, set with `set_me
 - **Case writer**: `write_external_aero` copies `polyMesh_hex` into the case (`_use_polymesh`) instead of converting tetrahedra, does not add layers again, and refuses rotors, zones and symmetry planes.
 - **Quality rules** (`parse_logs`): concave cells are a warning (snappyHexMesh limits them); any other failed `checkMesh` item is a problem. The cell limit (`MAX_CELLS`) stopping refinement is reported.
 - **Known limits**: sections of the display mesh take seconds (12 display tetrahedra per hexahedron); layer coverage depends on the parts being several cells thick; the log formats are those of OpenFOAM v2606.
+
+### Wall layers made with the tetrahedral mesh (`solvers/openfoam/layermesh.py`)
+
+- **Why**: the solver case adds the layers with snappyHexMesh in layer-only mode before the run (`cases.write_external_aero`); the Mesh step used to show the
+  tetrahedra without them. `Project._make_layers` now runs the first steps of that very case in `mesh/layercase` (check, snappyHexMesh, a final checkMesh
+  with `log.checkMesh_layers`), so the layers are the ones the run gets, reads the result back and removes the folder (the snappyHexMesh log is kept as
+  `mesh/layers_log.txt`). The case is written by `cases.write_case` and `advanced.apply`, with every setting of the run; nothing is duplicated.
+- **Job**: part of the tetrahedral `generate_mesh` job (progress 0.93 to 0.99) for external aerodynamics; `Project.generate_layers` (`mesh.layers` action)
+  repeats only this step. `_make_layers` never raises for a reason of the model or OpenFOAM: it returns `{made: False, reason}` (no OpenFOAM, no wall, the
+  case could not be written, snappyHexMesh failed, the log could not be read). A mesh job therefore never fails because of the layers.
+- **Stored**: `stats["layers"]` = `{made, patches[{name, faces, target, made (average, may be fractional), first_mm, total_mm, percent}], extruded_percent,
+  faces_extruded, faces_total, cells, cells_before, layer_cells, layers_max, first_mm, total_mm, types, non_orthogonality_max/mean, skewness_max,
+  aspect_ratio_max, mesh_ok, failed_checks, warnings, y_plus, settings, stale, seconds}`; `mesh/layered.npz` holds the display arrays (the format of the hex
+  mesh, without its `hex` flag, plus `tet_layer`: the layer number of each display tetrahedron, 0 = not a layer). The tetrahedral `mesh.npz` is unchanged, so
+  every other view and metric still works on the Gmsh mesh. A new mesh (either method) deletes `layered.npz`; changing the layer settings sets
+  `stats.layers.stale` (the tetrahedra stay valid: `mark_stale` is not called).
+- **Display** (`layermesh.display_arrays`): the layered mesh is exactly the Gmsh tetrahedra (moved away from the wall) plus one prism per wall triangle and layer.
+  Tetrahedra are drawn as they are (four distinct nodes of four triangles); prisms and any other cell are split into tetrahedra round their centre. Cell quality is
+  `hexmesh.cell_quality` (1 - the worst non-orthogonality / 90 degrees). `layer_numbers` counts the layers: layer 1 is the prism whose triangular base is a boundary
+  face (not any boundary face: the quadrilateral sides of a prism lie on symmetry planes and the far field), layer k + 1 the prism stacked on a layer-k prism
+  through a shared triangle. About 9 s and 1.7 million display tetrahedra for a 950,000-cell mesh.
+- **View**: `GET /mesh/view?metric=layers` (`Project.mesh_view(metric="layers")`): the layered mesh coloured by layer with `categories` (Tetrahedra, Layer 1 (at the
+  wall) ... Layer n), `present` as for the region colouring. `layers_default_cut` gives a cut through the middle of the object across its longest side;
+  `layer_focus(axis, position)` a box round the end of the section of layer 1 furthest back along the longer side of the section, ten times as wide as all the
+  layers, for the camera.
+- **Why layers are lost** (`layermesh.layers_that_fit`, `layer_warnings`): a layer grows from each side of a thin part, so the stack of layers must total less than
+  about half the part's thickness (`stats.sizes.feature`, the thinnest solid feature). `stats.layers.layers_fit` is the most layers of the asked growth that fit;
+  `warnings` name it. Measured on the example wing: the tolerant limits (`mesh.layers.tolerant`) changed nothing (69.2 % against 69.0 %), the number of layers did.
+- **y+**: `mesh.layers.y_plus` (0.5 to 300, empty = automatic) is the target for the first cell centre of the wall-function models (default 30); `cases.layer_plan`
+  turns it into the first layer thickness (`layer_first_thickness`) for the case, the hex mesh and the panel's summary. A `first` given by the user wins.
+- **Known limits**: studies with sliding zones get the layers before the baffles are made, as at the run; the step needs OpenFOAM at mesh time (without it the run adds
+  the layers as before); the layer count per surface is the average over its faces.
 
 ---
 

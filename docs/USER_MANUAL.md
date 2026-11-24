@@ -385,7 +385,7 @@ Sliding-mesh results: the propeller turns in the view, when playing and in the v
 - **Run mesh-sensitivity check** (Results): the case is re-meshed one level finer in a copy of the study, re-solved and the key outputs compared. With three levels the program reports a grid convergence index (GCI).
 - **Flow model comparison** (heatsinks): same mesh, other flow model; the conservative value is reported.
 - The results summary states its assumptions. Read it.
-- Coarse meshes are indicative only. Tet-only meshes have no prism layers.
+- Coarse meshes are indicative only. A flow mesh gets prism layers on its walls (Mesh step, Wall layers; OpenFOAM must be installed); heat and structure meshes are tetrahedra only.
 
 ---
 
@@ -516,7 +516,7 @@ Back up or move a study by copying its folder, then use **Open a saved study...*
 
 ## 14. Limits (be honest about results)
 
-- Meshes are tetrahedra only; no prism layers. Wall-bounded results (drag, heat transfer) from coarse meshes are indicative.
+- Flow meshes are tetrahedra with prism layers on the walls (when OpenFOAM is installed); heat and structure meshes are tetrahedra only. Wall-bounded results (drag, heat transfer) from coarse meshes are indicative.
 - Actuator-disk rotors use an empirical in-plane drag model (k editable).
 - Vibration: linear, no damping, no pre-stress, no contact.
 - Radiation view factors are not in the built-in FEM.
@@ -716,11 +716,28 @@ layers** - and **Generate mesh**.
 - **Part sizing**: choose the part in the drop-down (in a flow study that is the object: the parts of your STEP file by name) and press
   **＋ Part sizing**, or press **Pick a part in the 3D view** and click the part: all its faces get a cell size, which you then change in
   the list. The faces that have a part sizing are tinted in the 3D view. A part has one sizing; change its size instead of adding another.
-- **Wall layers** (flow studies; the block is open): the number of layers, the growth ratio and the first layer (0 = automatic, from the
-  flow). A line under the fields says what they come to - the first and the total thickness and how many layers lie inside the boundary
-  layer - and **Show the layers in the 3D view** draws a translucent shell round the object as thick as all the layers together
-  (an approximation at sharp corners). A tetrahedral mesh gets its layers from OpenFOAM just before the run, so they are in the run's
-  mesh, not in the one drawn here; a hex-dominant mesh has them in the mesh itself.
+- **Wall layers** (flow studies; the block is open): the number of layers, the growth ratio, the first layer (0 = automatic) and the
+  **target y+** of the first cell (0 = automatic: about 30 for the wall-function models; a target near 1 resolves the wall itself and needs
+  many more layers). A line under the fields says what they come to - the first and the total thickness, the y+ it aims at and how many
+  layers lie inside the boundary layer - and **Show the layers in the 3D view** draws a translucent shell round the object as thick as
+  all the layers together (an approximation at sharp corners; it is the preview before the mesh exists).
+  - **The layers are made with the mesh.** When you press **Generate mesh** in a flow study (tetrahedral mesh, OpenFOAM installed), the
+    program adds the layers with OpenFOAM's snappyHexMesh in its layer-only mode - the same step the run would do - so **the mesh you see,
+    count and check is the mesh the solver runs**. Without OpenFOAM, or when the setup is not complete, the card says why and the run adds
+    the layers itself. A hex-dominant mesh makes its layers together with the mesh.
+  - **Wall layers made** (under the statistics): how many layers were made, on what share of the wall faces, the mesh the solver runs (its
+    cells = tetrahedra + layer cells) and a table per surface (layers made of the layers asked for - an average over the faces, so 4.6 of 5
+    means that some faces lost one - the first and the total thickness, and how much of the planned thickness it got). When less than 98 % of
+    the wall got layers the card says why. The usual cause is a thin part: **a layer grows from each side of it, so all the layers together
+    must take less than about half its thickness**, or they run into each other and OpenFOAM removes them. The card (and the summary line under
+    the layer fields, before you mesh) names how many layers fit. Example, measured on the example wing (thinnest part 6.3 mm, first layer
+    0.85 mm, growth 1.2): 5 layers kept 70 % of the wall, 3 layers 99 %, 2 layers 100 %. A finer mesh does not help, it makes this worse
+    (the layers stay as thick while the part is resolved more finely). A warning also appears when the non-orthogonality is above 70°.
+  - **Colour the mesh by Wall layers** (see below) and **Zoom to the layers**: the mesh is cut through the middle of the object and the
+    view goes to the edge of the object, where each layer is a band from warm (at the wall) to cool (the outermost layer) round the section.
+  - **Make the layers again** repeats only the layer step on the mesh that is there, after you change the layer settings (the tetrahedra
+    stay as they are). Until you do, the card says that the layer settings changed since the layers were made; the run always uses the
+    settings as they are now.
 - **Refinement regions are drawn in the 3D view** before you mesh: each box or cylinder (a ring too) as a translucent body with an outline, in
   the colour of its swatch in the list, with its name and cell size written on it; the region you edit is drawn stronger. **◎** zooms to a
   region, and **Show the regions in the 3D view** switches the drawing off. Edit the numbers and the drawing follows.
@@ -738,14 +755,16 @@ layers** - and **Generate mesh**.
   two buttons are greyed and their tooltip says to add one in Setup.
 - **Statistics**: a table with the cells, nodes, near-wall and bulk size, minimum and mean quality, poor cells, the largest
   non-orthogonality and skewness (when known), the defeatured faces, and for a hex-dominant mesh the share of hexahedra, prisms and
-  polyhedra, the largest aspect ratio and the share of the wall that got layers; then the time it took.
-- **Colour the mesh by** quality, **Cell size**, **Region**, **Aspect ratio**, **Size jump** (the largest size ratio to a neighbour) or
-  **Cell volume**. A hex-dominant mesh is shown by quality and region only (the other buttons are greyed and say why). Under the buttons,
+  polyhedra, the largest aspect ratio and the share of the wall that got layers; with wall layers also the cells with the layers, the
+  layers made, the first and all layers and the non-orthogonality and skewness of the mesh with them; then the time it took.
+- **Colour the mesh by** quality, **Cell size**, **Region**, **Aspect ratio**, **Size jump** (the largest size ratio to a neighbour),
+  **Cell volume** or **Wall layers** (flow studies with layers: the mesh the solver runs, each layer in its own colour and the tetrahedra
+  in grey; choosing it opens a cut through the object if none is open). A hex-dominant mesh is shown by quality and region only (the other buttons are greyed and say why). Under the buttons,
   the **cell budget** shows, for each band of cell sizes, the share of the cells and of the volume, with remarks when a size jump or a
   fine region uses too many cells.
 - Under the quality check (**Show cells below**, **Zoom to worst**) the verdict lists, in words, what the checks cover: poorly
-  shaped cells, how many cells lie across the thinnest part and the narrowest air gap, the estimated wall y+ of a flow, and a coarse CFD
-  mesh. **Next: solve →** goes on.
+  shaped cells, how many cells lie across the thinnest part and the narrowest air gap, the estimated wall y+ of a flow (from the first
+  layer when there are layers, else from the surface cells), and a coarse CFD mesh. **Next: solve →** goes on.
 - **Mesh sensitivity** (once the study is solved and converged): **Run mesh-sensitivity check** re-meshes one preset finer, solves again
   and compares the key results; **Three-level check (GCI)** uses two finer meshes and gives the grid-convergence index of each result.
   The last check's table and verdict are shown here (and on the Results checks).

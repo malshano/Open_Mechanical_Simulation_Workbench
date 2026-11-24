@@ -12,7 +12,7 @@ from .. import mode, theme
 from ..charts import QualityHist
 from ..forms import fmt_num
 from ..ids import wid
-from ..meshtools import Budget, MeshCheck, StatsGrid, mesh_notes, stats_rows
+from ..meshtools import Budget, LayerCard, MeshCheck, StatsGrid, mesh_notes, stats_rows
 from .common import _h, _muted, _Panel, _seg
 from .mesh_adv import MeshAdvanced
 
@@ -50,7 +50,9 @@ class MeshPanel(_Panel):
                                          "tetrahedron): slivers and needles stand out"),
               ("growth", "Size jump", "Colour each cell by the largest size ratio to a neighbour (1 = same size; a smooth mesh stays "
                                       "below about 1.5)"),
-              ("volume", "Cell volume", "Colour each cell by its volume (mm³)")]
+              ("volume", "Cell volume", "Colour each cell by its volume (mm³)"),
+              ("layers", "Wall layers", "Show the mesh the solver runs, coloured by layer (needs wall layers on a tetrahedral mesh): a cut through "
+                                        "the object shows each layer next to the wall")]
     TET_ONLY = ("size", "aspect", "growth", "volume")
 
     def bind(self, win):
@@ -103,7 +105,7 @@ class MeshPanel(_Panel):
         else:
             self.view.region_view.set(regs, self.adv.active_region)
         from ..meshtools import layer_numbers
-        lay = layer_numbers(st) if self.adv.show_layers else None
+        lay = layer_numbers(st) if (self.adv.show_layers and self.color != "layers") else None     # (the real layers are drawn: no shell beside them)
         faces = [f for f in self.engine.project().faces() if f.get("kind") == "body"] if lay else []
         self.view.layer_view.set(faces, lay["total"] if lay else 0.0, (self.engine.pid, st["geometry"].get("updated")))
         from ..regionview import colour_of
@@ -152,6 +154,12 @@ class MeshPanel(_Panel):
         self.v.addWidget(self.stats)
         self.grid = wid(StatsGrid(), "mesh.stats.table")
         self.v.addWidget(self.grid)
+        self.layers_h = _h("Wall layers made")
+        self.v.addWidget(self.layers_h)
+        self.layer_card = wid(LayerCard(), "mesh.layers.card")
+        self.layer_card.makeRequested.connect(self.make_layers)
+        self.layer_card.zoomRequested.connect(self.zoom_layers)
+        self.v.addWidget(self.layer_card)
         self.cut_h = _h("Cut through the mesh")
         self.v.addWidget(self.cut_h)
         w, self.cut_grp, self.cut_btns = _seg([("", "Off"), ("x", "X"), ("y", "Y"), ("z", "Z")], "", prefix="mesh.cut")
@@ -178,7 +186,7 @@ class MeshPanel(_Panel):
         self.color_btns, self.color_grp = {}, QButtonGroup(self)
         self.color_grp.setExclusive(True)
         self.color_rows = []
-        for row in (self.COLORS[:3], self.COLORS[3:]):
+        for row in (self.COLORS[:3], self.COLORS[3:6], self.COLORS[6:]):
             w, _grp, btns = _seg([(k, t) for k, t, _ in row], "quality", prefix="mesh.color")
             for (k, _t, tip), b in zip(row, btns.values()):
                 _grp.removeButton(b)
@@ -235,13 +243,72 @@ class MeshPanel(_Panel):
         self.v.addStretch(1)
         self._budget_key = None
         self.hex = False
+        self.layers_ok = False                              # (a layered mesh exists: the colour "Wall layers" can be drawn)
 
     # ------------------------------------------------------------------ choices
     def _set(self, **kw):
         for k, val in kw.items():
             setattr(self, k, val)
+        if kw.get("color") == "layers" and not self.axis and "axis" not in kw:
+            self._default_cut()                 # (the layers lie on the walls: they are seen in a cut through the object, so open one)
         self.slider.setEnabled(bool(self.axis))
         self.changed.emit()
+        if "color" in kw:
+            self.draw_marks()                   # (the shell that previews the layers is not drawn beside the real ones)
+
+    def _default_cut(self):
+        try:
+            ax, fr = self.engine.project().layers_default_cut()
+        except Exception:  # noqa: BLE001 - a help: without it the user chooses the cut
+            return
+        self.axis, self.frac = ax, fr
+        self.cut_btns[ax].setChecked(True)
+        self.slider.blockSignals(True)
+        self.slider.setValue(int(round(fr * 1000)))
+        self.slider.blockSignals(False)
+
+    def make_layers(self):
+        """Make the wall layers again on the mesh that is there (a job)."""
+        try:
+            j = self.engine.project().generate_layers()
+        except Exception as e:  # noqa: BLE001
+            self._fail(e)
+            raise
+        self.engine.message.emit("Making the wall layers (OpenFOAM snappyHexMesh, as the run will)", False)
+        self.engine.changed.emit()
+        return j
+
+    def layers_focus(self):
+        """The box the camera fits to while the layers are shown: round the edge of the object in the cut, as wide as ten times the layers, or None."""
+        if self.color != "layers" or not self.axis or not self.engine.pid:
+            return None
+        pr = self.engine.project()
+        key = (self.engine.pid, self.axis, round(self.frac, 4), (pr.data["mesh"].get("stats") or {}).get("seconds"),
+               ((pr.data["mesh"].get("stats") or {}).get("layers") or {}).get("seconds"))
+        if getattr(self, "_focus_key", None) == key:
+            return self._focus_box
+        self._focus_key = key
+        try:
+            m = pr.load_mesh()
+            ax = "xyz".index(self.axis)
+            lo, hi = float(m["nodes"][:, ax].min()), float(m["nodes"][:, ax].max())
+            f = pr.layer_focus(self.axis, lo + (hi - lo) * self.frac)
+        except Exception:  # noqa: BLE001
+            f = None
+        self._focus_box = f["box"] if f else None
+        return self._focus_box
+
+    def zoom_layers(self):
+        """Turn the 3D view to the cut and zoom in to the layers at the edge of the object."""
+        if self.color != "layers":
+            self._set(color="layers")
+            self.color_btns["layers"].setChecked(True)
+        box = self.layers_focus()
+        if box is None:
+            raise ValueError("There are no layers to zoom to: make the layers first")
+        self.view.set_focus(box)
+        self.view.fit(direction={"x": [1, 0, 0], "y": [0, 1, 0], "z": [0, 0, 1]}[self.axis])
+        return {"box": box}
 
     def _preset(self, k):
         try:
@@ -293,6 +360,8 @@ class MeshPanel(_Panel):
     def request(self):
         color = self.color
         if self.hex and color in self.TET_ONLY:              # (the hex-dominant mesh is shown by its quality only)
+            color = "quality"
+        if color == "layers" and not self.layers_ok:
             color = "quality"
         return self.axis or None, self.frac, color, (self.poor_thr if self.poor_on else None)
 
@@ -382,6 +451,23 @@ class MeshPanel(_Panel):
         self.stale_note.setStyleSheet(f"color: {t['warn_text']};")
         for w in (self.stats_h, self.grid, self.hist_h, self.hist, self.poor_row, self.poor_info, self.next, self.notes):
             w.setVisible(have)
+        lay_st = (s or {}).get("layers") or {}
+        self.layers_ok = bool(have and not self.hex and lay_st.get("made"))
+        want = int((m.get("layers") or {}).get("n") or 0) > 0
+        show_card = bool(have and aero and not self.hex and (want or lay_st))
+        self.layers_h.setVisible(show_card)
+        self.layer_card.setVisible(show_card)
+        if show_card:
+            jm = P.JOBS.latest(self.engine.pid, "mesh") if self.engine.pid else None
+            self.layer_card.set_data(st, t, bool(jm and jm.status == "running"))
+        lb = self.color_btns["layers"]
+        self.color_rows[2].setVisible(bool(aero and not self.hex))
+        lb.setEnabled(self.layers_ok)
+        lb.setToolTip(next(tip for c, _l, tip in self.COLORS if c == "layers") if self.layers_ok else
+                      ("A hex-dominant mesh makes its layers itself and is shown by its quality and regions" if self.hex else
+                       "No mesh with layers yet: set a number of layers (Wall layers, below) and generate the mesh, with OpenFOAM installed"))
+        if self.color == "layers" and not self.layers_ok:
+            self.color = "quality"
         tips = {c: tip for c, _l, tip in self.COLORS}
         for k in self.TET_ONLY:
             b = self.color_btns[k]

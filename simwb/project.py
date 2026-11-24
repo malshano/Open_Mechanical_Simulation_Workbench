@@ -2749,6 +2749,11 @@ class Project:
             g = studies.finite(layers.get("growth", 1.2), "Layer growth")
             first = layers.get("first_mm")
             first = None if first in (None, "", 0) else studies.finite(first, "First layer thickness")
+            old_layers = dict(m.get("layers") or {})
+            y_plus = layers.get("y_plus", old_layers.get("y_plus"))
+            y_plus = None if y_plus in (None, "", 0) else studies.finite(y_plus, "Target y+")
+            if y_plus is not None and not 0.5 <= y_plus <= 300:
+                raise ValueError("Target y+ must be between 0.5 and 300 (empty = automatic, about 30 for the wall-function models)")
             if not 0 <= n <= 20:
                 raise ValueError("Number of wall layers must be 0..20 (0 = off)")
             if not 1.0 <= g <= 2.0:
@@ -2757,8 +2762,11 @@ class Project:
                 raise ValueError("First layer thickness must be > 0 mm (empty = automatic)")
             # (an option not given keeps its value: a call that only changes the number of layers must not switch
             # the tolerant limits off)
-            m["layers"] = {"n": n, "growth": g, "first": None if first is None else first / 1000,
+            m["layers"] = {"n": n, "growth": g, "first": None if first is None else first / 1000, "y_plus": y_plus,
                            "tolerant": bool(layers.get("tolerant", (m.get("layers") or {}).get("tolerant", False)))}
+            lst = (m.get("stats") or {}).get("layers")
+            if lst and m["layers"] != old_layers:
+                lst["stale"] = True            # (the layered mesh in the view was made with the old settings: "Make the layers" again)
         if edge_refinement is not None:  # fine cells along sharp edges (leading / trailing edges): off | True | factor
             if edge_refinement in (False, 0, "off"):
                 m.pop("edge_refine", None)
@@ -2794,6 +2802,7 @@ class Project:
         from .solvers.openfoam import cases, hexmesh, runner
 
         t0 = time.time()
+        (self.mesh_dir / "layered.npz").unlink(missing_ok=True)
         why = self.hex_unsupported()
         if why:
             raise ValueError(why + " Choose the tetrahedral mesh.")
@@ -2899,6 +2908,181 @@ class Project:
                     f"({lg['types']['hexahedra']:,} hexahedra)")
         return stats
 
+    # ------------------------------------------------------------------ wall layers made with the mesh
+    @property
+    def layered_path(self) -> Path:
+        return self.mesh_dir / "layered.npz"
+
+    def load_layered(self) -> dict:
+        """The layered mesh in display form (see solvers/openfoam/layermesh.py)."""
+        if not self.layered_path.exists():
+            raise ValueError("There is no mesh with wall layers: generate the mesh in a flow study with wall layers on "
+                             "(Mesh step, Wall layers), with OpenFOAM installed")
+        return dict(np.load(self.layered_path))
+
+    def _run_foam_steps(self, job: Job, case: Path, steps: list, det: dict, progress: float, msg: str) -> bool:
+        """Run OpenFOAM steps of a case (where OpenFOAM is: natively on Windows, else through its command) and say so on the job."""
+        from .solvers.openfoam import runner
+
+        JOBS.update(job, progress, msg)
+        if det["backend"] == "windows":
+            def on_proc(p):
+                job.proc = p
+                job.check_cancel()
+
+            def on_line(line):
+                JOBS.update(job, None, line if line.startswith("$") else None, log=line)
+            ok = runner.run_steps_windows(case, steps, det, on_proc, on_line)
+        else:
+            lines = ["#!/bin/bash", 'cd "${0%/*}" || exit 1']
+            for st in steps:
+                lines.append(f"{st['app']} {' '.join(st['args'])} > {st['log']} 2>&1" + ("" if st.get("allow_fail") else " || exit 1"))
+            (case / "Allmesh").write_text("\n".join(lines) + "\n", newline="\n")
+            cmd = runner.build_command(case, "Allmesh")
+            proc = subprocess.Popen(cmd, cwd=case, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+                                    shell=isinstance(cmd, str))
+            job.proc = proc
+            for line in proc.stdout:
+                if line.strip():
+                    JOBS.update(job, None, None, log=line.rstrip(), quiet=True)
+            ok = proc.wait() == 0
+        job.proc = None
+        job.check_cancel()
+        return ok
+
+    def _make_layers(self, job: Job, p0: float = 0.0, p1: float = 1.0, cells_before=None, sizes=None) -> dict:
+        """The layer step (see _make_layers_inner), which never raises for what OpenFOAM or its logs did: the run adds the layers itself, so a
+        mesh without them is still a good mesh. It says why in the result. sizes: the mesh statistics' sizes (the thinnest part is in it)."""
+        try:
+            return self._make_layers_inner(job, p0, p1, cells_before, sizes)
+        except Cancelled:
+            raise
+        except Exception as e:  # noqa: BLE001
+            self.layered_path.unlink(missing_ok=True)
+            return {"made": False, "reason": f"The layers could not be made here ({type(e).__name__}: {e}); the run adds them itself."}
+
+    def _make_layers_inner(self, job: Job, p0: float = 0.0, p1: float = 1.0, cells_before=None, sizes=None) -> dict:
+        """Add the wall layers to the tetrahedral mesh the way the run will (the first steps of the solver case: check, snappyHexMesh in its layer-only
+        mode) in a folder of its own, read the result back and keep it for the viewer (mesh/layered.npz). Returns what to store in the mesh statistics:
+        {made: True, ...numbers...} or {made: False, reason}. It never raises for a reason of the model or of OpenFOAM: the run adds the layers
+        itself, so the mesh is still good without this."""
+        from .solvers.openfoam import advanced, cases, layermesh, runner
+
+        d = self.data
+        why = layermesh.why_not(d, self.study, d["mesh"].get("method"))
+        if why:
+            return {"made": False, "reason": why}
+        det = runner.detect()
+        if not det["available"]:
+            return {"made": False, "reason": "OpenFOAM is not installed here, so the layers are not made now; they are added when the study runs."}
+        t0 = time.time()
+        case = self.mesh_dir / "layercase"
+        shutil.rmtree(case, ignore_errors=True)
+        case.mkdir(parents=True, exist_ok=True)
+        self.layered_path.unlink(missing_ok=True)
+        saved_log = self.mesh_dir / "layers_log.txt"
+        try:
+            JOBS.update(job, p0 + 0.05 * (p1 - p0), "Writing the layer case", log="Wall layers: writing the case the run would write")
+            faces = self.faces()
+            try:
+                meta = cases.write_case(case, d, self.load_mesh(), faces, d["geometry"]["info"], self.bodies())
+                advanced.apply(case, d.get("foam_advanced"), d.get("foam_overrides"))
+            except ValueError as e:                      # (the setup is not complete enough to write the case: the run will say so)
+                return {"made": False, "reason": str(e)}
+            steps = [st for st in meta["steps"] if st["app"] in layermesh.STEP_APPS]
+            if not any(st["app"] == "snappyHexMesh" for st in steps):
+                return {"made": False, "reason": "The model has no wall surface to put layers on"}
+            steps.append({"app": "checkMesh", "args": ["-allGeometry", "-allTopology"], "log": "log.checkMesh_layers", "allow_fail": True})
+            ok = self._run_foam_steps(job, case, steps, det, p0 + 0.2 * (p1 - p0), "Adding the wall layers with snappyHexMesh (as the run will)")
+            log = case / "log.snappyHexMesh"
+            if log.exists():
+                shutil.copyfile(log, saved_log)
+            if not ok:
+                txt = log.read_text(errors="ignore") if log.exists() else ""
+                i = txt.find("FOAM FATAL")
+                return {"made": False, "reason": "snappyHexMesh could not add the layers" + (": " + txt[i:i + 400].strip() if i >= 0 else "")
+                        + ". The run tries again with its own mesh."}
+            JOBS.update(job, p0 + 0.8 * (p1 - p0), "Reading the layered mesh")
+            s2p, patches = cases.build_patches("external_aero", faces, d.get("bcs", []))
+            fluid_id = next(b["id"] for b in self.bodies() if b["role"] == "fluid")
+            arr, _pm = layermesh.display_arrays(case, s2p, patches, faces, fluid_id)
+            lg, ck = layermesh.parse_log(case), layermesh.parse_check(case)
+            np.savez_compressed(self.layered_path, **arr)
+        finally:
+            shutil.rmtree(case, ignore_errors=True)
+        rows = lg["patches"]
+        lay = d["mesh"].get("layers") or {}
+        first_mm = max((r["first_mm"] or 0 for r in rows), default=0) or None
+        total_mm = max((r["total_mm"] or 0 for r in rows), default=0) or None
+        feature_mm = ((sizes or {}).get("feature") or 0) * 1000 or None
+        warn, fit = layermesh.layer_warnings(lg["extruded_percent"], total_mm, first_mm, lay.get("growth", 1.2), int(lay.get("n") or 0), feature_mm,
+                                             ck["non_orthogonality_max"])
+        return {"made": True, "patches": rows, "extruded_percent": lg["extruded_percent"], "faces_extruded": lg["faces_extruded"],
+                "faces_total": lg["faces_total"], "cells": ck["cells"] or lg["cells"], "cells_before": cells_before,
+                "layer_cells": ck["types"]["prisms"], "layers_max": int(arr["tet_layer"].max()),
+                "first_mm": first_mm, "total_mm": total_mm, "feature_mm": feature_mm, "layers_fit": fit, "types": ck["types"],
+                "non_orthogonality_max": ck["non_orthogonality_max"], "non_orthogonality_mean": ck["non_orthogonality_mean"],
+                "skewness_max": ck["skewness_max"], "aspect_ratio_max": ck["aspect_ratio_max"], "mesh_ok": ck["mesh_ok"],
+                "failed_checks": ck["failed_checks"], "warnings": warn, "y_plus": lay.get("y_plus"), "settings": dict(lay), "stale": False,
+                "seconds": round(time.time() - t0, 1)}
+
+    def layers_default_cut(self) -> tuple:
+        """(axis, fraction of the mesh along it) of a cut through the middle of the object across its longest side: in a cut like that the layers
+        show as a band round the section of the object."""
+        info = self.data["geometry"].get("info") or {}
+        bb = np.asarray(info.get("parts_bbox") or info.get("bbox"), float)
+        ax = int(np.argmax(bb[3:] - bb[:3]))
+        mid = 0.5 * (bb[ax] + bb[3 + ax])
+        nodes = self.load_mesh()["nodes"]
+        a, b = float(nodes[:, ax].min()), float(nodes[:, ax].max())
+        return "xyz"[ax], float(np.clip((mid - a) / max(b - a, 1e-12), 0.0, 1.0))
+
+    def layer_focus(self, clip_axis: str, clip_pos: float, widths: float = 10.0) -> dict | None:
+        """Where to look at the layers in a cut: a box round the end of the section of the wall layer that lies furthest back along the longer side
+        of the section (the edge of a wing, the corner of a box), `widths` times as wide as all the layers together. {box: [x0, y0, z0, x1, y1, z1],
+        center, half} or None when the cut meets no layer."""
+        m = self.load_layered()
+        ax = "xyz".index(clip_axis)
+        lay = m["tet_layer"]
+        T = m["tets"][lay == 1]
+        if not len(T):
+            return None
+        c = m["nodes"][T]
+        cut = (c[:, :, ax].min(1) <= clip_pos) & (c[:, :, ax].max(1) >= clip_pos)
+        if not cut.any():
+            return None
+        pts = c[cut].reshape(-1, 3)
+        others = [i for i in range(3) if i != ax]
+        a = others[int(np.argmax([np.ptp(pts[:, i]) for i in others]))]
+        p0 = pts[int(np.argmin(pts[:, a]))].copy()
+        p0[ax] = clip_pos
+        total = ((self.data["mesh"].get("stats") or {}).get("layers") or {}).get("total_mm") or 1.0
+        half = max(widths * total / 1000.0, 5e-4)
+        return {"box": (p0 - half).tolist() + (p0 + half).tolist(), "center": p0.tolist(), "half": half}
+
+    def generate_layers(self) -> Job:
+        """Make the layers again on the mesh that is there (after changing the layer settings): no new mesh, only the layer step."""
+        from .solvers.openfoam import layermesh
+
+        if self.data["mesh"].get("status") not in ("ready", "stale"):
+            raise ValueError("Generate the mesh first")
+        why = layermesh.why_not(self.data, self.study, self.data["mesh"].get("method"))
+        if why:
+            raise ValueError(why + ".")
+        return JOBS.start("mesh", self.id, self._layers_job)
+
+    def _layers_job(self, job: Job):
+        if self.data["mesh"].get("method") == "hex":
+            raise ValueError("A hex-dominant mesh makes its layers itself")
+        old = self.data["mesh"].get("stats") or {}
+        stats = self._make_layers(job, 0.0, 1.0, cells_before=old.get("cells"), sizes=old.get("sizes"))
+        with self._lock:
+            self.data["mesh"].setdefault("stats", {})["layers"] = stats
+            self.save()
+        if not stats.get("made"):
+            raise RuntimeError(stats.get("reason") or "The layers could not be made")
+        return stats
+
     def _mesh_work(self, job: Job, p0=0.0, p1=1.0):
         """Mesh the project and record the RAM the work needed (stats['ram']: peak of this process and the programs it
         started, minus what they held before)."""
@@ -2931,6 +3115,7 @@ class Project:
             "mesh": self.data["mesh"], "rotors": self._rotors_with_wake(),
             "moving_zones": [dict(z, axis=list(studies.AXES[z["axis"]])) for z in self.data.get("moving_zones") or []],
         }
+        (self.mesh_dir / "layered.npz").unlink(missing_ok=True)       # (a new mesh: the layered one of the old mesh is not its layers)
         prev = self.data["mesh"].get("status")
         self.data["mesh"]["status"] = "meshing"
         try:
@@ -2942,6 +3127,9 @@ class Project:
         if self.spec["solver"].startswith("openfoam"):
             JOBS.update(job, 0.92, "Checking OpenFOAM mesh quality")
             stats["foam_quality"] = self._foam_quality()
+        if self.study == "external_aero" and not getattr(self, "_no_layer_step", False):
+            JOBS.update(job, 0.93, "Adding the wall layers")
+            stats["layers"] = self._make_layers(job, 0.93, 0.99, cells_before=stats.get("cells"), sizes=stats.get("sizes"))     # (never stops the mesh: it says why it could not)
         with self._lock:
             self.data["mesh"]["status"] = "ready"
             self.data["mesh"]["stats"] = stats
@@ -3020,6 +3208,7 @@ class Project:
         twin.data["hidden"] = True
         twin.data["mesh"].update(preset=nxt, status="none", stats={})
         twin.data["solve"] = {"status": "none"}
+        twin._no_layer_step = True               # (the run of the finer copy adds the layers itself)
         twin.save(quiet=True)
         with _LOCK:
             _OPEN[cid] = twin
@@ -3048,6 +3237,7 @@ class Project:
             twin3.data["name"] = f"{self.data['name']} (mesh check: {nxt2})"
             twin3.data["mesh"].update(preset=nxt2, status="none", stats={})
             twin3.data["solve"] = {"status": "none"}
+            twin3._no_layer_step = True
             twin3.save(quiet=True)
             with _LOCK:
                 _OPEN[cid3] = twin3
@@ -3286,8 +3476,15 @@ class Project:
         from . import meshviz
 
         metric = (metric or "quality").lower()
+        if metric == "layers":
+            if poor is not None:
+                raise ValueError("'poor' selects cells by their quality; use it with the quality metric")
+            m = self.load_layered()
+            d = self._mesh_view(m, m["quality"], "-", clip_axis, clip_pos, hide_fluid, None, layers=True)
+            d.update({"metric": "layers", "label": "Wall layers"})
+            return d
         if metric != "region" and metric not in meshviz.METRICS:
-            raise ValueError(f"Unknown mesh metric '{metric}'. Available: {', '.join(meshviz.METRICS)}, region")
+            raise ValueError(f"Unknown mesh metric '{metric}'. Available: {', '.join(meshviz.METRICS)}, region, layers")
         m = self.load_mesh()
         label, unit, worse = meshviz.METRICS["quality" if metric == "region" else metric]
         if metric == "region":
@@ -3309,7 +3506,7 @@ class Project:
                       "range": meshviz.display_range(metric, vals)})
         return d
 
-    def _mesh_view(self, m, vals, unit, clip_axis, clip_pos, hide_fluid, poor, region=False, log=False):
+    def _mesh_view(self, m, vals, unit, clip_axis, clip_pos, hide_fluid, poor, region=False, log=False, layers=False):
         if poor is not None:
             q = m["quality"]
             sel = np.where(q < float(poor))[0]
@@ -3336,6 +3533,8 @@ class Project:
         rs.surf_group = np.zeros(len(rs.surf_tris), np.int32)
 
         def paint(tris, cells):
+            if layers:
+                return self._layer_payload(rs, m, tris, cells)
             if region:
                 return self._region_payload(rs, m, tris, cells, bodies, tr)
             d = rs._tri_payload(tris, cells, "Quality")
@@ -3362,6 +3561,30 @@ class Project:
             return d
         tris, cells = rs.clip_tris("xyz".index(clip_axis), float(clip_pos), hide_regions=hide)
         return paint(tris, cells)
+
+    @staticmethod
+    def layer_colors(n: int) -> list:
+        """One colour per layer, from warm at the wall to cool at the outer layer (n layers)."""
+        a, b = np.array([240, 138, 36]), np.array([47, 184, 200])
+        out = []
+        for i in range(n):
+            c = a + (b - a) * (i / max(n - 1, 1))
+            out.append("#%02x%02x%02x" % tuple(int(round(x)) for x in c))
+        return out
+
+    def _layer_payload(self, rs, m, tris, cells):
+        """The triangles coloured by the layer their cell belongs to: 0 = an ordinary tetrahedron, 1 = the layer at the wall, 2 = the next ..."""
+        lay = m["tet_layer"]
+        n = int(lay.max()) if len(lay) else 0
+        cols = self.layer_colors(n)
+        cats = [{"name": "Tetrahedra", "color": "#8a93a6"}] + [
+            {"name": f"Layer {i + 1}" + (" (at the wall)" if i == 0 else ""), "color": cols[i]} for i in range(n)]
+        fv = lay[cells].astype(np.float32) if len(cells) else np.zeros(0, np.float32)
+        d = rs._tri_payload(tris, cells, "Quality", face_vals=fv)
+        d["unit"] = "-"
+        d["categories"] = cats
+        d["present"] = [int(i) for i in np.unique(fv)] if len(fv) else []
+        return d
 
     def _region_payload(self, rs, m, tris, cells, bodies, tr):
         """The triangles coloured by what they belong to: a category per body and, in an external flow study, the surface

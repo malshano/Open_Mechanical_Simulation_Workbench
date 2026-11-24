@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from .forms import fmt_num
@@ -29,6 +29,22 @@ def _f(v, d=3) -> str:
 
 def _f1(v) -> str:
     return "–" if v is None else f"{float(v):.1f}"
+
+
+def _pct(v) -> str:
+    """A share in percent with one decimal, never rounded up to 100 when it is not 100 (99.98 % reads 99.9 %)."""
+    if v is None:
+        return "–"
+    v = float(v)
+    return f"{math.floor(v * 10) / 10:.1f}" if v < 100 else "100"
+
+
+def _nl(v) -> str:
+    """A number of layers: whole when it is whole, else with one decimal (OpenFOAM reports the average over the faces: 4.6 of 5)."""
+    if v is None:
+        return "–"
+    v = float(v)
+    return str(int(round(v))) if abs(v - round(v)) < 0.05 else f"{v:.1f}"
 
 
 # ---------------------------------------------------------------------------------------------------------------- statistics
@@ -56,6 +72,14 @@ def stats_rows(st: dict) -> list:
             rows.append(("Max aspect ratio", _f1(x["aspect_ratio_max"])))
         if x.get("layers_extruded_percent") is not None:
             rows.append(("Wall faces with layers", f"{_f1(x['layers_extruded_percent'])} %"))
+    ly = s.get("layers") or {}
+    if ly.get("made"):
+        rows += [("Cells with layers", f"{ly['cells']:,} ({ly.get('layer_cells', 0):,} layer cells)"),
+                 ("Layers made", f"{ly.get('layers_max', 0)} · {_pct(ly.get('extruded_percent'))} % of the wall faces"),
+                 ("First / all layers", f"{_f(ly.get('first_mm'))} / {_f(ly.get('total_mm'))} mm")]
+        if ly.get("non_orthogonality_max") is not None:
+            rows += [("Max non-orthogonality (with layers)", f"{_f1(ly['non_orthogonality_max'])}°"),
+                     ("Max skewness (with layers)", f"{(ly.get('skewness_max') or 0):.2f}")]
     if s.get("seconds") is not None:
         rows.append(("Time", f"{s['seconds']} s"))
     return rows
@@ -111,7 +135,22 @@ def mesh_notes(st: dict) -> tuple:
         info.append(f"Narrowest air gap {_f(sz['min_gap'] * 1000)} mm ≈ {_f(sz.get('cells_across_gap'), 2)} cells across.")
         if study == "cht_enclosure" and sz.get("cells_across_gap") and sz["cells_across_gap"] < 6:
             warn.append(f"About {_f(sz['cells_across_gap'], 2)} cells across the air gaps: use at least 6 for final numbers.")
-    if study == "external_aero" and nw:
+    ly = s.get("layers") or {}
+    if study == "external_aero" and ly.get("made") and ly.get("first_mm"):
+        se = st.get("settings") or {}
+        V = max(float(se.get("speed") or 1), 1)
+        L = float(((st.get("geometry") or {}).get("info") or {}).get("ref_length") or 0.1)
+        from .. import materials
+        fl = materials.FLUIDS.get(se.get("fluid") or "air") or materials.FLUIDS["air"]
+        nu = fl["mu"] / fl["rho"]
+        cf = 0.0576 * (V * L / nu) ** -0.2
+        yp = 0.5 * ly["first_mm"] / 1000 * V * math.sqrt(cf / 2) / nu          # (the centre of a layer is half its thickness from the wall)
+        info.append(f"Wall layers: {ly.get('layers_max', 0)} layers, the first {_f(ly['first_mm'])} mm thick: estimated wall y+ ≈ {_f(yp, 2)} "
+                    f"(30–300 for wall functions, about 1 to resolve the wall).")
+        warn += ly.get("warnings") or []
+    elif study == "external_aero" and (ly.get("reason") and int((m.get("layers") or {}).get("n") or 0) > 0):
+        info.append("Wall layers: " + ly["reason"])
+    if study == "external_aero" and nw and not ly.get("made"):
         # a flat-plate estimate of the y+ of the first cell centre (tetrahedra: about 0.2 h from the wall)
         se = st.get("settings") or {}
         V = max(float(se.get("speed") or 1), 1)
@@ -197,9 +236,87 @@ def layer_numbers(st: dict) -> dict | None:
     fl = materials.FLUIDS.get(se.get("fluid") or "air") or materials.FLUIDS["air"]
     try:
         return cases.layer_plan(V, L, fl["mu"] / fl["rho"], se.get("turbulence", "kOmegaSST"), n, float(ly.get("growth", 1.2)),
-                                st.get("moving_zones") or [], ly.get("first"))
+                                st.get("moving_zones") or [], ly.get("first"), ly.get("y_plus"))
     except Exception:  # noqa: BLE001 - the readout is a help: it never stops the panel
         return None
+
+
+class LayerCard(QWidget):
+    """What the layer step made on each surface (a table), whether it is out of date, and the buttons to make the layers again and to zoom to them."""
+    makeRequested = Signal()
+    zoomRequested = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(4)
+        self.state = wid(QLabel(""), "mesh.layers.state")
+        self.state.setWordWrap(True)
+        self.state.setTextFormat(Qt.RichText)
+        self.table = wid(QLabel(""), "mesh.layers.table")
+        self.table.setTextFormat(Qt.RichText)
+        self.table.setWordWrap(True)
+        self.notes = wid(QLabel(""), "mesh.layers.notes")
+        self.notes.setWordWrap(True)
+        self.notes.setTextFormat(Qt.RichText)
+        row = QHBoxLayout()
+        self.btn_make = wid(QPushButton("Make the layers"), "mesh.layers.make")
+        self.btn_make.setObjectName("ghostBorder")
+        self.btn_make.clicked.connect(self.makeRequested)
+        self.btn_zoom = wid(QPushButton("Zoom to the layers"), "mesh.layers.zoom")
+        self.btn_zoom.setObjectName("ghostBorder")
+        self.btn_zoom.clicked.connect(self.zoomRequested)
+        row.addWidget(self.btn_make)
+        row.addWidget(self.btn_zoom)
+        row.addStretch(1)
+        for w in (self.state, self.table, self.notes):
+            v.addWidget(w)
+        v.addLayout(row)
+
+    def set_data(self, st: dict, t: dict, busy: bool) -> None:
+        s = (st["mesh"].get("stats") or {})
+        ly = s.get("layers") or {}
+        want = int((st["mesh"].get("layers") or {}).get("n") or 0) > 0
+        made, stale = bool(ly.get("made")), bool(ly.get("stale"))
+        warn, mute, ok = t["warn_text"], t["muted"], t["ok_text"]
+        if made:
+            tetra, lc = ly.get("cells_before") or ly["types"]["tetrahedra"], ly.get("layer_cells", 0)
+            txt = (f"<span style='color:{ok}'><b>✓ {ly.get('layers_max', 0)} layers made</b></span> on {_pct(ly.get('extruded_percent'))} % of the wall faces. "
+                   f"The solver runs this mesh: {ly['cells']:,} cells ({tetra:,} tetrahedra + {lc:,} layer cells).")
+            if stale:
+                txt = (f"<span style='color:{warn}'><b>⚠ The layer settings changed</b></span> since these layers were made: press "
+                       f"<b>Make the layers again</b> to update what you see here and in the 3D view (the run uses the new settings either way).<br>" + txt)
+        elif ly.get("reason"):
+            txt = f"<span style='color:{warn}'><b>Layers not made here:</b></span> {ly['reason']}"
+        elif want:
+            txt = "The layers are added when the study runs. Press <b>Make the layers</b> to make them now and see them (OpenFOAM must be installed)."
+        else:
+            txt = "No wall layers are set (the number of layers is 0)."
+        self.state.setText(txt)
+        rows = ly.get("patches") or []
+        if made and rows:
+            td = f"style='padding:1px 10px 1px 0'"
+            body = "".join(
+                f"<tr><td {td}>{r['name']}</td><td {td}>{_nl(r.get('made'))} of {r.get('target', '–')}</td>"
+                f"<td {td}>{_f(r.get('first_mm'))} → {_f(r.get('total_mm'))} mm</td><td {td}>{_f1(r.get('percent'))} %</td></tr>" for r in rows)
+            self.table.setText(f"<table><tr style='color:{mute}'><th align='left' {td}>Surface</th><th align='left' {td}>Layers made</th>"
+                               f"<th align='left' {td}>First → all</th><th align='left' {td}>Of the planned thickness</th></tr>{body}</table>")
+        else:
+            self.table.setText("")
+        self.table.setVisible(bool(self.table.text()))
+        w = ly.get("warnings") or []
+        self.notes.setText("".join(f"<div style='color:{warn}'>⚠ {x}</div>" for x in w))
+        self.notes.setVisible(bool(w))
+        ready = st["mesh"].get("status") in ("ready", "stale") and want
+        self.btn_make.setVisible(ready or made)
+        self.btn_make.setEnabled(bool(ready) and not busy)
+        self.btn_make.setText("Make the layers again" if (made or ly.get("reason")) else "Make the layers")
+        self.btn_make.setToolTip("Meshing is running" if busy else
+                                 "Add the layers to the mesh again with the layer settings above (the mesh itself stays as it is)" if ready
+                                 else "Set a number of layers first")
+        self.btn_zoom.setVisible(made)
+        self.btn_zoom.setToolTip("Turn the 3D view to a cut through the layers at the edge of the object and zoom in")
 
 
 def fit_box(bbox: list) -> tuple:

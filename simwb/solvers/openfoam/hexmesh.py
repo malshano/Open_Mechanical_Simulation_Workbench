@@ -174,7 +174,7 @@ def make_plan(data: dict, faces: list, info: dict, surf2patch: dict, patches: li
     lay = ms.get("layers") or {}
     n_lay = int(lay.get("n") or 0)
     lp = cases.layer_plan(V, L, nu, s.get("turbulence", "kOmegaSST"), n_lay, float(lay.get("growth", 1.2)),
-                          data.get("moving_zones") or [], lay.get("first")) if n_lay else None
+                          data.get("moving_zones") or [], lay.get("first"), lay.get("y_plus")) if n_lay else None
     first = lp["first"] if lp else 0.0
 
     # a point in the air, away from every plane of the background grid and from the body
@@ -395,6 +395,41 @@ def parse_logs(case: Path) -> dict:
     }
 
 
+def cell_quality(pm: dict) -> np.ndarray:
+    """Quality of every cell for display, from the face normals and the cell centres: 1 - the cell's worst non-orthogonality / 90 degrees (an
+    approximation for display; the numbers reported come from checkMesh)."""
+    P = pm["points"]
+    own, nei = pm["owner"], pm["neighbour"]
+    nint = len(nei)
+    polys = pm["poly_faces"] if pm["faces"] is None else list(pm["faces"])
+    k = np.array([len(f) for f in polys], np.int64)
+    flat = np.concatenate(polys).astype(np.int64)
+    fid = np.repeat(np.arange(len(polys)), k)
+    fc = np.zeros((len(polys), 3))
+    np.add.at(fc, fid, P[flat])
+    fc /= k[:, None]
+    first = np.r_[0, np.cumsum(k)[:-1]]
+    nxt = np.where(np.arange(len(flat)) == (first + k - 1)[fid], first[fid], np.arange(len(flat)) + 1)
+    sf = np.zeros((len(polys), 3))
+    np.add.at(sf, fid, 0.5 * np.cross(P[flat] - fc[fid], P[flat[nxt]] - fc[fid]))
+    nc = pm["n_cells"]
+    cc = np.zeros((nc, 3))
+    cnt = np.zeros(nc)
+    np.add.at(cc, own, fc)
+    np.add.at(cnt, own, 1)
+    np.add.at(cc, nei, fc[:nint])
+    np.add.at(cnt, nei, 1)
+    cc /= np.maximum(cnt, 1)[:, None]
+    d = cc[nei] - cc[own[:nint]]
+    s = sf[:nint]
+    cosang = np.einsum("ij,ij->i", d, s) / (np.linalg.norm(d, axis=1) * np.linalg.norm(s, axis=1) + 1e-300)
+    no = np.degrees(np.arccos(np.clip(np.abs(cosang), 0, 1)))
+    worst = np.zeros(nc)
+    np.maximum.at(worst, own[:nint], no)
+    np.maximum.at(worst, nei, no)
+    return np.clip(1.0 - worst / 90.0, 0.0, 1.0)
+
+
 def display_arrays(case: Path, plan: dict, surf2patch: dict, patches: list, faces: list, fluid_id: int):
     """The mesh in the form the viewer and the sections use (like the tetrahedral mesh): points, display tetrahedra
     (hexahedra and other cells are split round their centre), the boundary triangles with the CAD face each belongs
@@ -432,37 +467,7 @@ def display_arrays(case: Path, plan: dict, surf2patch: dict, patches: list, face
     good = tsurf >= 0
     tris_b, tsurf, towner = tris_b[good], tsurf[good], towner[good]
 
-    # per-cell quality from the face normals and the cell centres (an approximation for display; the numbers
-    # reported come from checkMesh)
-    P = pm["points"]
-    own, nei = pm["owner"], pm["neighbour"]
-    polys = pm["poly_faces"] if pm["faces"] is None else list(pm["faces"])
-    k = np.array([len(f) for f in polys], np.int64)
-    flat = np.concatenate(polys).astype(np.int64)
-    fid = np.repeat(np.arange(len(polys)), k)
-    fc = np.zeros((len(polys), 3))
-    np.add.at(fc, fid, P[flat])
-    fc /= k[:, None]
-    first = np.r_[0, np.cumsum(k)[:-1]]
-    nxt = np.where(np.arange(len(flat)) == (first + k - 1)[fid], first[fid], np.arange(len(flat)) + 1)
-    sf = np.zeros((len(polys), 3))
-    np.add.at(sf, fid, 0.5 * np.cross(P[flat] - fc[fid], P[flat[nxt]] - fc[fid]))
-    nc = pm["n_cells"]
-    cc = np.zeros((nc, 3))
-    cnt = np.zeros(nc)
-    np.add.at(cc, own, fc)
-    np.add.at(cnt, own, 1)
-    np.add.at(cc, nei, fc[:nint])
-    np.add.at(cnt, nei, 1)
-    cc /= np.maximum(cnt, 1)[:, None]
-    d = cc[nei] - cc[own[:nint]]
-    s = sf[:nint]
-    cosang = np.einsum("ij,ij->i", d, s) / (np.linalg.norm(d, axis=1) * np.linalg.norm(s, axis=1) + 1e-300)
-    no = np.degrees(np.arccos(np.clip(np.abs(cosang), 0, 1)))
-    worst = np.zeros(nc)
-    np.maximum.at(worst, own[:nint], no)
-    np.maximum.at(worst, nei, no)
-    qcell = np.clip(1.0 - worst / 90.0, 0.0, 1.0)
+    qcell = cell_quality(pm)
     return {"nodes": pts, "tets": tets.astype(np.int32), "tet_vol": np.full(len(tets), fluid_id, np.int64),
             "tris": tris_b.astype(np.int32), "tri_surf": tsurf, "tri_owner": towner.astype(np.int64),
             "quality": qcell[tet_cell].astype(np.float32), "zone_tris": np.zeros((0, 3), np.int32),

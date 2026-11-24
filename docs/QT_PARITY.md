@@ -74,7 +74,7 @@ plus the toolbar and application bar. Status: ✅ done in the Qt app · 🟡 par
 | Advanced sizes and defeaturing | ✅ | solve-mesh |
 | Part sizing (per part size), delete | ✅ | solve-mesh |
 | Refinement regions: box, cylinder, wake behind rotating zones, tip-vortex rings, delete | ✅ (box, cylinder, wake, tip-vortex rings, fit around part, cell estimate) | solve-mesh |
-| Wall layers (prism / inflation): number, growth ratio | ✅ | solve-mesh |
+| Wall layers (prism / inflation): number, growth ratio | ✅ plus (new in the Qt app): first layer, target y+, the layers made with the mesh, the "Wall layers made" card, colour by Wall layers, Zoom to the layers, Make the layers again | solve-mesh |
 | Statistics (cells, nodes, near-wall/bulk size, quality, non-orthogonality, skewness, hex share ...) | ✅ (the web version's table, row for row) | solve-mesh |
 | Colour the mesh by quality / cell size / aspect ratio / size jump / volume / region; cell budget | ✅ (all six; the cell budget under them) | solve-mesh |
 | Cut through the mesh | ✅ | - |

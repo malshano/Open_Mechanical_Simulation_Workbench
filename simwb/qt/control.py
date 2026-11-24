@@ -619,8 +619,11 @@ class Control(QObject):
         R("mesh.preset", "Choose the mesh resolution: quick, coarse, medium, fine, very_fine.", {"preset": (S, "preset", True)},
           lambda preset: (self._click(f"mesh.preset.{preset}"), {"preset": preset})[1])
         R("mesh.generate", "Generate (or regenerate) the mesh; a job (use wait).", {}, lambda: (self._click("mesh.generate"), {"started": True})[1])
-        R("mesh.view", "How the mesh is shown: colour by quality | size | region | aspect | growth | volume; cut through it along x, y, z or off.",
-          {"color": (S, "quality|size|region|aspect|growth|volume", False), "cut": (S, "x|y|z|off", False), "position": (N, "cut position 0..1", False)},
+        R("mesh.layers", "Make the wall layers again on the mesh that is there (flow study, tetrahedral mesh, OpenFOAM installed); a job (use wait).", {},
+          lambda: (self._click("mesh.layers.make"), {"started": True})[1])
+        R("mesh.view", "How the mesh is shown: colour by quality | size | region | aspect | growth | volume | layers (the mesh with its wall layers, "
+                       "opened in a cut through the object); cut through it along x, y, z or off.",
+          {"color": (S, "quality|size|region|aspect|growth|volume|layers", False), "cut": (S, "x|y|z|off", False), "position": (N, "cut position 0..1", False)},
           lambda color=None, cut=None, position=None: self._mesh_view(color, cut, position))
         # ---- solve and results
         def mesh_poor(on=True, threshold=None):

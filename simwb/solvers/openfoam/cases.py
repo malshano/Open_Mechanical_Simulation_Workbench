@@ -318,15 +318,15 @@ def boundary_layer_thickness(V, L, nu, laminar: bool) -> float:
     return 5.0 * L / math.sqrt(re) if laminar else 0.37 * L * re ** -0.2
 
 
-def layer_plan(V, L, nu, model: str, n: int, growth: float, zones=(), first=None) -> dict:
+def layer_plan(V, L, nu, model: str, n: int, growth: float, zones=(), first=None, y_plus=None) -> dict:
     """First layer thickness (m) and what it resolves, for n wall layers growing by `growth`.
 
     Wall-function models (k-omega SST, k-epsilon ...): the first cell centre at y+ ~ 30 (`layer_first_thickness`).
     Laminar: there is no wall function, the boundary layer itself must be resolved. The n layers should span about
     1.3 times the layer thickness at the end of the body, so the first layer is sized from that (never thinner than
     1/200 of it); the cells across the thickness are reported, and few of them means: use more layers.
-    A `first` given by the user is kept and only reported. Returns {first, n, growth, delta, cells_across_delta,
-    total, laminar}."""
+    A `first` given by the user is kept and only reported. `y_plus` is the user's target for the first cell centre (default 30; about 1 resolves the
+    viscous sublayer and needs many more layers, see cells_across_delta). Returns {first, n, growth, delta, cells_across_delta, total, laminar, y_plus}."""
     laminar = model == "laminar"
     delta = boundary_layer_thickness(V, L, nu, laminar) if V > 0.1 else 0.0
     n = max(int(n), 1)
@@ -337,13 +337,13 @@ def layer_plan(V, L, nu, model: str, n: int, growth: float, zones=(), first=None
     elif laminar and delta > 0:
         t1 = max(1.3 * delta / series, delta / 200.0)
     else:
-        t1 = layer_first_thickness(V, L, nu, zones)
+        t1 = layer_first_thickness(V, L, nu, zones, float(y_plus) if y_plus else 30.0)
     total = t1 * series
     across = 0.0
     if delta > 0 and t1 > 0:                               # layers inside delta: solve t1 (g^k - 1)/(g - 1) = delta
         across = min(float(n), math.log1p(delta * (g - 1.0) / t1) / math.log(g))
     return {"first": t1, "n": n, "growth": g, "delta": delta, "cells_across_delta": across, "total": total,
-            "laminar": laminar}
+            "laminar": laminar, "y_plus": None if (laminar or first) else (float(y_plus) if y_plus else 30.0)}
 
 
 def freestream_velocity(settings: dict) -> np.ndarray:
@@ -953,7 +953,7 @@ relaxationFactors
         g = float(lay.get("growth", 1.2))
         # automatic first layer: y+ ~ 30 for the wall-function models, a resolved boundary layer when laminar
         first = layer_plan(V, L, nu, s.get("turbulence", "kOmegaSST"), n_lay, g, project.get("moving_zones") or [],
-                           lay.get("first"))["first"]
+                           lay.get("first"), lay.get("y_plus"))["first"]
         size = (f"relativeSizes       false;\n    firstLayerThickness {float(first):.8g};\n"
                 f"    minThickness        {float(first) * 0.1:.8g};")
         # tolerant layers (opt-in): with the strict limits snappyHexMesh removes layers wherever the cells are small
