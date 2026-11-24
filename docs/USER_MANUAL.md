@@ -1,7 +1,7 @@
 ---
 title: Mechanical Simulation Workbench - User Manual
 audience: engineers who use the workbench (not people who change its code; for that read TECHNICAL_MANUAL.md)
-product_version: 0.4.0b1
+product_version: 0.4.0b4
 document_version: 2
 format: Markdown, one topic per section, UI labels in **bold**, file names and commands in `code`
 how_to_use_this_file_with_an_llm: >
@@ -730,7 +730,7 @@ layers** - and **Generate mesh**.
   the list. The faces that have a part sizing are tinted in the 3D view. A part has one sizing; change its size instead of adding another.
 - **Wall layers** (flow studies; the block is open): the number of layers, the growth ratio, the first layer (0 = automatic) and the
   **target y+** of the first cell, **measured at its centre** as OpenFOAM does (0 = automatic: about 30 for the wall-function models, which want 30 or more; 5 to 30 is the buffer
-  layer where they are least accurate; a target near 1 resolves the wall itself and needs many more layers). Until version 0.4.0 beta 3 the first layer was sized so that the target was
+  layer where they are least accurate; a target near 1 resolves the wall itself and needs many more layers). Beta 3 and earlier sized the first layer so that the target was
   reached at its outer face, so the cells came out at half the y+ (a mean of 15.8 on a wing run set up for 30). A line under the fields says what they come to - the first and the total thickness, the y+ it aims at and how many
   layers lie inside the boundary layer - and **Show the layers in the 3D view** draws a translucent shell round the object as thick as
   all the layers together (an approximation at sharp corners; it is the preview before the mesh exists).
