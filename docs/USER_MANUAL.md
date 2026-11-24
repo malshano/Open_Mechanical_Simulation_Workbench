@@ -239,6 +239,18 @@ Heat sources are set on parts (body settings), not on faces, in the heat and coo
    Each region shows an estimate of its cell count; check it before you generate (millions of cells need hours).
 5. Sizing is kept when you replace the geometry (part sizing follows parts of the same name; what cannot be placed is dropped with a note).
 6. Warning "Max non-orthogonality ... > 75 degrees can make OpenFOAM unstable": refine the mesh near the sharp or thin features, or accept the risk for a quick look.
+6a. **Mesh advisor** (external aerodynamics, tetrahedral mesh; under the resolution buttons, in Simple and Expert mode): what a good mesh of this body in this flow needs, and how yours measures up.
+   Background, measurements and sources: `docs/MESHING_GUIDE.md`.
+   - **Smart sizing (recommended)**: sizes the mesh from the length of the body **along the flow** (the old sizing used the largest side, which for a wing is the span, so a thin wing got
+     coarse cells round it and none in its wake). It refines a near-field box and the wake behind the body, with a cell growth of 1.2 to 1.3, and never asks for more cells than half of the
+     free memory holds (the text says when a preset was coarsened). A line under the switch gives the numbers: wall cells, near field, wake, growth, cells.
+   - **Use the recommended setup**: smart sizing on and the wall layers that fit: the first layer for a y+ of about 40 at its centre (wall functions need 30 or more) and as many layers (at
+     most 5) as the thinnest part leaves room for. Then press **Generate mesh**.
+   - **Mesh score** (after meshing): the share of the checks that pass, and every check with its value and its target: wall cells (at most 1.5 % of the length), cells across the thinnest part
+     (at least 4), the near field (at most 5 % of the length), the wake (at most 8 %), the change of cell size between neighbours (at most 1.6), the distance to the domain walls, the wall layers
+     and their first-layer y+ (5 or less, or 30 or more), the non-orthogonality and skewness of the mesh the solver runs, and the poorest cell. ✓ is ok, ⚠ is to look at, ✗ failed; each
+     ⚠ and ✗ says what to change. The limits are practical targets (the research grids ask for much more); the reasons are in `docs/MESHING_GUIDE.md`.
+   - The assistant has the same tools (`mesh_advice`, `mesh_apply_recipe`).
 7. **Mesh type** (external aerodynamics): **Tetrahedral** (the default, made by Gmsh) or **Hex-dominant** (made by OpenFOAM's snappyHexMesh). The hex-dominant mesh is mostly hexahedral cells that change size in octree steps, with a finer wake behind the body and wall layers made together with it. It usually has fewer, more orthogonal cells for the same wall resolution. It takes about a minute per 100,000 cells and needs OpenFOAM.
    - It is for **a body in the automatic box of air**, with its wall faces as the only boundary conditions. **Rotors, moving zones, symmetry planes and a custom air volume need the tetrahedral mesh**; the button explains which one stops it.
    - The preset, *Near-wall size*, *Face sizing* (thin faces get finer cells), *Refinement regions* and the *Wall layers* settings work as for the tetrahedral mesh.
@@ -717,8 +729,9 @@ layers** - and **Generate mesh**.
   **＋ Part sizing**, or press **Pick a part in the 3D view** and click the part: all its faces get a cell size, which you then change in
   the list. The faces that have a part sizing are tinted in the 3D view. A part has one sizing; change its size instead of adding another.
 - **Wall layers** (flow studies; the block is open): the number of layers, the growth ratio, the first layer (0 = automatic) and the
-  **target y+** of the first cell (0 = automatic: about 30 for the wall-function models; a target near 1 resolves the wall itself and needs
-  many more layers). A line under the fields says what they come to - the first and the total thickness, the y+ it aims at and how many
+  **target y+** of the first cell, **measured at its centre** as OpenFOAM does (0 = automatic: about 30 for the wall-function models, which want 30 or more; 5 to 30 is the buffer
+  layer where they are least accurate; a target near 1 resolves the wall itself and needs many more layers). Until version 0.4.0 beta 3 the first layer was sized so that the target was
+  reached at its outer face, so the cells came out at half the y+ (a mean of 15.8 on a wing run set up for 30). A line under the fields says what they come to - the first and the total thickness, the y+ it aims at and how many
   layers lie inside the boundary layer - and **Show the layers in the 3D view** draws a translucent shell round the object as thick as
   all the layers together (an approximation at sharp corners; it is the preview before the mesh exists).
   - **The layers are made with the mesh.** When you press **Generate mesh** in a flow study (tetrahedral mesh, OpenFOAM installed), the

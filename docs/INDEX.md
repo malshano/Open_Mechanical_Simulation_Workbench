@@ -11,6 +11,7 @@ purpose: Router for humans and LLMs. Pick the document by the task.
 | Change the software: architecture, file map, API, data model, how to add a study / endpoint / visualisation, tests, pitfalls | [TECHNICAL_MANUAL.md](TECHNICAL_MANUAL.md) |
 | Add other AI providers (Ollama, API keys) with a sandbox: step-by-step plan | [AI_PROVIDERS_PLAN.md](AI_PROVIDERS_PLAN.md) |
 | See what is planned for multiphysics (CFD-coupled flutter, more engines) and which engine to use when | [ROADMAP.md](ROADMAP.md) |
+| Understand what a good mesh of a body in a flow needs (criteria, measurements, sources) and what the mesh advisor checks | [MESHING_GUIDE.md](MESHING_GUIDE.md) |
 | Start quickly, install, environment variables | [../README.md](../README.md) |
 | Report a security problem; how the workbench is protected | [../SECURITY.md](../SECURITY.md) |
 | Contribute (tests, pull requests, sign-off) | [../CONTRIBUTING.md](../CONTRIBUTING.md) |

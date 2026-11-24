@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from .forms import fmt_num
 from .ids import wid
@@ -241,6 +241,78 @@ def layer_numbers(st: dict) -> dict | None:
         return None
 
 
+class AdvisorCard(QWidget):
+    """The mesh advisor of a flow study: the smart-sizing switch, what the recipe asks for (and why), and, once there is a mesh, its scorecard."""
+    smartToggled = Signal(bool)
+    applyRequested = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(4)
+        self.smart = wid(QCheckBox("Smart sizing (recommended)"), "mesh.smart")
+        self.smart.setToolTip("Size the mesh from the length of the body along the flow: wall cells, a refined near field and a refined wake that grow smoothly, "
+                              "to what the free memory holds. The old sizing used the largest side of the body, which for a wing is the span.")
+        self.smart.toggled.connect(self.smartToggled)
+        self.why = wid(QLabel(""), "mesh.advisor.why")
+        self.why.setWordWrap(True)
+        self.why.setTextFormat(Qt.RichText)
+        self.apply = wid(QPushButton("Use the recommended setup"), "mesh.advisor.apply")
+        self.apply.setObjectName("ghostBorder")
+        self.apply.setToolTip("Switch smart sizing on and set the wall layers that fit the thinnest part (then generate the mesh)")
+        self.apply.clicked.connect(self.applyRequested)
+        self.score = wid(QLabel(""), "mesh.advisor.score")
+        self.score.setWordWrap(True)
+        self.score.setTextFormat(Qt.RichText)
+        self.table = wid(QLabel(""), "mesh.advisor.table")
+        self.table.setWordWrap(True)
+        self.table.setTextFormat(Qt.RichText)
+        for w in (self.smart, self.why, self.apply, self.score, self.table):
+            v.addWidget(w)
+
+    def set_data(self, adv: dict, t: dict, smart: bool, mesh_ready: bool) -> None:
+        mute, ok, warn, bad = t["muted"], t["ok_text"], t["warn_text"], t["bad_text"]
+        self.smart.blockSignals(True)
+        self.smart.setChecked(smart)
+        self.smart.blockSignals(False)
+        rec = adv["recipe"]
+        a = adv["analysis"]
+        mm = lambda v: _f(v * 1000, 3)  # noqa: E731
+        txt = (f"Body {mm(a['length'])} mm long along the flow, {mm(a['span'])} mm across, thinnest part {mm(a['feature'])} mm. "
+               f"The recipe: wall cells {mm(rec['h_surf'])} mm, near field {mm(rec['h_near'])} mm, wake {mm(rec['h_wake'])} mm, growth {_f(rec['growth'], 2)}"
+               f" (about {rec['estimate']['cells_zones'] / 1000:,.0f}k cells in these zones).")
+        lay = rec["layers"]
+        if lay.get("n"):
+            txt += f" Wall layers: {lay['n']} with the first {mm(lay['first_mm'] / 1000) if lay.get('first_mm') else '–'} mm (y+ about {_f(lay.get('y_plus'), 2)})."
+        if rec["estimate"].get("reduced"):
+            txt += f" <span style='color:{warn}'>Coarsened to fit the free memory.</span>"
+        self.why.setText(txt if smart else f"<span style='color:{mute}'>Off: the old sizing is used.</span> " + txt)
+        self.why.setToolTip("\n".join(rec["rationale"]))
+        self.apply.setEnabled(True)
+        sc = adv.get("scorecard")
+        if not sc:
+            self.score.setText("")
+            self.table.setText("")
+            self.score.setVisible(False)
+            self.table.setVisible(False)
+            return
+        col = ok if sc["bad"] == 0 and sc["warn"] <= 2 else (warn if sc["bad"] == 0 else bad)
+        self.score.setVisible(True)
+        self.table.setVisible(True)
+        self.score.setText(f"<span style='color:{col}'><b>Mesh score {sc['score']:.2f}</b></span> · {sc['ok']} checks ok, {sc['warn']} to look at, "
+                           f"{sc['bad']} failed" + ("" if mesh_ready else " <span style='color:" + warn + "'>(the setup changed: generate the mesh again)</span>"))
+        sym = {"ok": ("✓", ok), "warn": ("⚠", warn), "bad": ("✗", bad), "info": ("•", mute)}
+        rows = []
+        for c in sc["checks"]:
+            s, k = sym[c["level"]]
+            rows.append(f"<div style='margin-top:3px'><span style='color:{k}'><b>{s}</b></span> <b>{c['label']}</b>: {c['value']}"
+                        + (f" <span style='color:{mute}'>(target: {c['target']})</span>" if c["target"] else "") + "</div>")
+            if c["advice"] and c["level"] in ("warn", "bad"):
+                rows.append(f"<div style='color:{k}; margin-left:14px'>{c['advice']}</div>")
+        self.table.setText("".join(rows))
+
+
 class LayerCard(QWidget):
     """What the layer step made on each surface (a table), whether it is out of date, and the buttons to make the layers again and to zoom to them."""
     makeRequested = Signal()
@@ -296,12 +368,9 @@ class LayerCard(QWidget):
         self.state.setText(txt)
         rows = ly.get("patches") or []
         if made and rows:
-            td = f"style='padding:1px 10px 1px 0'"
-            body = "".join(
-                f"<tr><td {td}>{r['name']}</td><td {td}>{_nl(r.get('made'))} of {r.get('target', '–')}</td>"
-                f"<td {td}>{_f(r.get('first_mm'))} → {_f(r.get('total_mm'))} mm</td><td {td}>{_f1(r.get('percent'))} %</td></tr>" for r in rows)
-            self.table.setText(f"<table><tr style='color:{mute}'><th align='left' {td}>Surface</th><th align='left' {td}>Layers made</th>"
-                               f"<th align='left' {td}>First → all</th><th align='left' {td}>Of the planned thickness</th></tr>{body}</table>")
+            self.table.setText("".join(
+                f"<div><b>{r['name']}</b>: {_nl(r.get('made'))} of {r.get('target', '–')} layers · {_f(r.get('first_mm'))} → {_f(r.get('total_mm'))} mm · "
+                f"<span style='color:{mute}'>{_f1(r.get('percent'))} % of the planned thickness</span></div>" for r in rows))
         else:
             self.table.setText("")
         self.table.setVisible(bool(self.table.text()))
@@ -353,7 +422,9 @@ class StatsGrid(QWidget):
         for i, (k, v) in enumerate(rows):
             lab = QLabel(k)
             lab.setObjectName("muted")
+            lab.setWordWrap(True)                              # (a long label or value wraps: the table never makes the panel wider than its dock)
             val = wid(QLabel(f"<b>{v}</b>"), "mesh.stat." + "".join(c if c.isalnum() else "_" for c in k.lower()).strip("_"))
+            val.setWordWrap(True)
             val.setProperty("api_text", f"{k}: {v}")
             from . import theme
             val.setStyleSheet(f"color: {theme.tokens()['ink']}; background: {theme.tokens()['panel']};")
@@ -386,7 +457,9 @@ class Budget(QWidget):
             self.setVisible(False)
             return
         self.setVisible(True)
-        self.v.addWidget(QLabel("<b>Cell budget</b> (size band → share of cells / of the volume)"))
+        head = QLabel("<b>Cell budget</b> (size band → share of cells / of the volume)")
+        head.setWordWrap(True)                              # (a heading on one line made the whole panel wider than its dock)
+        self.v.addWidget(head)
         mx = max([b["cells_percent"] for b in d.get("budget") or []] + [1])
         for b in d.get("budget") or []:
             row = QHBoxLayout()

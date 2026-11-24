@@ -12,7 +12,7 @@ from .. import mode, theme
 from ..charts import QualityHist
 from ..forms import fmt_num
 from ..ids import wid
-from ..meshtools import Budget, LayerCard, MeshCheck, StatsGrid, mesh_notes, stats_rows
+from ..meshtools import AdvisorCard, Budget, LayerCard, MeshCheck, StatsGrid, mesh_notes, stats_rows
 from .common import _h, _muted, _Panel, _seg
 from .mesh_adv import MeshAdvanced
 
@@ -139,6 +139,13 @@ class MeshPanel(_Panel):
         for k, b in self.preset_btns.items():
             b.clicked.connect(lambda _=False, k=k: self._preset(k))
         self.v.addWidget(w)
+        self.advisor_h = _h("Mesh advisor")
+        self.v.addWidget(self.advisor_h)
+        self.advisor = wid(AdvisorCard(), "mesh.advisor")
+        self.advisor.smartToggled.connect(self._smart)
+        self.advisor.applyRequested.connect(self.apply_recipe)
+        self.v.addWidget(self.advisor)
+        self._advice_key = None
         self.adv = MeshAdvanced(self)
         self.v.addWidget(self.adv)
         self.gen = wid(QPushButton("Generate mesh"), "mesh.generate")
@@ -266,6 +273,25 @@ class MeshPanel(_Panel):
         self.slider.blockSignals(True)
         self.slider.setValue(int(round(fr * 1000)))
         self.slider.blockSignals(False)
+
+    def _smart(self, on: bool):
+        try:
+            self.engine.project().set_mesh(smart=bool(on))
+            self.engine.changed.emit()
+        except Exception as e:  # noqa: BLE001
+            self._fail(e)
+            self.engine.changed.emit()
+
+    def apply_recipe(self):
+        """Smart sizing on and the wall layers the recipe recommends (the mesh is out of date: generate it again)."""
+        try:
+            r = self.engine.project().apply_mesh_recipe()
+        except Exception as e:  # noqa: BLE001
+            self._fail(e)
+            raise
+        self.engine.message.emit("Recommended setup applied: smart sizing and wall layers. Generate the mesh.", False)
+        self.engine.changed.emit()
+        return r
 
     def make_layers(self):
         """Make the wall layers again on the mesh that is there (a job)."""
@@ -451,6 +477,19 @@ class MeshPanel(_Panel):
         self.stale_note.setStyleSheet(f"color: {t['warn_text']};")
         for w in (self.stats_h, self.grid, self.hist_h, self.hist, self.poor_row, self.poor_info, self.next, self.notes):
             w.setVisible(have)
+        show_adv = bool(aero and not self.hex and st["geometry"].get("status") == "ready")
+        self.advisor_h.setVisible(show_adv)
+        self.advisor.setVisible(show_adv)
+        if show_adv:
+            key = (self.engine.pid, m.get("preset"), bool(m.get("smart")), st["geometry"].get("updated"), repr(st.get("settings")), (s or {}).get("seconds"),
+                   ((s or {}).get("layers") or {}).get("seconds"), m.get("status"), repr(m.get("layers")), theme.effective())
+            if key != self._advice_key:
+                self._advice_key = key
+                try:
+                    self.advisor.set_data(self.engine.project().mesh_advice(), t, bool(m.get("smart")), m.get("status") == "ready")
+                except Exception:  # noqa: BLE001 - the advisor is a help: without a flow speed or geometry it says nothing
+                    self.advisor.setVisible(False)
+                    self.advisor_h.setVisible(False)
         lay_st = (s or {}).get("layers") or {}
         self.layers_ok = bool(have and not self.hex and lay_st.get("made"))
         want = int((m.get("layers") or {}).get("n") or 0) > 0

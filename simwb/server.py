@@ -410,8 +410,20 @@ def mesh_settings(pid: str, body: dict = Body(...)):
     pr.set_mesh(preset=body.get("preset"), size_max_mm=body.get("size_max_mm"), size_min_mm=body.get("size_min_mm"),
                 refinements=body.get("refinements"), regions=body.get("regions"), layers=body.get("layers"),
                 defeature_mm=body["defeature_mm"] if "defeature_mm" in body else False, method=body.get("method"),
-                edge_refinement=body.get("edge_refinement"))
+                edge_refinement=body.get("edge_refinement"), smart=body.get("smart"))
     return pr.state()
+
+
+@app.get("/api/projects/{pid}/mesh/advice")
+def mesh_advice(pid: str):
+    """What a good mesh of this body in this flow needs (the recipe) and how the current mesh measures up (the scorecard)."""
+    return P.open_project(pid).mesh_advice()
+
+
+@app.post("/api/projects/{pid}/mesh/recipe")
+def mesh_recipe(pid: str, body: dict = Body(default={})):
+    """Smart sizing on, and the wall layers the recipe recommends; the mesh must be generated again."""
+    return P.open_project(pid).apply_mesh_recipe(preset=body.get("preset"), layers=body.get("layers", True))
 
 
 @app.post("/api/projects/{pid}/mesh")

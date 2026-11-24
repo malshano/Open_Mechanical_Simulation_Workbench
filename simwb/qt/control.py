@@ -619,6 +619,10 @@ class Control(QObject):
         R("mesh.preset", "Choose the mesh resolution: quick, coarse, medium, fine, very_fine.", {"preset": (S, "preset", True)},
           lambda preset: (self._click(f"mesh.preset.{preset}"), {"preset": preset})[1])
         R("mesh.generate", "Generate (or regenerate) the mesh; a job (use wait).", {}, lambda: (self._click("mesh.generate"), {"started": True})[1])
+        R("mesh.advice", "The mesh advisor of a flow study: the analysis of the body and flow, the recipe (cell sizes, layers, reasons) and the scorecard of the mesh.", {},
+          lambda: self.engine.project().mesh_advice())
+        R("mesh.recipe", "Apply the recommended setup of the mesh advisor: smart sizing and the wall layers that fit; then generate the mesh.", {},
+          lambda: (self._click("mesh.advisor.apply"), {"applied": True})[1])
         R("mesh.layers", "Make the wall layers again on the mesh that is there (flow study, tetrahedral mesh, OpenFOAM installed); a job (use wait).", {},
           lambda: (self._click("mesh.layers.make"), {"started": True})[1])
         R("mesh.view", "How the mesh is shown: colour by quality | size | region | aspect | growth | volume | layers (the mesh with its wall layers, "

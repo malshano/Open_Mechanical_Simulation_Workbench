@@ -36,6 +36,8 @@ def ctl(tmp_path, monkeypatch):
     from simwb.qt.engine import Engine
     from simwb.qt.main_window import MainWindow
 
+    from simwb.qt import mode
+    mode.set_simple(False)                                   # (Simple / Expert is one switch for the whole process: a test that sets Simple must not leave it for the next)
     app = QApplication.instance() or QApplication([])
     theme.apply(app)
     eng = Engine(settings=QSettings(str(tmp_path / "s.ini"), QSettings.IniFormat))
@@ -45,6 +47,7 @@ def ctl(tmp_path, monkeypatch):
     c = Control(win, eng, bridge, app, debug=True)
     win.control = c
     yield c
+    mode.set_simple(False)
     c.close()
     P.JOBS.listeners.remove(eng._on_event)
     bridge.shutdown()

@@ -289,8 +289,10 @@ def _enclosed_cells(tets, barrier_tris, guess):
 
 
 def layer_first_thickness(V, L, nu, zones=(), y_plus=30.0) -> float:
-    """First wall-layer thickness for y+ ~ 30 (the k-omega SST / k-epsilon wall functions), from a turbulent flat
-    plate (Cf = 0.058 Re^-0.2): the body at the flight speed over its length, and each rotating zone at 75 % of its
+    """First wall-layer thickness for a y+ of about `y_plus` (30: the k-omega SST / k-epsilon wall functions) at the CENTRE of the first cell, which is
+    where OpenFOAM measures it: half the thickness from the wall. (This used to size the layer so that y+ was reached at its outer face, and the cells
+    came out at half the y+ asked for: a mean y+ of 15.8 on a wing run set up for 30, in the buffer layer where wall functions are least accurate.)
+    From a turbulent flat plate (Cf = 0.058 Re^-0.2): the body at the flight speed over its length, and each rotating zone at 75 % of its
     tip speed over a chord of 15 % of its radius. The thinnest wins. (Layers sized relative to the local wall cell
     came out 0.08 mm on thin blades: time steps of 1e-7 s.)"""
     out = []
@@ -298,7 +300,7 @@ def layer_first_thickness(V, L, nu, zones=(), y_plus=30.0) -> float:
                              for z in zones]:
         if U > 0.1 and Lc > 0:
             cf = 0.058 * (U * Lc / nu) ** -0.2
-            out.append(y_plus * nu / (U * math.sqrt(cf / 2)))
+            out.append(2.0 * y_plus * nu / (U * math.sqrt(cf / 2)))
     return min(out) if out else 0.01 * L
 
 

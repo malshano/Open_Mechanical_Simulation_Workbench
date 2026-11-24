@@ -2665,10 +2665,17 @@ class Project:
         return hexmesh.unsupported(self.data, self.faces(), self.data["geometry"].get("info") or {})
 
     def set_mesh(self, preset=None, size_max_mm=None, size_min_mm=None, refinements=None, regions=None,
-                 layers=None, defeature_mm=False, method=None, edge_refinement=None):
+                 layers=None, defeature_mm=False, method=None, edge_refinement=None, smart=None):
         if self.busy():
             raise RuntimeError("Please wait: a job is still running for this project (or cancel it).")
         m = self.data["mesh"]
+        if smart is not None:                      # smart sizing: the mesh is sized from the length along the flow (see meshadvisor.py)
+            if smart and self.study != "external_aero":
+                raise ValueError("Smart sizing is for external aerodynamics (a body in a flow)")
+            if bool(smart):
+                m["smart"] = True
+            else:
+                m.pop("smart", None)
         if method is not None:
             if method not in ("tet", "hex"):
                 raise ValueError("Mesh method must be 'tet' (tetrahedral, Gmsh) or 'hex' (hex-dominant, snappyHexMesh)")
@@ -2786,7 +2793,7 @@ class Project:
         # (the tetrahedral mesh gets its layers at the run; the hex-dominant mesh makes them with the mesh)
         only_layers = (layers is not None and preset is None and size_max_mm is None and size_min_mm is None
                        and refinements is None and regions is None and method is None and edge_refinement is None
-                       and m.get("method") != "hex")
+                       and smart is None and m.get("method") != "hex")
         self.mark_stale(("solve",) if only_layers else ("mesh", "solve"))  # (layers are added at the run)
         self.save()
 
@@ -3078,6 +3085,7 @@ class Project:
         stats = self._make_layers(job, 0.0, 1.0, cells_before=old.get("cells"), sizes=old.get("sizes"))
         with self._lock:
             self.data["mesh"].setdefault("stats", {})["layers"] = stats
+            self.data["mesh"]["stats"]["advice"] = self._score_mesh(self.data["mesh"]["stats"])
             self.save()
         if not stats.get("made"):
             raise RuntimeError(stats.get("reason") or "The layers could not be made")
@@ -3108,11 +3116,19 @@ class Project:
     def _mesh_work_inner(self, job: Job, p0=0.0, p1=1.0):
         if self.data["mesh"].get("method") == "hex" and self.study == "external_aero":
             return self._hex_mesh_work(job, p0, p1)
+        mesh_ms, recipe = self.data["mesh"], None
+        if self.study == "external_aero" and mesh_ms.get("smart"):
+            from . import meshadvisor
+            an = meshadvisor.analyse(self.data, self.faces(), self.data["geometry"]["info"])
+            recipe = meshadvisor.recipe(an, mesh_ms.get("preset", "medium"), mesh_ms.get("growth"))
+            mesh_ms = dict(mesh_ms, recipe=recipe)
+            if not mesh_ms.get("edge_refine") and recipe.get("edge_refinement"):
+                mesh_ms["edge_refine"] = {"factor": recipe["edge_refinement"]}      # (leading and trailing edges resolved: part of the recipe)
         payload = {
             "study": self.study, "out_dir": str(self.mesh_dir), "brep": str(self.geo_dir / "domain.brep"),
             "bodies_json": str(self.geo_dir / "bodies.json"), "faces_json": str(self.geo_dir / "faces.json"),
             "domain_info": str(self.geo_dir / "domain_info.json"),
-            "mesh": self.data["mesh"], "rotors": self._rotors_with_wake(),
+            "mesh": mesh_ms, "rotors": self._rotors_with_wake(),
             "moving_zones": [dict(z, axis=list(studies.AXES[z["axis"]])) for z in self.data.get("moving_zones") or []],
         }
         (self.mesh_dir / "layered.npz").unlink(missing_ok=True)       # (a new mesh: the layered one of the old mesh is not its layers)
@@ -3124,12 +3140,16 @@ class Project:
             self.data["mesh"]["status"] = "failed" if prev in (None, "none", "failed") else "stale"
             self.save()
             raise
+        if recipe:
+            stats["recipe"] = {k: recipe[k] for k in ("preset", "h_surf", "h_near", "h_wake", "growth", "boxes", "layers", "rationale")}
         if self.spec["solver"].startswith("openfoam"):
             JOBS.update(job, 0.92, "Checking OpenFOAM mesh quality")
             stats["foam_quality"] = self._foam_quality()
         if self.study == "external_aero" and not getattr(self, "_no_layer_step", False):
             JOBS.update(job, 0.93, "Adding the wall layers")
             stats["layers"] = self._make_layers(job, 0.93, 0.99, cells_before=stats.get("cells"), sizes=stats.get("sizes"))     # (never stops the mesh: it says why it could not)
+        if self.study == "external_aero":
+            stats["advice"] = self._score_mesh(stats)
         with self._lock:
             self.data["mesh"]["status"] = "ready"
             self.data["mesh"]["stats"] = stats
@@ -3137,6 +3157,54 @@ class Project:
             self._results = None
             self.save()
         return stats
+
+    # ------------------------------------------------------------------ the mesh advisor (see meshadvisor.py)
+    def _score_mesh(self, stats: dict) -> dict | None:
+        """The scorecard of the mesh that was just made ({score, checks, ...}), or None: it is a help and never stops a job."""
+        try:
+            from . import meshadvisor
+            if self.data["mesh"].get("method") == "hex":
+                return None
+            an = meshadvisor.analyse(self.data, self.faces(), self.data["geometry"]["info"])
+            ms = meshadvisor.measure(an, self.load_mesh(), self.faces())
+            sc = meshadvisor.scorecard(an, ms, stats)
+            sc["measured"] = ms
+            return sc
+        except Exception:  # noqa: BLE001
+            return None
+
+    def mesh_advice(self) -> dict:
+        """What a good mesh of this body in this flow needs ({analysis, recipe, smart, scorecard}) and, once there is a mesh, how it measures up."""
+        from . import meshadvisor
+        if self.study != "external_aero":
+            raise ValueError("The mesh advisor is for external aerodynamics (a body in a flow)")
+        info = self.data["geometry"].get("info")
+        if self.data["geometry"].get("status") != "ready" or not info:
+            raise ValueError("Import the geometry first")
+        an = meshadvisor.analyse(self.data, self.faces(), info)
+        m = self.data["mesh"]
+        rec = meshadvisor.recipe(an, m.get("preset", "medium"), m.get("growth"))
+        keep = ("length", "span", "depth", "feature", "thin", "reynolds", "boundary_layer", "speed", "flow", "domain", "turbulence")
+        out = {"analysis": {k: an.get(k) for k in keep}, "recipe": rec, "smart": bool(m.get("smart")), "scorecard": None}
+        st = m.get("stats") or {}
+        if m.get("status") in ("ready", "stale") and st.get("method") != "hex":
+            sc = st.get("advice")
+            if sc is None and self.mesh_dir.joinpath("mesh.npz").exists():
+                sc = self._score_mesh(st)
+                if sc is not None:
+                    st["advice"] = sc                                 # (a mesh made before the advisor: scored once, kept)
+            out["scorecard"] = sc
+        return out
+
+    def apply_mesh_recipe(self, preset: str | None = None, layers: bool = True) -> dict:
+        """Switch smart sizing on (at `preset` when given) and, with `layers`, set the wall layers the recipe recommends for the wall treatment and the thinnest
+        part. The mesh is marked out of date: generate it again."""
+        self.set_mesh(preset=preset, smart=True)
+        rec = self.mesh_advice()["recipe"]
+        lay = rec["layers"]
+        if layers and lay["n"] > 0:
+            self.set_mesh(layers={"n": lay["n"], "growth": lay["growth"], "y_plus": lay["y_plus"]})
+        return {"smart": True, "preset": self.data["mesh"].get("preset"), "layers": self.data["mesh"].get("layers"), "recipe": rec}
 
     # ------------------------------------------------------------------ mesh sensitivity
     KEY_OUTPUTS = {

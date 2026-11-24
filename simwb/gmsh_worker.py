@@ -953,6 +953,12 @@ def task_mesh(job: dict) -> dict:
     if study in SOLID_STUDIES:
         n_curv = SOLID_CURVATURE.get(ms.get("preset", "medium"), n_curv)
     h_body = float(ms.get("size_max") or L / n_per)
+    # smart sizing (meshadvisor.recipe): sizes from the length along the flow, a near-field box and a wake box with a real growth, instead of from
+    # ref_length (the largest side of the body: the span of a wing) and the fixed box of the old sizing
+    rc = ms.get("recipe") if study == "external_aero" else None
+    if rc:
+        h_body = float(ms.get("size_max") or rc["h_near"])
+        n_curv = int(rc.get("n_curv", n_curv))
 
     # smallest geometric feature (fin thickness, gap) from face extents
     feat = []
@@ -970,8 +976,10 @@ def task_mesh(job: dict) -> dict:
         # every wall of the body (a thin tail used to set 2.7 mm on all walls of a 1.2 m airframe)
         n_feat = FEATURE_CELLS.get(ms.get("preset", "medium"), 4)
         h_wall = float(ms.get("size_min") or min(max(feature / n_feat, L / (4 * n_per)), h_body / 2))
+        if rc:
+            h_wall = float(ms.get("size_min") or rc["h_surf"])
         if not ms.get("size_min"):
-            h_thin_min = L / (12 * n_per)  # coarse 1.2 m UAV: 10 mm (L/25n gave 0.9M cells)
+            h_thin_min = h_wall / 3 if rc else L / (12 * n_per)  # coarse 1.2 m UAV: 10 mm (L/25n gave 0.9M cells)
             by_size = {}
             for f in faces:
                 if f["kind"] in ("farfield", "enclosure"):
@@ -985,7 +993,7 @@ def task_mesh(job: dict) -> dict:
         # resolve thin walls/plates (feature/2) but never finer than L/(8n) to bound the element count
         floor = L / ((8 if study in SOLID_STUDIES else 3) * n_per)  # CFD: cells are expensive (prism layers TODO)
         h_wall = float(ms.get("size_min") or min(max(feature / 2.0, floor), h_body / 2))
-    growth = float(ms.get("growth", 1.25))
+    growth = float(rc["growth"]) if rc else float(ms.get("growth", 1.25))
 
     # small faces (a blade-tip face, a tiny chamfer): a face smaller than the cells round it is crossed by flat
     # (sliver) cells - 0.3 mm tip faces in 0.8 mm cells gave a sliding run a Courant number of 80 at the first
@@ -1039,7 +1047,9 @@ def task_mesh(job: dict) -> dict:
         progress(0.06, f"Found {len(gaps)} narrow air gaps (smallest {min_gap * 1e3:.2f} mm)")
 
     progress(0.08, f"Sizing: near-wall {h_wall * 1e3:.2f} mm, body {h_body * 1e3:.2f} mm")
-    gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 1)
+    # (sizes at the boundary curves are spread into the surface. With the recipe this can be switched off: the fine cells of a sharp-edge field along a
+    # leading edge otherwise spread over the whole wing, 478,000 one-millimetre triangles instead of 20,000 of 3.5 mm)
+    gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0 if (rc and rc.get("extend_boundary") is False) else 1)
     gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 0)
     gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", int(ms.get("curvature_elements", n_curv)))
     smallest = ([h_wall * 0.5] + [w / GAP_CELLS.get(ms.get("preset", "medium"), 6) * 0.9 for w, *_ in gaps]
@@ -1176,15 +1186,26 @@ def task_mesh(job: dict) -> dict:
             if h_mid < 0.9 * R / n_wake:
                 cylinder(c + w * 0.25 * R, w * 0.25 * R, R * 1.12, h_mid)
         src = info["parts_bbox"]
-        box = fields.add("Box")
-        pad = 0.5 * L
-        fields.setNumber(box, "XMin", src[0] - pad); fields.setNumber(box, "XMax", src[3] + pad)
-        fields.setNumber(box, "YMin", src[1] - pad); fields.setNumber(box, "YMax", src[4] + pad)
-        fields.setNumber(box, "ZMin", src[2] - pad); fields.setNumber(box, "ZMax", src[5] + pad)
-        fields.setNumber(box, "VIn", h_body * 1.5)
-        fields.setNumber(box, "VOut", size_far)
-        fields.setNumber(box, "Thickness", L)
-        use.append(box)
+        if rc:
+            for rb in rc["boxes"]:
+                box = fields.add("Box")
+                for k, nm in enumerate("XYZ"):
+                    fields.setNumber(box, f"{nm}Min", float(rb["min"][k]))
+                    fields.setNumber(box, f"{nm}Max", float(rb["max"][k]))
+                fields.setNumber(box, "VIn", float(rb["size"]))
+                fields.setNumber(box, "VOut", size_far)
+                fields.setNumber(box, "Thickness", max((size_far - float(rb["size"])) / (growth - 1.0), float(rb["size"])))   # (size = inside + (growth - 1) x distance)
+                use.append(box)
+        else:
+            box = fields.add("Box")
+            pad = 0.5 * L
+            fields.setNumber(box, "XMin", src[0] - pad); fields.setNumber(box, "XMax", src[3] + pad)
+            fields.setNumber(box, "YMin", src[1] - pad); fields.setNumber(box, "YMax", src[4] + pad)
+            fields.setNumber(box, "ZMin", src[2] - pad); fields.setNumber(box, "ZMax", src[5] + pad)
+            fields.setNumber(box, "VIn", h_body * 1.5)
+            fields.setNumber(box, "VOut", size_far)
+            fields.setNumber(box, "Thickness", L)
+            use.append(box)
 
     # gap refinement only inside each channel (box between the two walls)
     for sz, blo, bhi in gap_boxes:
@@ -1228,9 +1249,12 @@ def task_mesh(job: dict) -> dict:
         fields.setNumber(fc, "VOut", size_far)
         use.append(fc)
     # refinement boxes (the region's cell size inside, growing smoothly outside)
+    def transition(sz):                                    # (how far the size takes to grow from sz to the far-field size)
+        return max((size_far - sz) / (growth - 1.0), 8 * sz) if rc else sz * 8
+
     for r in ms.get("regions", []):
         if r.get("shape") == "cylinder":
-            expr = cylinder_size_expr(r["start"], r["end"], r["radius"], r["size"], size_far, r["size"] * 8,
+            expr = cylinder_size_expr(r["start"], r["end"], r["radius"], r["size"], size_far, transition(r["size"]),
                                       r.get("inner_radius", 0.0))
             fb = fields.add("MathEval")
             fields.setString(fb, "F", expr)
@@ -1238,7 +1262,7 @@ def task_mesh(job: dict) -> dict:
             continue
         if r.get("rotation"):                               # (a box that is turned: the size expression; the Box field cannot turn)
             fb = fields.add("MathEval")
-            fields.setString(fb, "F", box_size_expr(r["min"], r["max"], r["rotation"], r["size"], size_far, r["size"] * 8))
+            fields.setString(fb, "F", box_size_expr(r["min"], r["max"], r["rotation"], r["size"], size_far, transition(r["size"])))
             use.append(fb)
             continue
         fb = fields.add("Box")
@@ -1248,7 +1272,7 @@ def task_mesh(job: dict) -> dict:
             fields.setNumber(fb, k, float(v))
         fields.setNumber(fb, "VIn", float(r["size"]))
         fields.setNumber(fb, "VOut", size_far)
-        fields.setNumber(fb, "Thickness", float(r["size"]) * 8)
+        fields.setNumber(fb, "Thickness", transition(float(r["size"])))
         use.append(fb)
 
     for r in ms.get("refinements", []):
@@ -1271,7 +1295,7 @@ def task_mesh(job: dict) -> dict:
     # this adds are estimated before meshing and capped (default 150,000): where the estimate is over the cap the edge
     # cells are made coarser until it fits, so the option can never run the mesher out of memory by itself.
     edge_info = None
-    if study == "external_aero" and ms.get("edge_refine") and not ms.get("size_min"):
+    if study == "external_aero" and ms.get("edge_refine") and (not ms.get("size_min") or rc):
         er = ms["edge_refine"]
         factor = float(er.get("factor", 6.0))
         cap = float(er.get("max_cells", 150_000))

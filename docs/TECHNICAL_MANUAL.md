@@ -274,6 +274,27 @@ An optional mesher for `external_aero` (`mesh.method == "hex"`, set with `set_me
 - **Quality rules** (`parse_logs`): concave cells are a warning (snappyHexMesh limits them); any other failed `checkMesh` item is a problem. The cell limit (`MAX_CELLS`) stopping refinement is reported.
 - **Known limits**: sections of the display mesh take seconds (12 display tetrahedra per hexahedron); layer coverage depends on the parts being several cells thick; the log formats are those of OpenFOAM v2606.
 
+### Smart sizing and the mesh advisor (`meshadvisor.py`, `gmsh_worker.task_mesh`)
+
+- **Why**: the old sizing took `ref_length` (the largest side of the object) for every size; for a slender body that is not the length along the flow and not the thickness. See `docs/MESHING_GUIDE.md`
+  for the measurements, the criteria and the sources.
+- **Setting**: `mesh.smart` (bool; `set_mesh(smart=...)`, `POST /mesh/settings`, tool `set_mesh`). Off by default. When on, `_mesh_work_inner` calls `meshadvisor.analyse` and `meshadvisor.recipe`
+  and sends the recipe to the worker as `mesh["recipe"]`; the recipe is kept in `stats.recipe`. Sharp-edge refinement (`edge_refine`, factor 4) is switched on with it.
+- **analyse**: the length along the flow (the projection of the bounding box on the flow direction; the downwash for a rotor without speed), the lateral extents, the thinnest face (`face_width`),
+  the domain in body lengths, Reynolds number and boundary layer thickness.
+- **recipe**: wall cell = length / n_s (preset: 40, 60, 90, 130, 190); near-field box (0.3 lengths round the body, 0.5 behind it, cells 3 x the wall cell); wake box (from the rear of the body, 3 to 5 lengths,
+  the width of the body + 0.4 lengths each side, cells 4 to 5 x the wall cell); growth 1.3, 1.25, 1.2, 1.2, 1.15; layers for a first-cell y+ of 40 and `layers_that_fit` (at most 5); `extend_boundary: False`.
+  The cells of the two boxes are estimated (0.118 h^3 per tetrahedron, x 0.8 measured) and the wall cell is coarsened until they fit in half of the free memory (`memory_cap_cells`, 4,200 bytes a cell).
+- **Worker** (`ms["recipe"]` present): `h_wall = recipe.h_surf`, `h_body = recipe.h_near`, growth from the recipe, the old automatic box (0.5 L round the object, 1.5 x the body size, growing over L) is replaced by the two
+  boxes with `Thickness = (size_far - size) / (growth - 1)` (size = inside + (growth - 1) x distance), user regions grow the same way (the old `Thickness = 8 x size` stepped to the far-field size over 8 cells),
+  `Mesh.MeshSizeExtendFromBoundary = 0` (spreading the sizes of the boundary curves put the fine cells of the sharp-edge field over the whole surface), and the sharp-edge refinement runs even with a recipe.
+- **Scorecard** (`measure`, `scorecard`): the mesh is measured in zones that do not depend on the sizing (the wall; thin faces; within 0.3 lengths of the body; 0.2 to 2 lengths behind it over the body's width + 0.2 lengths;
+  neighbour size ratio) and every check has an `ok | warn | bad | info` band; the score is the share of passing checks, warnings counting half. `Project._score_mesh` stores it in `stats.advice` at the end of the mesh job
+  and when the layers are made again (never fails a job).
+- **Interfaces**: `Project.mesh_advice()` (`GET /mesh/advice`, tool `mesh_advice`, action `mesh.advice`), `Project.apply_mesh_recipe(preset, layers)` (`POST /mesh/recipe`, tool `mesh_apply_recipe`, action `mesh.recipe`).
+- **First-cell y+**: `cases.layer_first_thickness` returns the thickness whose centre has the target y+ (2 x y+ x nu / u_tau).
+- **Known limits**: external aerodynamics only; the domain is not changed; resolved boundary layers (y+ about 1) are not recommended (about a million extra prisms on the example wing); isotropic tetrahedra cost about a million cells for a thin 0.8 m wing.
+
 ### Wall layers made with the tetrahedral mesh (`solvers/openfoam/layermesh.py`)
 
 - **Why**: the solver case adds the layers with snappyHexMesh in layer-only mode before the run (`cases.write_external_aero`); the Mesh step used to show the

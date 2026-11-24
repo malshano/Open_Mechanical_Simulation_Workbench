@@ -201,8 +201,16 @@ def set_domain(pr, a):
 def set_mesh(pr, a):
     pr.set_mesh(preset=a.get("preset"), size_max_mm=a.get("size_max_mm"), size_min_mm=a.get("size_min_mm"),
                 refinements=a.get("refinements"), method=a.get("method"), layers=a.get("layers"),
-                edge_refinement=a.get("edge_refinement"))
+                edge_refinement=a.get("edge_refinement"), smart=a.get("smart"))
     return pr.data["mesh"]
+
+
+def mesh_advice(pr, a):
+    return pr.mesh_advice()
+
+
+def mesh_apply_recipe(pr, a):
+    return pr.apply_mesh_recipe(preset=a.get("preset"), layers=a.get("layers", True))
 
 
 def mesh_metrics(pr, a):
@@ -560,7 +568,7 @@ TOOLS = [
                           "edge_refinement: true (or a factor 2-20, default 6; false = off) refines the mesh along "
                           "sharp edges across the flow (leading / trailing edges, which carry much of the friction "
                           "of a thin body) with a capped number of extra cells (see mesh.stats.edge_refine). layers: "
-                          "{n, growth, first_mm, y_plus, tolerant} wall layers (flow studies); y_plus = the target of the "
+                          "smart: true/false switches smart sizing (see mesh_apply_recipe). {n, growth, first_mm, y_plus, tolerant} wall layers (flow studies); y_plus = the target of the "
                           "first cell (empty = automatic, about 30 for the wall-function models; about 1 resolves the "
                           "viscous sublayer and needs many more layers); tolerant = looser limits so thin or sharp "
                           "parts keep their layers. A tetrahedral mesh gets its layers when the mesh is generated "
@@ -569,9 +577,20 @@ TOOLS = [
                           "that mesh by layer.",
      {"type": "object", "properties": {"preset": STR, "size_max_mm": NUM, "size_min_mm": NUM, "method": STR,
                                        "edge_refinement": {"description": "true | false | factor 2-20"},
-                                       "layers": {"type": "object"},
+                                       "layers": {"type": "object"}, "smart": {"type": "boolean"},
                                        "refinements": {"type": "array", "items": {"type": "object"}}}},
      set_mesh),
+    ("mesh_advice", "External aerodynamics: what a good mesh of this body in this flow needs, and how the current mesh measures up. Returns the analysis "
+                    "(length along the flow, span, thinnest part, Reynolds number, domain size in body lengths), the recipe (wall, near-field and wake cell sizes, growth, wall "
+                    "layers that fit the thinnest part, with the reasons) and, once a mesh exists, a scorecard (score 0 to 1 and checks: wall cells, cells across the thin part, "
+                    "near field, wake, gradation, domain size, layers and their y+, non-orthogonality, skewness) with advice for each check that is not ok. Use it before meshing "
+                    "to choose settings and after to judge the result.",
+     {"type": "object", "properties": {}}, mesh_advice),
+    ("mesh_apply_recipe", "External aerodynamics: switch smart sizing on and set the wall layers the recipe recommends (preset optional: quick, coarse, medium, fine, "
+                          "very_fine; layers: false to leave the layers alone). Smart sizing sizes the mesh from the length along the flow, refines a near-field box and the wake "
+                          "with a growth of 1.2 to 1.3 and keeps the cell count to what the free memory holds. The mesh is out of date afterwards: call generate_mesh, then "
+                          "mesh_advice to see the score.",
+     {"type": "object", "properties": {"preset": STR, "layers": {"type": "boolean"}}}, mesh_apply_recipe),
     ("mesh_metrics", "Inspect the generated tetrahedral mesh: statistics and histograms of cell size, aspect ratio, "
                      "growth (size jump to the neighbours), volume and quality, the cell budget (for each size band "
                      "the share of cells and of the volume: where the cells - and the memory - are spent) and plain "
