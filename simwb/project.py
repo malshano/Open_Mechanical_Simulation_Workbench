@@ -2711,7 +2711,8 @@ class Project:
                 bad = [f for f in faces if f not in fm]
                 if bad:
                     raise ValueError(f"Unknown faces {bad}")
-                out.append({"faces": faces, "size": size / 1000, **({"part": str(r["part"])} if r.get("part") else {})})
+                out.append({"faces": faces, "size": size / 1000, **({"part": str(r["part"])} if r.get("part") else {}),
+                            **({"name": str(r["name"]).strip()[:60]} if str(r.get("name") or "").strip() else {})})
             m["refinements"] = out
         if regions is not None:  # refinement regions (metres): boxes {name, min, max, size} or
             out = []             # cylinders {name, shape: "cylinder", start, end, radius, [inner_radius], size}

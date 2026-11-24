@@ -727,7 +727,10 @@ layers** - and **Generate mesh**.
 
 - **Part sizing**: choose the part in the drop-down (in a flow study that is the object: the parts of your STEP file by name) and press
   **＋ Part sizing**, or press **Pick a part in the 3D view** and click the part: all its faces get a cell size, which you then change in
-  the list. The faces that have a part sizing are tinted in the 3D view. A part has one sizing; change its size instead of adding another.
+  the list. The faces that have a part sizing are tinted in the 3D view. A whole part has one sizing; change its size instead of adding another.
+  To size only some faces of a part, press **Pick faces in the 3D view** and click the faces one by one (a second click takes a face out again; the air volume cannot be picked),
+  then press **＋ Size the selected faces**. The picking stays on: pick the next group and add it, as many sizings as you need, each with its own size. The list names each
+  one by its part and faces; **◎** shows its faces in the 3D view and **✕** removes it. The same faces cannot have two sizings.
 - **Wall layers** (flow studies; the block is open): the number of layers, the growth ratio, the first layer (0 = automatic) and the
   **target y+** of the first cell, **measured at its centre** as OpenFOAM does (0 = automatic: about 30 for the wall-function models, which want 30 or more; 5 to 30 is the buffer
   layer where they are least accurate; a target near 1 resolves the wall itself and needs many more layers). Until version 0.4.0 beta 3 the first layer was sized so that the target was
