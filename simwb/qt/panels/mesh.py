@@ -58,12 +58,14 @@ class MeshPanel(_Panel):
     def bind(self, win):
         super().bind(win)
         win.view.facePicked.connect(self._face_picked)
+        win.view.selectionChanged.connect(self._selection_changed)
 
     def shown(self):
         self.draw_marks()
 
     def left(self):
         self.set_picking_part(False)
+        self.set_picking_faces(False)
         self.adv.xform.stop()
         v = self.view
         v.region_view.clear()
@@ -72,11 +74,35 @@ class MeshPanel(_Panel):
         v.set_face_tints({})
         v.set_selection([])
 
+    def set_picking_faces(self, on: bool):
+        """Clicking faces in the 3D view collects them (each click adds or removes one) for a part sizing of their own; any number of sizings can follow."""
+        on = bool(on)
+        if on == self.picking_faces:
+            return
+        if on:
+            self.set_picking_part(False)
+        self.picking_faces = on
+        self.picked = []
+        if self.view is not None:
+            self.view.set_pick_mode("face" if on else None)
+            self.view.set_selection([])
+        b = getattr(self.adv, "pick_faces_btn", None)
+        if b is not None and b.isChecked() != on:
+            b.blockSignals(True)
+            b.setChecked(on)
+            b.blockSignals(False)
+        self.adv._sig = None
+        self.engine.changed.emit()
+        if self.win is not None:
+            self.win.shell.sync()
+
     def set_picking_part(self, on: bool):
         """Clicking a part in the 3D view gives it a cell size (Part sizing)."""
         on = bool(on)
         if on == getattr(self, "picking_part", False):
             return
+        if on and self.picking_faces:
+            self.set_picking_faces(False)
         self.picking_part = on
         if self.view is not None:
             self.view.set_pick_mode("face" if on else None)
@@ -90,8 +116,32 @@ class MeshPanel(_Panel):
             self.win.shell.sync()
 
     def _face_picked(self, fid, add):
-        if getattr(self, "picking_part", False) and self.win is not None and self.win.step == "mesh":
+        if self.win is None or self.win.step != "mesh":
+            return
+        if getattr(self, "picking_part", False):
             self.adv.part_from_face(int(fid))
+        elif self.picking_faces:
+            self.toggle_picked(int(fid))
+
+    def _selection_changed(self, sel):
+        """A click on nothing clears the view's selection: while faces are being collected they stay (a stray click must not lose them)."""
+        if self.picking_faces and self.view is not None and not sel and self.picked:
+            self.view.set_selection(self.picked)
+
+    def toggle_picked(self, fid: int):
+        """One more face (or one less) in the set that the next part sizing gets. The air volume is not a part."""
+        try:
+            f = self.engine.project().face_map().get(int(fid))
+            if f is None:
+                return
+            if f.get("kind") in ("farfield", "enclosure"):
+                raise ValueError("That is the air volume, not a part: click the object itself")
+            self.picked = [i for i in self.picked if i != fid] if fid in self.picked else self.picked + [int(fid)]
+        except Exception as e:  # noqa: BLE001
+            self._fail(e)
+        self.view.set_selection(self.picked)
+        self.adv._sig = None
+        self.engine.changed.emit()                          # (the panel is rebuilt: the list of picked faces and the buttons)
 
     def draw_marks(self):
         """The refinement regions as translucent boxes and cylinders with their names, and the faces that have a part sizing in colour."""
@@ -120,6 +170,8 @@ class MeshPanel(_Panel):
     def __init__(self, engine, parent=None):
         super().__init__(engine, parent)
         self.picking_part = False
+        self.picking_faces = False
+        self.picked: list = []                              # (the faces collected for the next part sizing)
         self.color = "quality"
         self.axis = ""
         self.frac = 0.5

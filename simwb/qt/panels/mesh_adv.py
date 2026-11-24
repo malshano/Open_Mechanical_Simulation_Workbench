@@ -62,6 +62,7 @@ class MeshAdvanced(QWidget):
         m = st["mesh"]
         sig = repr([st["study"], m.get("size_max"), m.get("size_min"), m.get("defeature"), m.get("refinements"), m.get("regions"), m.get("layers"),
                     self.show_regions, self.show_layers, self.active_region, self.xform.index, st.get("settings"), getattr(self.panel, "picking_part", False),
+                    self.panel.picking_faces, list(self.panel.picked),
                     [(b["id"], b["name"]) for b in st["body_list"]], st.get("moving_zones"), st.get("flow_dir"), m.get("method"),
                     theme.effective()])
         if sig == self._sig:
@@ -107,12 +108,20 @@ class MeshAdvanced(QWidget):
     def _parts(self, st, m):
         refs = m.get("refinements") or []
         s = self._sec(f"Part sizing ({len(refs)})", "mesh.parts", bool(refs))
-        s.body.addWidget(_muted("A cell size on the surface of a part, growing to the surrounding size within about ten cells: cheaper "
-                                "than a box round the part."))
+        s.body.addWidget(_muted("A cell size on the surface of a part, or on some of its faces, growing to the surrounding size within about ten cells: cheaper "
+                                "than a box round the part. Add as many sizings as you like: one for a whole part, one for each group of faces."))
         names = {b["id"]: b["name"] for b in st["body_list"]}
         for i, r in enumerate(refs):
             row = QHBoxLayout()
-            row.addWidget(QLabel(f"<b>{r.get('part') or 'Faces'}</b> · {len(r['faces'])} face(s)"), 1)
+            lab = QLabel(f"<b>{self._title(r)}</b> · {len(r['faces'])} face(s)")
+            lab.setWordWrap(True)
+            lab.setToolTip("Faces " + ", ".join(str(f) for f in r["faces"][:30]) + (" ..." if len(r["faces"]) > 30 else ""))
+            row.addWidget(lab, 1)
+            sh = wid(QPushButton("◎"), f"mesh.part.{i}.show")
+            sh.setObjectName("ghost")
+            sh.setToolTip("Show these faces in the 3D view (selected in orange)")
+            sh.clicked.connect(lambda _=False, i=i: self._part_show(i))
+            row.addWidget(sh)
             e = wid(QLineEdit(fmt_num(r["size"] * M)), f"mesh.part.{i}.size")
             e.setValidator(QDoubleValidator(0.001, 1e6, 6, e))
             e.setToolTip("Cell size on these faces [mm]")
@@ -148,6 +157,31 @@ class MeshAdvanced(QWidget):
         self.pick_btn.setToolTip("Then click the part in the 3D view: all its faces get a cell size (you can change it here afterwards)")
         self.pick_btn.toggled.connect(self.panel.set_picking_part)
         s.body.addWidget(self.pick_btn)
+        self.pick_faces_btn = wid(QPushButton("Pick faces in the 3D view"), "mesh.part.pick_faces")
+        self.pick_faces_btn.setObjectName("toggle")
+        self.pick_faces_btn.setCheckable(True)
+        self.pick_faces_btn.setChecked(self.panel.picking_faces)
+        self.pick_faces_btn.setToolTip("Click faces one by one (a second click on a face takes it out again), then add a sizing for them; then pick the next ones")
+        self.pick_faces_btn.toggled.connect(self.panel.set_picking_faces)
+        s.body.addWidget(self.pick_faces_btn)
+        picked = self.panel.picked if self.panel.picking_faces else list(self.panel.view.selection if self.panel.view is not None else [])
+        self.picked_info = wid(_muted(self._picked_text(picked)), "mesh.part.picked")
+        self.picked_info.setWordWrap(True)
+        s.body.addWidget(self.picked_info)
+        row = QHBoxLayout()
+        self.add_sel_btn = wid(QPushButton(f"＋ Size the {len(picked)} selected face(s)" if picked else "＋ Size the selected faces"), "mesh.part.add_selected")
+        self.add_sel_btn.setObjectName("ghostBorder")
+        self.add_sel_btn.setEnabled(bool(picked))
+        self.add_sel_btn.setToolTip("A cell size of its own on the faces picked in the 3D view" if picked else "Pick faces in the 3D view first")
+        self.add_sel_btn.clicked.connect(self.add_selected)
+        clr = wid(QPushButton("Clear"), "mesh.part.clear_picked")
+        clr.setObjectName("ghostBorder")
+        clr.setEnabled(bool(picked))
+        clr.setToolTip("Forget the picked faces")
+        clr.clicked.connect(self.clear_picked)
+        row.addWidget(self.add_sel_btn, 1)
+        row.addWidget(clr)
+        s.body.addLayout(row)
         s.body.addWidget(_muted("The faces that have a part sizing are tinted in the 3D view."))
         self.v.addWidget(s)
 
@@ -200,9 +234,54 @@ class MeshAdvanced(QWidget):
         return [dict(r) for r in (self.engine.state()["mesh"].get("refinements") or [])]
 
     def _save_refs(self, refs):
-        self.engine.project().set_mesh(refinements=[{"faces": r["faces"], "size_mm": r["size"] * M, **({"part": r["part"]} if r.get("part") else {})}
-                                                    for r in refs])
+        self.engine.project().set_mesh(refinements=[{"faces": r["faces"], "size_mm": r["size"] * M, **({"part": r["part"]} if r.get("part") else {}),
+                                                     **({"name": r["name"]} if r.get("name") else {})} for r in refs])
         self.engine.changed.emit()
+
+    def _title(self, r: dict) -> str:
+        """What a sizing is called in the list: its name, else its part, else the faces it covers."""
+        if r.get("name"):
+            return r["name"]
+        if r.get("part"):
+            return r["part"]
+        return "Faces " + ", ".join(str(f) for f in r["faces"][:4]) + (" ..." if len(r["faces"]) > 4 else "")
+
+    def _picked_text(self, picked: list) -> str:
+        if self.panel.picking_faces:
+            if not picked:
+                return "Click the faces to size: each click adds a face, a second click takes it out again. Click Size the selected faces when you have them all."
+            return f"{len(picked)} face(s) picked: " + ", ".join(str(f) for f in picked[:12]) + (" ..." if len(picked) > 12 else "") + ". Click more, or add the sizing."
+        if picked:
+            return f"{len(picked)} face(s) selected in the 3D view: " + ", ".join(str(f) for f in picked[:12]) + (" ..." if len(picked) > 12 else "") + "."
+        return "To size only some faces of a part: Pick faces in the 3D view, click them, then add the sizing. Do it again for the next faces."
+
+    def add_selected(self):
+        """A sizing of its own on the faces picked (or selected) in the 3D view; the picking goes on for the next ones."""
+        try:
+            faces = list(self.panel.picked if self.panel.picking_faces else self.panel.view.selection)
+            if not faces:
+                raise ValueError("Pick faces in the 3D view first")
+            fm = self.engine.project().face_map()
+            parts = {fm[f].get("part") for f in faces if f in fm}
+            lead = (next(iter(parts)) + " · ") if len(parts) == 1 and None not in parts else ""
+            self._add_sizing(faces, None, name=f"{lead}faces " + ", ".join(str(f) for f in faces[:5]) + (" ..." if len(faces) > 5 else ""))
+            self.panel.picked = []
+            self.panel.view.set_selection([])
+            self._sig = None
+            self.engine.changed.emit()
+        except Exception as e:  # noqa: BLE001
+            self.panel._fail(e)
+
+    def clear_picked(self):
+        self.panel.picked = []
+        self.panel.view.set_selection([])
+        self._sig = None
+        self.engine.changed.emit()
+
+    def _part_show(self, i):
+        refs = self._refs()
+        if 0 <= i < len(refs):
+            self.panel.view.set_selection(refs[i]["faces"])
 
     def _part_add(self):
         try:
@@ -218,14 +297,14 @@ class MeshAdvanced(QWidget):
         except Exception as e:  # noqa: BLE001
             self.panel._fail(e)
 
-    def _add_sizing(self, faces: list, part: str | None):
+    def _add_sizing(self, faces: list, part: str | None, name: str | None = None):
         if not faces:
             raise ValueError("That part has no faces to size")
         refs = self._refs()
-        if part and any(r.get("part") == part for r in refs):
-            raise ValueError(f"{part} already has a part sizing: change its size in the list")
+        if any(set(r["faces"]) == set(faces) for r in refs):
+            raise ValueError("These faces already have a sizing: change its size in the list")
         size = (self.engine.state()["mesh"].get("size_max") or 0.01) / 2
-        self._save_refs(refs + [{"faces": faces, "size": size, **({"part": part} if part else {})}])
+        self._save_refs(refs + [{"faces": faces, "size": size, **({"part": part} if part else {}), **({"name": name} if name else {})}])
 
     def _part_size(self, i, text):
         try:

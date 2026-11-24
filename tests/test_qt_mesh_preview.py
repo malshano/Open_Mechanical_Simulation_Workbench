@@ -97,3 +97,51 @@ def test_the_air_volume_is_not_a_part(aero):
     c.widget_do("mesh.part.pick_3d", "set", True)
     c.do("view.pick_face", {"id": far})
     assert not c.engine.state()["mesh"]["refinements"] and c.win.panels["mesh"].picking_part      # (refused; still waiting for a part)
+
+
+def test_several_sizings_on_faces_of_one_part(aero):
+    """'Pick faces in the 3D view': every click adds or removes a face; each group becomes a sizing of its own, on the same part."""
+    c = aero
+    mine = [f["id"] for f in c.engine.project().faces() if f.get("kind") not in ("farfield", "enclosure")]
+    assert len(mine) >= 4
+    c.widget_do("mesh.parts.toggle", "click")
+    c._settle()
+    assert not c.widget_do("mesh.part.add_selected")["enabled"]                                     # (nothing picked yet)
+    c.widget_do("mesh.part.pick_faces", "set", True)
+    mp = c.win.panels["mesh"]
+    assert mp.picking_faces and c.win.view.pick_mode == "face" and not mp.picking_part
+    assert "Click the faces to size" in c.do("view.hint")["result"]["text"]
+    for f in mine[:3]:
+        c.do("view.pick_face", {"id": f})
+    c.do("view.pick_face", {"id": mine[2]})                                                         # (a second click takes the face out)
+    assert mp.picked == mine[:2]
+    c._settle()
+    assert c.widget_do("mesh.part.add_selected")["enabled"]
+    c.widget_do("mesh.part.add_selected", "click")
+    assert mp.picking_faces and mp.picked == []                                                     # (still picking, for the next group)
+    for f in mine[2:4]:
+        c.do("view.pick_face", {"id": f})
+    c.widget_do("mesh.part.add_selected", "click")
+    refs = c.engine.state()["mesh"]["refinements"]
+    assert [sorted(r["faces"]) for r in refs] == [sorted(mine[:2]), sorted(mine[2:4])]
+    assert all(r.get("name") for r in refs)
+    for f in mine[:2]:                                                                              # the same faces again: refused
+        c.do("view.pick_face", {"id": f})
+    c.widget_do("mesh.part.add_selected", "click")
+    assert len(c.engine.state()["mesh"]["refinements"]) == 2
+    c.widget_do("mesh.part.1.show", "click")                                                        # (show one: its faces are selected in the view)
+    assert sorted(c.win.view.selection) == sorted(mine[2:4])
+    c.do("view.pick_face", {"id": next(f["id"] for f in c.engine.project().faces() if f.get("kind") == "farfield")})
+    assert len(mp.picked) == 2                                                                      # (the air volume is not a part: ignored)
+
+
+def test_picking_faces_and_picking_a_part_exclude_each_other(bracket):
+    c = bracket
+    mp = c.win.panels["mesh"]
+    c.widget_do("mesh.part.pick_faces", "set", True)
+    c.widget_do("mesh.part.pick_3d", "set", True)
+    assert mp.picking_part and not mp.picking_faces
+    c.widget_do("mesh.part.pick_faces", "set", True)
+    assert mp.picking_faces and not mp.picking_part
+    c.do("step.go", {"step": "setup"})
+    assert not mp.picking_faces and mp.picked == []                                                 # (leaving the step ends it; Setup has its own picking)
