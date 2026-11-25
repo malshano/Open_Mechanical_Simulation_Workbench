@@ -44,10 +44,15 @@ class Settings:
     emin: float = 1e-9                   # stiffness of empty material, relative to solid
 
 
+MIN_CELLS = 3.0          # the smallest member size, in element sizes: below this the shape and its stiffness depend on the mesh (14 % at 2, 6 % at 2.5)
+GOOD_CELLS = 4.0
+
+
 def default_radius(problem: Problem) -> float:
-    """4 % of the part's largest size, but never less than two element sizes (a member must be wider than the cells that describe it)."""
+    """4 % of the part's largest size, but never less than four element sizes (a member must be several cells wide to be described, and the result
+    then no longer depends on the mesh)."""
     size = float(np.ptp(problem.nodes, axis=0).max())
-    return max(0.04 * size, 2.0 * problem.h)
+    return max(0.04 * size, GOOD_CELLS * problem.h)
 
 
 def estimate(problem: Problem, radius: float) -> dict:
@@ -80,10 +85,13 @@ class Optimiser:
             raise ProblemError("The mass to keep must be between 2 % and 99 % of the part.")
         self.notes = list(pb.notes)
         r = s.radius if s.radius else default_radius(pb)
-        if r < 1.5 * pb.h:
-            self.notes.append(f"The minimum member size ({r * 1e3:.2g} mm) is below 1.5 element sizes, so it was raised to {1.5 * pb.h * 1e3:.2g} mm: a member cannot be "
-                              "thinner than the cells that describe it. Use a finer mesh for finer members.")
-            r = 1.5 * pb.h
+        if r < MIN_CELLS * pb.h:
+            self.notes.append(f"The smallest feature size ({r * 1e3:.2g} mm) is below {MIN_CELLS:g} element sizes, so it was raised to {MIN_CELLS * pb.h * 1e3:.2g} mm: a member "
+                              "must be several cells wide, or the shape and its stiffness depend on the mesh. Use a finer mesh for finer members.")
+            r = MIN_CELLS * pb.h
+        elif r < GOOD_CELLS * pb.h:
+            self.notes.append(f"The smallest feature size is {r / pb.h:.1f} element sizes. It works, but the stiffness figure can still change by several per cent with the mesh; "
+                              f"{GOOD_CELLS:g} or more element sizes ({GOOD_CELLS * pb.h * 1e3:.2g} mm) makes it mesh-independent.")
         self.radius = r
         est = estimate(pb, r)
         self.estimate = est
@@ -116,12 +124,26 @@ class Optimiser:
                  f"keep {100 * s.volume_fraction:.0f} % of the mass")
 
     def _filter(self, r: float) -> sp.csr_matrix:
-        tree = cKDTree(self.pb.centroid)
+        """Density filter: each element's density is the average of its neighbours within r (cone weight, weighted by their volume, so a refined or graded
+        mesh gives the same shape). Next to a symmetry plane of a half model the mirror image of the part counts as neighbours too."""
+        pb = self.pb
+        n, c = pb.n, pb.centroid
+        tree = cKDTree(c)
         W = tree.sparse_distance_matrix(tree, r, output_type="coo_matrix")
         W.data = r - W.data                                   # (cone weight; the distance of an element to itself is 0, but sparse output drops zeros)
-        W = (W + sp.identity(self.pb.n) * r).tocsr()
+        W = (W + sp.identity(n) * r).tocsr()
+        for axis, pos in pb.mirror_planes:
+            near = np.flatnonzero(np.abs(c[:, axis] - pos) < r)
+            if not len(near):
+                continue
+            g = c[near].copy()
+            g[:, axis] = 2 * pos - g[:, axis]
+            Wg = tree.sparse_distance_matrix(cKDTree(g), r, output_type="coo_matrix").tocoo()
+            Wg = sp.coo_matrix((r - Wg.data, (Wg.row, near[Wg.col])), shape=(n, n))
+            W = W + Wg.tocsr()
+        W = (W @ sp.diags(pb.volume)).tocsr()
         hs = np.asarray(W.sum(axis=1)).ravel()
-        return sp.diags(1.0 / hs) @ W
+        return (sp.diags(1.0 / hs) @ W).tocsr()
 
     # ------------------------------------------------------------------ the analysis
     def solve(self, xb: np.ndarray, K=None):
@@ -135,13 +157,20 @@ class Optimiser:
         u[pb.fixed] = pb.fixed_val
         fr = self.free
         Kc = K.tocsr()
-        rhs = pb.f[fr] - Kc[fr][:, ~fr] @ u[~fr]
+        Kr = Kc[fr]
+        Kff = Kr[:, fr]
+        rhs = pb.f[fr] - Kr[:, ~fr] @ u[~fr]
+        loose = ("The supports do not hold the part in place (it could move or turn freely): add a fixed support, or supports that stop it moving and turning "
+                 "in every direction.")
         try:
-            uf = _factor_solve(Kc[fr][:, fr], rhs, lambda *_: None)
+            uf = _factor_solve(Kff, rhs, lambda *_: None)
         except Exception as e:  # noqa: BLE001
-            raise ProblemError("The supports do not hold the part in place (it could move or turn freely): add a fixed support or more supports.") from e
+            raise ProblemError(loose) from e
         if not np.all(np.isfinite(uf)):
-            raise ProblemError("The supports do not hold the part in place (it could move or turn freely): add a fixed support or more supports.")
+            raise ProblemError(loose)
+        rel = float(np.linalg.norm(Kff @ uf - rhs) / max(np.linalg.norm(rhs), 1e-300))
+        if rel > 1e-5:
+            raise ProblemError(loose + f" (the equations could only be solved to {rel:.0e})")
         u[fr] = uf
         return u, K
 
@@ -215,6 +244,7 @@ class Optimiser:
         t0 = time.time()
         base = self.baseline()
         c_full = base["compliance"]
+        self.c_full = c_full
         self.log(f"Solid part: compliance {c_full:.4g} J x 2; equation residual {base['balance']:.1e}")
         xd = np.full(len(self.idx), min(max(s.volume_fraction, 0.05), 0.95))
         beta = 1.0 if s.projection else 1.0
@@ -263,9 +293,11 @@ class Optimiser:
             "iterations": len(hist), "converged": converged, "stopped": stopped, "history": hist, "seconds": time.time() - t0,
             "radius_m": self.radius, "settings": asdict(s), "notes": self.notes, "force_balance_error": getattr(self, "balance", None),
             "n_elements": pb.n, "n_design": int(len(self.idx)), "n_unknowns": pb.ndof, "kept_solid_fraction": self.m_passive / self.m_total,
-            "u": fin["u"],
+            "u": fin["u"], "element_energy": fin["ce"],
         }
         if not converged and not stopped:
-            self.notes.append(f"Stopped at the iteration limit ({s.max_iter}) before the shape settled: the result is usable but may still change a little; "
-                              "run more iterations to refine it.")
+            self.notes.append(f"The iteration limit ({s.max_iter}) was reached before the shape settled, so it may still change: run more iterations before relying on it.")
+        if out["grey_fraction"] > 0.25:
+            self.notes.append(f"{100 * out['grey_fraction']:.0f} % of the material is still grey (between solid and empty), so the threshold you pick changes the shape and its mass. "
+                              "A larger smallest feature size, a finer mesh or more iterations make it sharper.")
         return out

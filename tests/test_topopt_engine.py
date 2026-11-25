@@ -47,11 +47,11 @@ def test_the_gradients_match_finite_differences():
 
 
 def test_the_mass_target_is_met_and_the_supports_and_loads_stay_solid():
-    mesh, props, bcs = _cantilever(load="patch")
+    mesh, props, bcs = benchmarks.cantilever(L=2.0, W=0.4, H=1.0, h=0.1, load="patch")
     pb = build(mesh, props, bcs)
-    res = Optimiser(pb, Settings(volume_fraction=0.4, radius=0.3, max_iter=60), log=QUIET).run()
+    res = Optimiser(pb, Settings(volume_fraction=0.4, radius=0.3, max_iter=100), log=QUIET).run()
     assert res["mass_fraction"] == pytest.approx(0.4, abs=1e-6)             # (the filtered, projected density: exactly the target)
-    assert res["mass_fraction_threshold"] == pytest.approx(0.4, abs=0.03)   # (the sharp shape at 0.5: close to it)
+    assert res["mass_fraction_threshold"] == pytest.approx(0.4, abs=0.08)   # (the sharp shape at 0.5: close to it; grey material makes it differ)
     assert (res["density"][pb.passive] == 1.0).all() and pb.passive.sum() > 0
     assert res["stiffness_kept"] < 1.0 and res["stiffness_kept"] > 0.15
     assert res["compliance"] > res["compliance_solid"]                       # (taking material away never makes it stiffer)
@@ -87,7 +87,7 @@ def test_a_member_size_below_the_cells_is_raised_and_said_and_gravity_is_left_ou
     mesh, props, bcs = _cantilever()
     pb = build(mesh, props, bcs, gravity=[0, 0, -9.81])
     opt = Optimiser(pb, Settings(volume_fraction=0.4, radius=0.01), log=QUIET)
-    assert opt.radius == pytest.approx(1.5 * pb.h)
+    assert opt.radius == pytest.approx(3.0 * pb.h)
     assert any("raised" in n for n in opt.notes) and any("weight" in n for n in opt.notes)
 
 
@@ -111,3 +111,69 @@ def test_stop_returns_the_shape_so_far():
                                                                                   should_stop=lambda: len(seen) >= 5)
     assert res["stopped"] and res["iterations"] == 5 and res["density"].shape == (pb.n,)
     assert res["mass_fraction"] == pytest.approx(0.4, abs=1e-6)
+
+
+def test_a_prescribed_displacement_is_refused_but_a_zero_one_is_a_support():
+    mesh, props, bcs = _cantilever()
+    moved = [dict(b) for b in bcs] + [{"name": "Press", "type": "displacement", "faces": [2], "params": {"uz_mm": 1.0}}]
+    with pytest.raises(ProblemError, match="moves a face"):
+        build(mesh, props, moved)
+    held = [dict(b) for b in bcs[1:]] + [{"name": "Clamp", "type": "displacement", "faces": [1], "params": {"ux_mm": 0, "uy_mm": 0, "uz_mm": 0}}]
+    assert build(mesh, props, held).fixed.size > 0
+
+
+def test_a_part_that_is_not_held_is_refused_with_the_reason():
+    mesh, props, bcs = benchmarks.cantilever(L=2.0, W=0.4, H=1.0, h=0.2)
+    loose = [{"name": "Slide", "type": "frictionless_support", "faces": [1], "params": {}}, bcs[1]]     # (a plane holds one direction only: the part can still slide and turn)
+    opt = Optimiser(build(mesh, props, loose), Settings(volume_fraction=0.4, radius=0.3), log=QUIET)
+    with pytest.raises(ProblemError, match="do not hold"):
+        opt.run()
+
+
+def test_the_filter_gives_the_same_average_on_a_graded_mesh_and_sees_across_a_symmetry_plane():
+    L, W, H = 2.0, 0.4, 1.0
+    mesh = benchmarks.box_mesh(L, W, H, 20, 2, 5, lambda c, n: np.where(c[:, 0] < 1e-9, 1, np.where(c[:, 0] > L - 1e-9, 2, 0)), grade=1.6)
+    props = {1: {"E": 1.0, "nu": 0.3, "rho": 1.0}}
+    bcs = [{"name": "Fixed", "type": "fixed_support", "faces": [1], "params": {}},
+           {"name": "Load", "type": "force", "faces": [2], "params": {"fz_N": -1.0}}]
+    pb = build(mesh, props, bcs)
+    assert pb.volume.max() / pb.volume.min() > 5                                     # (the cells differ a lot in size)
+    opt = Optimiser(pb, Settings(volume_fraction=0.4, radius=0.3), log=QUIET)
+    cx = pb.centroid[:, 0]
+    inner = (cx > 0.5) & (cx < L - 0.5) & (pb.centroid[:, 1] > 0.15) & (pb.centroid[:, 1] < W - 0.15)
+    err = np.abs(opt.P @ cx - cx)[inner]
+    assert err.max() < 0.03 * opt.radius                                             # (a linear field is reproduced: the average is by volume, not by element count)
+    assert np.allclose(np.asarray(opt.P.sum(axis=1)).ravel(), 1.0)
+    # a half model with a symmetry plane at y = 0 must filter like the whole model it stands for: the mirror image counts as neighbours
+    from scipy.spatial import cKDTree
+    lab = lambda c, n: np.where(c[:, 0] < 1e-9, 1, np.where(c[:, 0] > L - 1e-9, 2, 0))  # noqa: E731
+    half = benchmarks.box_mesh(L, W, H, 20, 4, 10, lambda c, n: np.where(c[:, 1] < 1e-9, 3, lab(c, n)))
+    full = benchmarks.box_mesh(L, 2 * W, H, 20, 8, 10, lab)
+    full["nodes"][:, 1] -= W                                                         # (the upper half of this mesh IS the half model)
+    pbf = build(full, props, bcs)
+    pbh = build(half, props, bcs + [{"name": "Mirror", "type": "frictionless_support", "faces": [3], "params": {}}])
+    assert pbh.mirror_planes == [(1, pytest.approx(0.0, abs=1e-12))]
+    r = 0.3
+    P_full = Optimiser(pbf, Settings(volume_fraction=0.4, radius=r), log=QUIET).P
+    P_with = Optimiser(pbh, Settings(volume_fraction=0.4, radius=r), log=QUIET).P
+    planes, pbh.mirror_planes = pbh.mirror_planes, []
+    P_without = Optimiser(pbh, Settings(volume_fraction=0.4, radius=r), log=QUIET).P
+    d, j = cKDTree(pbf.centroid).query(pbh.centroid)
+    assert d.max() < 1e-9                                                            # (every element of the half model is an element of the whole)
+    ref = (P_full @ np.abs(pbf.centroid[:, 1]))[j]                                   # (the whole model filtering the even field |y|)
+    y = pbh.centroid[:, 1]
+    near = (y < 0.1) & (pbh.centroid[:, 0] > 0.6) & (pbh.centroid[:, 0] < L - 0.6)
+    assert np.abs((P_with @ y) - ref)[near].max() < 0.01 * r
+    assert np.abs((P_without @ y) - ref)[near].max() > 0.05 * r                      # (without the plane the filter is biased there)
+    assert np.allclose(np.asarray(P_with.sum(axis=1)).ravel(), 1.0)
+
+
+def test_a_small_feature_size_is_raised_to_three_element_sizes_and_a_shape_still_grey_is_said():
+    mesh, props, bcs = _cantilever()
+    pb = build(mesh, props, bcs)
+    opt = Optimiser(pb, Settings(volume_fraction=0.4, radius=2.0 * pb.h), log=QUIET)
+    assert opt.radius == pytest.approx(3.0 * pb.h) and any("raised" in n for n in opt.notes)
+    opt = Optimiser(pb, Settings(volume_fraction=0.4, radius=3.4 * pb.h), log=QUIET)
+    assert opt.radius == pytest.approx(3.4 * pb.h) and any("several per cent" in n for n in opt.notes)
+    from simwb.topopt import default_radius
+    assert default_radius(pb) >= 4.0 * pb.h

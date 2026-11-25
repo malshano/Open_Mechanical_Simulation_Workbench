@@ -207,7 +207,7 @@ def create_project(name: str, study: str, location: str | None = None) -> "Proje
         "settings": studies.default_settings(study),
         # OpenFOAM studies start on Coarse (a first run in minutes, not hours); the built-in FEM is instant
         "mesh": {"preset": {"heat_conduction": "medium", "vibration_modal": "medium", "static_structural": "medium",
-                            "aeroelastic_flutter": "medium",
+                            "topology_optimization": "medium", "aeroelastic_flutter": "medium",
                             "cht_enclosure": "quick"}.get(study, "coarse"),
                  "refinements": [], "status": "none"},
         "solve": {"status": "none"},
@@ -1822,7 +1822,7 @@ class Project:
                     raise ValueError(f"{p['label']} must be ≤ {p['max']}")
                 if p.get("unit") == "°C" and v <= -273.15:
                     raise ValueError(f"{p['label']} must be above absolute zero")
-                if k in ("iterations", "n_procs", "n_modes", "n_frames"):
+                if k in ("iterations", "n_procs", "n_modes", "n_frames", "max_iterations", "keep_layers"):
                     if v != int(v):
                         raise ValueError(f"{p['label']} must be a whole number")
                     v = int(v)
@@ -2438,7 +2438,7 @@ class Project:
                 err(msg, "setup")
             for msg in self._symmetry_grazing(planes):
                 warn(msg, "setup")
-            if self.study in ("static_structural", "heat_conduction", "cht_enclosure"):
+            if self.study in ("static_structural", "topology_optimization", "heat_conduction", "cht_enclosure"):
                 warn("Symmetry: loads and heat sources you enter act on the kept half only - enter the share that "
                      "belongs to it (half of a total that is shared between two halves).", "setup")
         types = [b["type"] for b in self.data["bcs"] if b["faces"]]
@@ -2492,6 +2492,21 @@ class Project:
             if float(s.get("design_speed_ms") or 0) and float(s.get("speed_max_ms") or 0)                     and float(s["design_speed_ms"]) * 1.15 > float(s["speed_max_ms"]):
                 warn("'Highest air speed' is below 1.15 x the design speed: the flutter margin cannot be shown "
                      "unless the sweep reaches it", "setup", '[data-setting="speed_max_ms"]')
+        elif st == "topology_optimization":
+            if not any(t in types for t in ("fixed_support", "frictionless_support")):
+                err("Add a support (fixed, or frictionless/pin) so the part is held: the optimiser keeps material where the part is held and loaded", "setup")
+            elif "fixed_support" not in types:
+                warn("Only frictionless supports: check they stop the part sliding and turning in every direction (otherwise the run reports that the part is not held)", "setup")
+            loads = [b for b in self.data["bcs"] if b["faces"] and (
+                (b["type"] == "force" and any(float(b["params"].get(k) or 0) for k in ("fx_N", "fy_N", "fz_N")))
+                or (b["type"] == "pressure" and float(b["params"].get("pressure_Pa") or 0)))]
+            if not loads:
+                err("Add a load: a force or a pressure on a face. The optimiser shapes the part around the loads it has to carry", "setup")
+            elif len(loads) == 1:
+                warn("One load only: the shape is the best one for this load alone. If the real part sees other loads or directions, check the result against them "
+                     "(several load cases are not available yet)", "setup")
+            if float(self.data["settings"].get("mass_percent") or 0) <= 0:
+                err("Set the mass to keep (for example 30 %)", "setup")
         elif st == "static_structural":
             if not any(t in types for t in ("fixed_support", "frictionless_support", "displacement")):
                 err("Add a support (fixed, frictionless/pin or prescribed displacement) so the part is held", "setup")
@@ -3210,6 +3225,7 @@ class Project:
     # ------------------------------------------------------------------ mesh sensitivity
     KEY_OUTPUTS = {
         "heat_conduction": [("Max temperature", "°C", lambda s: s.get("T_max"))],
+        "topology_optimization": [("Stiffness kept", "", lambda s: (s.get("topopt") or {}).get("stiffness_kept"))],
         "static_structural": [("Max deformation", "mm", lambda s: s.get("max_displacement_mm")),
                               ("Max von Mises stress", "MPa", lambda s: s.get("max_von_mises_MPa"))],
         "aeroelastic_flutter": [("Flutter speed", "m/s", lambda s: (s.get("flutter") or {}).get("speed_m_s")),
@@ -3883,6 +3899,10 @@ class Project:
         if not job or job.status != "running" or job.kind != "solve":
             raise ValueError("No solver run is in progress")
         if self.spec["solver"] == "builtin_fem":
+            if self.study == "topology_optimization":                   # (the shape found so far is kept: that is what Stop means here)
+                job.extra["user_stop"] = True
+                JOBS.update(job, None, "Stopping: keeping the shape found so far", log="Stop requested: keeping the shape found so far")
+                return job
             raise ValueError("This run cannot be stopped early - cancel it instead")
         if not job.extra.get("solver_started"):
             raise ValueError(("Auto trim is preparing the second run (new pitch and mesh)" if job.extra.get("trim_phase")
@@ -3901,6 +3921,8 @@ class Project:
             return self._solve_flutter(job)
         if self.study == "static_structural":
             return self._solve_static(job)
+        if self.study == "topology_optimization":
+            return self._solve_topopt(job)
         from .solvers import thermal_fem
 
         self.data["solve"] = {"status": "running", "backend": "builtin", "started": _now()}
@@ -4110,6 +4132,103 @@ class Project:
         self.data["solve"] = {"status": "done", "backend": engine, "finished": _now(), "summary": rep}
         self.save()
         return rep
+
+    def _solve_topopt(self, job: Job):
+        """Topology optimisation (simwb.topopt): the stiffest shape for a mass target, as a density per mesh element."""
+        from .topopt import problem as tprob
+        from .topopt import simp as tsimp
+
+        self.data["solve"] = {"status": "running", "backend": "builtin", "started": _now()}
+        self.save()
+        m = self.load_mesh()
+        props = {}
+        for b in self.bodies():
+            cfg = self.data["bodies"].get(str(b["id"]), {})
+            mat = materials.get_solid(cfg.get("material") or "aluminium_6061")
+            props[b["id"]] = {"E": mat["E"], "nu": mat["nu"], "rho": mat["rho"], "yield": mat.get("Sy"),
+                              "name": cfg.get("name") or b["name"]}
+        s = self.data["settings"]
+        member = float(s.get("member_mm") or 0.0)
+        cfg = tsimp.Settings(volume_fraction=float(s.get("mass_percent") or 30.0) / 100.0, radius=member / 1000.0 if member > 0 else None,
+                             max_iter=int(s.get("max_iterations") or 200))
+        live = job.extra.setdefault("topopt", {"history": [], "density": None, "iteration": 0, "max_iter": cfg.max_iter})
+        try:
+            JOBS.update(job, 0.02, "Setting up the optimisation")
+            pb = tprob.build(m, props, self.data["bcs"], keep_layers=int(s.get("keep_layers") or 0), gravity=None,
+                             log=lambda msg: JOBS.update(job, None, msg, log=msg))
+            opt = tsimp.Optimiser(pb, cfg, log=lambda msg: JOBS.update(job, None, msg, log=msg) if not msg.startswith("iteration") else None)
+            live["radius_mm"] = opt.radius * 1e3
+            live["estimate"] = opt.estimate
+            JOBS.update(job, 0.04, "Solving the solid part for reference")
+
+            def on_iter(rec, xb):
+                job.check_cancel()
+                live["history"].append(rec)
+                live["density"] = xb.astype(np.float32)
+                live["iteration"] = rec["iteration"]
+                live["c_full"] = getattr(opt, "c_full", None)
+                n, per = rec["iteration"], rec["seconds"] / max(rec["iteration"], 1)
+                kept = (opt.c_full / rec["compliance"]) if getattr(opt, "c_full", None) and rec["compliance"] > 0 else None
+                left = max(cfg.max_iter - n, 0) * per
+                JOBS.update(job, 0.05 + 0.85 * min(n / cfg.max_iter, 1.0),
+                            f"Iteration {n}: " + (f"{100 * kept:.0f} % of the stiffness kept, " if kept else "") + f"{100 * rec['mass_fraction']:.0f} % of the mass"
+                            + (f" (up to {left / 60:.1f} min left)" if left > 90 else ""))
+            res = opt.run(on_iter=on_iter, should_stop=lambda: bool(job.extra.get("user_stop")))
+        except BaseException as e:
+            self.data["solve"] = {"status": "failed", "backend": "builtin", "error_tail": str(e)}
+            self.save()
+            raise
+        # the solid part again with the quadratic tetrahedra of the static study: how much stiffer the linear ones of the optimiser are on THIS mesh
+        gap = None
+        try:
+            from .solvers import static_fem
+
+            JOBS.update(job, 0.9, "Checking the stiffness with quadratic elements")
+            quad = static_fem.solve(m, props, self.data["bcs"], log=lambda *_: None)
+            gap = res["compliance_solid"] / (2.0 * quad["report"]["strain_energy_J"]) - 1.0
+            if abs(gap) > 0.10:
+                res["notes"].append(f"On this mesh the linear tetrahedra of the optimiser are {abs(gap) * 100:.0f} % {'stiffer' if gap < 0 else 'softer'} than the quadratic ones of the "
+                                    "Static structural study (thin parts a few cells thick lock up). The shape is still a good concept, but a finer mesh gives a more reliable stiffness; "
+                                    "check the result with a static study.")
+        except Exception:  # noqa: BLE001 - too large for the quadratic solver, or a setup it cannot solve: the check is skipped
+            pass
+        JOBS.update(job, 0.92, "Saving the shape")
+        bodies = self.bodies()
+        reg_index = {b["id"]: i for i, b in enumerate(bodies)}
+        tr = np.array([reg_index[int(v)] for v in m["tet_vol"]]) if len(bodies) > 1 else np.zeros(len(m["tets"]), int)
+        groups, sgroup = self._tri_groups(m)
+        xb = res["density"]
+        E = pb.E0 * (cfg.emin + (1 - cfg.emin) * xb ** cfg.penal)
+        energy = (0.5 * E * res["element_energy"] / pb.volume) / 1e6
+        disp = np.linalg.norm(res["u"].reshape(-1, 3), axis=1) * 1e3
+        fields = {"Density": ("cell", xb.astype(np.float32), "-"),
+                  "Strain energy density": ("cell", energy.astype(np.float32), "MPa"),
+                  "Deformation": ("node", disp.astype(np.float32), "mm")}
+        rs = ResultSet(m["nodes"], m["tets"], tr, [self._body_view(b)["name"] for b in bodies], fields, m["tris"], _owner_of_tris(m), sgroup, groups)
+        self.results_dir.mkdir(exist_ok=True)
+        rs.save(self.results_dir / "result.npz")
+        self._results = rs
+        total_kg = float(pb.weight.sum())
+        hist = [{k: (round(v, 6) if isinstance(v, float) else v) for k, v in h.items()} for h in res["history"]]
+        top = {"stiffness_kept": res["stiffness_kept"], "mass_fraction": res["mass_fraction"], "mass_fraction_threshold": res["mass_fraction_threshold"],
+               "mass_target": cfg.volume_fraction, "compliance": res["compliance"], "compliance_solid": res["compliance_solid"],
+               "mass_kg_solid": total_kg, "mass_kg_kept": total_kg * res["mass_fraction"], "mass_kg_threshold": total_kg * res["mass_fraction_threshold"],
+               "grey_fraction": res["grey_fraction"], "iterations": res["iterations"], "max_iterations": cfg.max_iter, "converged": res["converged"],
+               "stopped": res["stopped"], "radius_mm": res["radius_m"] * 1e3, "element_size_mm": pb.h * 1e3, "kept_solid_fraction": res["kept_solid_fraction"],
+               "n_elements": res["n_elements"], "n_design": res["n_design"], "linear_vs_quadratic": gap, "history": hist}
+        rep = {"topopt": top, "warnings": list(res["notes"]), "solve_time_s": res["seconds"], "n_dof": res["n_unknowns"], "n_elements": res["n_elements"],
+               "mass_kg": total_kg, "boundary_conditions": pb.bc_report,
+               "assumptions": ["Linear elastic material, small deflections, linear tetrahedra (a little stiffer than the quadratic ones of the static study)",
+                               "One load case; own weight is not included", "The shape is the stiffest for the mass: stress is NOT checked, so re-check it with a static study"]}
+        self._remember_previous()
+        self.data["solve"] = {"status": "done", "backend": "builtin", "finished": _now(), "summary": rep}
+        self.save()
+        return rep
+
+    def topopt_live(self) -> dict | None:
+        """What the running (or last) optimisation has so far: {iteration, max_iter, history, density (per element, or None), radius_mm, c_full}."""
+        job = JOBS.latest(self.id)
+        return job.extra.get("topopt") if job is not None and job.kind == "solve" else None
 
     def _structural_engine(self) -> str:
         """Which program solves a structural study: "builtin" (the workbench's own FEM) or "calculix"."""

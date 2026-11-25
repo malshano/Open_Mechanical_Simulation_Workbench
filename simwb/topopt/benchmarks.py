@@ -7,10 +7,10 @@ import itertools
 import numpy as np
 
 
-def box_mesh(L: float, W: float, H: float, nx: int, ny: int, nz: int, label=None) -> dict:
+def box_mesh(L: float, W: float, H: float, nx: int, ny: int, nz: int, label=None, grade: float = 1.0) -> dict:
     """A box [0, L] x [0, W] x [0, H] in nx x ny x nz cubes cut into tetrahedra; the dict the project's mesh has (nodes, tets, tet_vol, tris, tri_surf).
-    label(centroid (m, 3), normal (m, 3)) -> face id per boundary triangle (default 0)."""
-    xs, ys, zs = np.linspace(0, L, nx + 1), np.linspace(0, W, ny + 1), np.linspace(0, H, nz + 1)
+    label(centroid (m, 3), normal (m, 3)) -> face id per boundary triangle (default 0). grade > 1 makes the cells finer towards x = 0 (a graded mesh)."""
+    xs, ys, zs = L * np.linspace(0, 1, nx + 1) ** grade, np.linspace(0, W, ny + 1), np.linspace(0, H, nz + 1)
     X, Y, Z = np.meshgrid(xs, ys, zs, indexing="ij")
     nodes = np.stack([X.ravel(), Y.ravel(), Z.ravel()], axis=1)
     idx = np.arange(len(nodes)).reshape(nx + 1, ny + 1, nz + 1)

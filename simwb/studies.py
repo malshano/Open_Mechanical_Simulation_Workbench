@@ -667,6 +667,38 @@ def validate_advanced(kw: dict) -> dict:
     return out
 
 
+STUDIES["topology_optimization"] = {
+    "label": "Topology optimisation",
+    "icon": "beam",
+    "solver": "builtin_fem",
+    "solver_label": "Built-in optimiser (SIMP on linear tetrahedra)",
+    "description": "The stiffest shape for the mass you choose: material is removed where it carries little load.",
+    "examples": ["camera_mount.step"],
+    "face_bc_types": {k: STUDIES["static_structural"]["face_bc_types"][k] for k in ("fixed_support", "frictionless_support", "force", "pressure")},
+    "default_face_bc": {"label": "Free"},
+    "body_roles": ["solid"],
+    "body_params": [],
+    "settings": [
+        P("mass_percent", "Mass to keep", "%", 30.0, min=5, max=90,
+          help="The share of the part's mass that the result keeps. The optimiser finds the stiffest shape that weighs this much. 30 % is a good first try; "
+               "keep more for a sturdier shape, less for a lighter one."),
+        P("member_mm", "Smallest feature size", "mm", 0.0, min=0,
+          help="The thinnest member the result may have. 0 = chosen for you: 4 % of the part's size, and never less than four mesh cells. A larger value "
+               "gives a simpler shape that is easier to make; a smaller one needs a finer mesh."),
+        P("max_iterations", "Most iterations", "", 200, min=20, max=1000, adv=True,
+          help="The run stops when the shape settles, or here. Most parts settle in 50 to 120 iterations."),
+        P("keep_layers", "Extra solid layers round supports and loads", "", 0, min=0, max=3, adv=True,
+          help="The mesh cells touching a supported or loaded face always stay solid. Add layers to keep more material round them (bolt bosses, load pads)."),
+    ],
+    "needs": ["materials for all parts", "a support that holds the part", "at least one force or pressure"],
+}
+EXPLAIN["topology_optimization"] = (
+    "Topology optimisation: you mark the faces that are held and the faces that carry loads, and choose how much of the part's mass to keep. The optimiser "
+    "removes material where it carries little load and keeps it where it carries a lot, and gives the stiffest shape for that mass. The result is a concept "
+    "shape, not a finished part: it is stiff, but it is not checked for stress. Smooth it, then check it with a Static structural study (stress and safety "
+    "factor). It uses one set of loads, so the shape suits those loads only. Own weight is not included.")
+
+
 def _attach_help():
     for st_name, st in STUDIES.items():
         st.setdefault("explain", EXPLAIN.get(st_name, st.get("description", "")))
@@ -775,6 +807,8 @@ SYMMETRY_BC = {
             "rotors or rotating zones must not cross it.",
 }
 SYMMETRY_HELP = {
+    "topology_optimization": "Acts like a frictionless support on the plane, and the optimiser treats the plane as a mirror: you get half of a symmetric shape, "
+                             "and the shape is smooth across the plane. Enter half of a load that is shared between two halves.",
     "static_structural": "Acts like a frictionless support on the plane: the faces cannot move along the plane "
                          "normal. Own weight must act along the plane.",
     "vibration_modal": "Constrains the movement along the plane normal: only the modes that are symmetric across "

@@ -23,7 +23,7 @@ from .common import ClickLabel, Section, _h, _muted, _Panel, clear_layout
 
 ADD_TEXT = "＋ Add boundary condition…"
 SETTINGS_HEADING = {"external_aero": "Flow condition", "vibration_modal": "Modes and vibration source", "aeroelastic_flutter": "Air flow and modes",
-                    "static_structural": "Loads", "heat_conduction": "Solver settings"}
+                    "static_structural": "Loads", "topology_optimization": "What to keep", "heat_conduction": "Solver settings"}
 
 
 def fmt_time(t: float) -> str:
@@ -547,7 +547,7 @@ class SetupPanel(_Panel):
         if adv and not mode.simple():          # (Simple mode: the essentials only; Expert: shown open, as the web version lists them)
             s = Section("Advanced settings", "setup.advanced", expanded=True)
             s.body.addWidget(_muted("Expert settings: the defaults suit a first run" +
-                                    (" (the solver program, the flow model, numerics)." if st["study"] != "static_structural" else " (the solver program).")))
+                                    (" (the solver program, the flow model, numerics)." if st["study"] not in ("static_structural", "topology_optimization") else (" (limits of the run)." if st["study"] == "topology_optimization" else " (the solver program)."))))
             f = ParamForm(adv, vals, "setup.setting")
             f.changed.connect(self._setting)
             s.body.addWidget(f)

@@ -14,7 +14,7 @@ import scipy.sparse as sp
 
 from .fe import Assembler, unit_stiffness
 
-SUPPORTED = ("fixed_support", "frictionless_support", "symmetry", "displacement", "force", "pressure", "free")
+SUPPORTED = ("fixed_support", "frictionless_support", "symmetry", "force", "pressure", "free")
 
 
 class ProblemError(ValueError):
@@ -42,6 +42,7 @@ class Problem:
     notes: list = field(default_factory=list)
     bc_report: dict = field(default_factory=dict)
     body_id: np.ndarray | None = None
+    mirror_planes: list = field(default_factory=list)   # [(axis, position)] flat symmetry planes of a half model: the filter sees the mirrored part
 
     @property
     def n(self) -> int:
@@ -120,13 +121,19 @@ def build(mesh: dict, body_props: dict, bcs: list, design_bodies=None, keep_laye
     f = np.zeros(ndof)
     fixed: dict = {}
     pen = []
+    planes = []
     passive = np.zeros(N, bool)
     applied = np.zeros(3)
     rep = {}
     n_load = n_support = 0
     for bc in bcs:
         kind = bc.get("type")
-        if kind not in SUPPORTED:
+        if kind == "displacement":
+            vals = [bc.get("params", {}).get(k) for k in ("ux_mm", "uy_mm", "uz_mm")]
+            if any(v not in (None, "") and float(v) != 0.0 for v in vals):
+                raise ProblemError(f"The condition '{bc.get('name', kind)}' moves a face by a given amount. The optimiser makes the part as stiff as possible "
+                                   "against FORCES, so a prescribed movement cannot be used: replace it with a force or a pressure, or use a fixed support (a movement of zero).")
+        if kind not in SUPPORTED and kind != "displacement":
             raise ProblemError(f"The condition '{bc.get('name', kind)}' ({kind}) cannot be used in a topology optimisation: use fixed or frictionless supports, "
                                "displacements, forces and pressures on faces.")
         if kind == "free":
@@ -162,6 +169,11 @@ def build(mesh: dict, body_props: dict, bcs: list, design_bodies=None, keep_laye
             nn /= np.maximum(np.linalg.norm(nn, axis=1), 1e-300)[:, None]
             axis = np.argmax(np.abs(nn), axis=1)
             along = np.abs(nn[np.arange(len(nn)), axis]) > 0.999
+            if along.all() and len(set(axis.tolist())) == 1:                          # (one flat plane across an axis: a symmetry plane for the filter)
+                ax0 = int(axis[0])
+                coord = p[nodes, ax0]
+                if np.ptp(coord) < 1e-6 * max(float(np.ptp(p, axis=0).max()), 1e-30):
+                    planes.append((ax0, float(coord.mean())))
             for nd, k in zip(nodes[along], axis[along]):          # (a plane across an axis: that one displacement is held, exactly)
                 fixed[int(3 * nd + k)] = 0.0
             if (~along).any():                                     # (a tilted or curved face: held by a stiff penalty)
@@ -179,9 +191,9 @@ def build(mesh: dict, body_props: dict, bcs: list, design_bodies=None, keep_laye
             rep[bc.get("name", kind)]["force_N"] = tri_F.sum(axis=0).tolist()
     if not fixed and not pen:
         raise ProblemError("The part is not supported: add a fixed support (or supports that stop it moving freely) before optimising.")
-    if n_load == 0 and not any(v for v in fixed.values()):
+    if n_load == 0:
         raise ProblemError("There is no load: add a force or a pressure on a face. Without a load there is nothing to carry and nothing to optimise.")
-    if np.linalg.norm(f) == 0 and not any(v for v in fixed.values()):
+    if np.linalg.norm(f) == 0:
         raise ProblemError("The loads add up to zero force: check the values of the forces and pressures.")
     for _ in range(int(keep_layers)):
         near = np.isin(t, np.unique(t[passive])).any(axis=1)
@@ -193,4 +205,4 @@ def build(mesh: dict, body_props: dict, bcs: list, design_bodies=None, keep_laye
     fd = np.array(sorted(fixed), np.int64)
     c = p[t].mean(axis=1)
     h = float(np.median((6 * np.sqrt(2) * V) ** (1.0 / 3.0)))
-    return Problem(p, t, V, rho * V, E, Ke, asm, f, fd, np.array([fixed[int(d)] for d in fd]), pen, passive, design, c, h, applied, notes, rep, tv)
+    return Problem(p, t, V, rho * V, E, Ke, asm, f, fd, np.array([fixed[int(d)] for d in fd]), pen, passive, design, c, h, applied, notes, rep, tv, planes)

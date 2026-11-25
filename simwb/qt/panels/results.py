@@ -22,7 +22,7 @@ from ..timebar import TimeBar
 from .common import KPI, ClickLabel, _h, _muted, _Panel, _seg, clear_layout
 from .flowtools import FlowTools
 
-SOLID_STUDIES = ("static_structural", "vibration_modal", "heat_conduction", "aeroelastic_flutter")
+SOLID_STUDIES = ("static_structural", "topology_optimization", "vibration_modal", "heat_conduction", "aeroelastic_flutter")
 
 
 def _item() -> QFrame:
