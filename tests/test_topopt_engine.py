@@ -151,7 +151,7 @@ def test_the_filter_gives_the_same_average_on_a_graded_mesh_and_sees_across_a_sy
     full = benchmarks.box_mesh(L, 2 * W, H, 20, 8, 10, lab)
     full["nodes"][:, 1] -= W                                                         # (the upper half of this mesh IS the half model)
     pbf = build(full, props, bcs)
-    pbh = build(half, props, bcs + [{"name": "Mirror", "type": "frictionless_support", "faces": [3], "params": {}}])
+    pbh = build(half, props, bcs + [{"name": "Mirror", "type": "symmetry", "faces": [3], "params": {}}])
     assert pbh.mirror_planes == [(1, pytest.approx(0.0, abs=1e-12))]
     r = 0.3
     P_full = Optimiser(pbf, Settings(volume_fraction=0.4, radius=r), log=QUIET).P
@@ -177,3 +177,31 @@ def test_a_small_feature_size_is_raised_to_three_element_sizes_and_a_shape_still
     assert opt.radius == pytest.approx(3.4 * pb.h) and any("several per cent" in n for n in opt.notes)
     from simwb.topopt import default_radius
     assert default_radius(pb) >= 4.0 * pb.h
+
+
+def test_a_symmetry_plane_is_a_mirror_not_a_support_and_a_roller_is_not_a_mirror():
+    L, W, H = 2.0, 0.4, 1.0
+    lab = lambda c, n: np.where(c[:, 1] < 1e-9, 3, np.where(c[:, 0] < 1e-9, 1, np.where(c[:, 0] > L - 1e-9, 2, 0)))  # noqa: E731
+    mesh = benchmarks.box_mesh(L, W, H, 20, 4, 10, lab)
+    props = {1: {"E": 1.0, "nu": 0.3, "rho": 1.0}}
+    base = [{"name": "Fixed", "type": "fixed_support", "faces": [1], "params": {}}, {"name": "Load", "type": "force", "faces": [2], "params": {"fz_N": -1.0}}]
+    sym = build(mesh, props, base + [{"name": "Mirror", "type": "symmetry", "faces": [3], "params": {}}])
+    roll = build(mesh, props, base + [{"name": "Roller", "type": "frictionless_support", "faces": [3], "params": {}}])
+    assert len(sym.mirror_planes) == 1 and roll.mirror_planes == []                 # (only the symmetry plane is seen across by the filter)
+    on_plane = sym.centroid[:, 1] < 0.1
+    assert not sym.passive[on_plane & (sym.centroid[:, 0] > 0.3) & (sym.centroid[:, 0] < L - 0.3)].any()   # (no solid layer along the mirror: the shape can open there)
+    assert roll.passive[roll.centroid[:, 1] < 0.1].any()                               # (a roller holds the part: material stays where it holds)
+
+
+def test_a_part_marked_keep_solid_stays_solid_and_counts_in_the_mass():
+    mesh, props, bcs = benchmarks.cantilever(L=2.0, W=0.4, H=1.0, h=0.1, load="patch")
+    mesh["tet_vol"] = np.where(mesh["nodes"][mesh["tets"]].mean(axis=1)[:, 0] > 1.6, 2, 1)       # a second part at the free end (a load pad)
+    props[2] = dict(props[1])
+    pb = build(mesh, props, bcs, design_bodies=[1])
+    pad = mesh["tet_vol"] == 2
+    assert pb.passive[pad].all() and not pb.design[pad].any()
+    res = Optimiser(pb, Settings(volume_fraction=0.5, radius=0.3, max_iter=60), log=QUIET).run()
+    assert (res["density"][pad] == 1.0).all()
+    assert res["mass_fraction"] == pytest.approx(0.5, abs=1e-6)                                   # (the pad's mass is part of the 50 %)
+    with pytest.raises(ProblemError, match="kept solid"):
+        Optimiser(build(mesh, props, bcs, design_bodies=[1]), Settings(volume_fraction=0.1, radius=0.3), log=QUIET)

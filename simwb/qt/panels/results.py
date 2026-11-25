@@ -821,6 +821,95 @@ class ResultsPanel(_Panel):
             self.refresh(st)
         return v
 
+    # ------------------------------------------------------------------ topology optimisation
+    @staticmethod
+    def _wrapped(text):
+        lab = _muted(text)
+        lab.setWordWrap(True)
+        return lab
+
+    def _topopt_tiles(self, lay, st, s):
+        """The headline in plain words and the four numbers that matter: mass kept, stiffness kept, the smallest feature, how the run ended."""
+        t = s.get("topopt") or {}
+        if getattr(self, "_topo_pid", None) != self.engine.pid:           # (a density is shown by colour and is meant to be read as material: viridis, not the rainbow)
+            self._topo_pid = self.engine.pid
+            self.cmap.blockSignals(True)
+            self.cmap.setCurrentText("viridis")
+            self.cmap.blockSignals(False)
+            for box in (self.minmax,):                                     # (the lowest and highest density are labelled on the model by default: meaningless for a density)
+                box.blockSignals(True)
+                box.setChecked(False)
+                box.blockSignals(False)
+        g = lambda kg: fmt_num(round(kg * 1000, 1)) + " g"          # noqa: E731
+        kept, stiff = t.get("mass_fraction") or 0.0, t.get("stiffness_kept") or 0.0
+        lay.addWidget(wid(_note(f"This shape keeps {100 * kept:.0f} % of the mass ({g(t.get('mass_kg_kept') or 0)} of {g(t.get('mass_kg_solid') or 0)}) and "
+                                f"{100 * stiff:.0f} % of the stiffness of the solid part. It is the stiffest shape this mass allows for the loads you set.", "ok"),
+                          "results.topopt.headline"))
+        ratio = (t.get("radius_mm") or 0) / max(t.get("element_size_mm") or 1e-9, 1e-9)
+        end = ("settled" if t.get("converged") else "stopped by you: usable" if t.get("stopped") else "limit reached: may still change")
+        return [("Mass kept", f"{100 * kept:.0f}", "%", "", f"{g(t.get('mass_kg_kept') or 0)} of {g(t.get('mass_kg_solid') or 0)}", "Density"),
+                ("Stiffness kept", f"{100 * stiff:.0f}", "%", "", "of the solid part", "Strain energy density"),
+                ("Smallest feature", fmt_num(round(t.get("radius_mm") or 0, 1)), "mm", "ok" if ratio >= 4 else "warn", f"{ratio:.1f} mesh cells wide" + ("" if ratio >= 4 else ": a finer mesh is more exact"), None),
+                ("Iterations", str(t.get("iterations", "")), "", "ok" if t.get("converged") else "warn", end, None)]
+
+    def _topopt_extras(self, lay, st, s):
+        """Under the numbers: the threshold that decides which material is shown, what the colours mean, the history of the run, and what to do next."""
+        from ..charts import XYChart
+        t = s.get("topopt") or {}
+        lay.addWidget(_h("Show the shape"))
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Show material denser than"))
+        sl = wid(QSlider(Qt.Horizontal), "results.topopt.threshold")
+        sl.setRange(5, 95)
+        sl.setSingleStep(5)
+        sl.setValue(int(round(self.engine.topopt_threshold() * 100)))
+        sl.setToolTip("Every element has a density from 0 (empty) to 1 (solid). Elements below this value are left out of the picture. 50 % is the usual choice; "
+                      "a lower value shows more material and a higher one less.")
+        row.addWidget(sl, 1)
+        val = wid(QLabel(""), "results.topopt.threshold.value")
+        row.addWidget(val)
+        lay.addLayout(row)
+        shown = wid(_muted(""), "results.topopt.threshold.text")
+        shown.setWordWrap(True)
+        lay.addWidget(shown)
+
+        def update(v=None):
+            if v is not None:
+                self.engine.set_topopt_threshold(v / 100.0)
+            val.setText(f"{self.engine.topopt_threshold() * 100:.0f} %")
+            try:
+                sh = self.engine.topopt_shown()
+                shown.setText(f"At this threshold the picture holds {100 * sh['share']:.0f} % of the part's volume ({fmt_num(round(sh['kg'] * 1000, 1))} g). "
+                              f"The run was set to keep {100 * (t.get('mass_target') or 0):.0f} %; the sharp shape at 50 % holds {100 * (t.get('mass_fraction_threshold') or 0):.0f} %.")
+            except Exception:  # noqa: BLE001
+                shown.setText("")
+            if v is not None:
+                self._display_changed()
+        sl.valueChanged.connect(update)
+        update()
+        lay.addWidget(self._wrapped("Colours show the density: 0 is empty and 1 is solid. In-between values are material the optimiser could not decide on; "
+                             f"{100 * (t.get('grey_fraction') or 0):.0f} % of the changeable material is in between here."))
+        hist = t.get("history") or []
+        if hist:
+            lay.addWidget(_h("Stiffness and mass during the run"))
+            ch = XYChart()
+            ch.setMinimumHeight(170)
+            c_full = t.get("compliance_solid")
+            ch.set_data([{"name": "Stiffness kept (%)", "x": [h["iteration"] for h in hist], "y": [100.0 * c_full / h["compliance"] if h["compliance"] > 0 else float("nan") for h in hist]},
+                         {"name": "Mass (%)", "x": [h["iteration"] for h in hist], "y": [100.0 * h["mass_fraction"] for h in hist]},
+                         {"name": "Sharpness (%)", "x": [h["iteration"] for h in hist], "y": [100.0 * (1 - h["grey"]) for h in hist]}],
+                        xunit="iteration", yunit="%", ylim=(0, 105), legend=True)
+            lay.addWidget(wid(ch, "results.topopt.chart"))
+        gap = t.get("linear_vs_quadratic")
+        if gap is not None:
+            lay.addWidget(self._wrapped(f"On this mesh the optimiser's linear elements read {abs(gap) * 100:.0f} % {'stiffer' if gap < 0 else 'softer'} than the quadratic ones of the Static structural study. "
+                                 "'Stiffness kept' compares the optimised part with the solid part in the same model, so the two errors largely cancel; absolute deflections need the static study."))
+        lay.addWidget(_h("What to do next"))
+        lay.addWidget(wid(_note("This is a concept shape, not a finished part. It is the stiffest for the one set of loads you gave, and its stress has not been checked.<br>"
+                                "1. Move the slider to see how sensitive it is. 2. Re-run with a larger smallest feature size for a simpler, sturdier shape, or a different mass to keep. "
+                                "3. Rebuild the shape in CAD (or smooth it), then check stress and safety factor with a Static structural study with the same supports and loads.", "", True),
+                          "results.topopt.next"))
+
     def _tiles(self, lay, tiles):
         grid = QWidget()
         g = QGridLayout(grid)
@@ -961,7 +1050,9 @@ class ResultsPanel(_Panel):
             lay.addWidget(wid(_note(f"{'Quick-look' if preset == 'quick' else 'Coarse'} mesh: indicative only. {measured}", "warn"), "results.coarse_note"))
         tiles, extra = [], []
         lim = self.tlimit()
-        if "max_von_mises_MPa" in s:
+        if study == "topology_optimization":
+            tiles = self._topopt_tiles(lay, st, s)
+        elif "max_von_mises_MPa" in s:
             sf = s.get("min_safety_factor")
             tiles = [("Max von Mises stress", f"{s['max_von_mises_MPa']:.1f}", "MPa", "", "", "Von Mises stress"),
                      ("Max deformation", fmt_num(round(s.get("max_displacement_mm", 0), 4)), "mm", "", "", "Total deformation")]
@@ -1048,6 +1139,8 @@ class ResultsPanel(_Panel):
                 if isinstance(val, (int, float)) and not isinstance(val, bool):
                     tiles.append((k.replace("_", " ").capitalize(), fmt_num(val), "", "", "", None))
         self._tiles(lay, tiles)
+        if study == "topology_optimization":
+            self._topopt_extras(lay, st, s)
         # ---- what each study adds under its tiles
         if study == "vibration_modal" or (study != "aeroelastic_flutter" and s.get("modes")):
             self._modal(lay, s)

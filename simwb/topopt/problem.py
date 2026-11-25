@@ -146,7 +146,8 @@ def build(mesh: dict, body_props: dict, bcs: list, design_bodies=None, keep_laye
         n_hat, A = _tri_geometry(p, t, tr, own[sel])
         nodes = np.unique(tr.ravel())
         prm = bc.get("params") or {}
-        passive[own[sel]] = True
+        if kind != "symmetry":                                    # (material is kept where the part is held or loaded; a mirror plane is neither)
+            passive[own[sel]] = True
         rep[bc.get("name", kind)] = {"type": kind, "area_m2": float(A.sum())}
         if kind == "fixed_support":
             n_support += 1
@@ -169,7 +170,7 @@ def build(mesh: dict, body_props: dict, bcs: list, design_bodies=None, keep_laye
             nn /= np.maximum(np.linalg.norm(nn, axis=1), 1e-300)[:, None]
             axis = np.argmax(np.abs(nn), axis=1)
             along = np.abs(nn[np.arange(len(nn)), axis]) > 0.999
-            if along.all() and len(set(axis.tolist())) == 1:                          # (one flat plane across an axis: a symmetry plane for the filter)
+            if kind == "symmetry" and along.all() and len(set(axis.tolist())) == 1:  # (the project's symmetry plane: the filter sees the mirror image; a roller is not a mirror)
                 ax0 = int(axis[0])
                 coord = p[nodes, ax0]
                 if np.ptp(coord) < 1e-6 * max(float(np.ptp(p, axis=0).max()), 1e-30):
@@ -200,6 +201,7 @@ def build(mesh: dict, body_props: dict, bcs: list, design_bodies=None, keep_laye
         passive |= near
     design = np.isin(tv, [int(b) for b in design_bodies]) if design_bodies is not None else np.ones(N, bool)
     design &= ~passive
+    passive = ~design                                                    # (kept solid: round the supports and loads, and every part marked 'keep solid')
     if not design.any():
         raise ProblemError("Nothing is left to optimise: the supports and loaded faces fill the whole design space. Choose a part that is bigger than its supports.")
     fd = np.array(sorted(fixed), np.int64)

@@ -18,7 +18,7 @@ how_to_use_this_file_with_an_llm: >
 | What it is | A desktop application: import CAD, mark faces, mesh, solve, look at results. Like Ansys Workbench, but small. |
 | Runs where | On your own computer, in its own window. Nothing is uploaded. |
 | Input | STEP (preferred), STL or OBJ files. |
-| Studies | Heat transfer in solids, Static structural, Vibration (modal), Electronics cooling (CFD), External aerodynamics (CFD). |
+| Studies | Heat transfer in solids, Static structural, Topology optimisation, Vibration (modal), Electronics cooling (CFD), External aerodynamics (CFD). |
 | Solvers | Built-in finite-element solvers (no install) and OpenFOAM (installed automatically on Windows). |
 | Workflow | **Geometry -> Setup -> Mesh -> Solve -> Results** (the five steps along the top bar). |
 | Assistant | A Claude chat panel on the right can do the setup for you. It needs a Claude login. |
@@ -185,6 +185,7 @@ the library: two tabs, *Solids (parts)* and *Fluids (liquids and gases)*, with t
 |---|---|---|
 | Heat transfer in solids | Fixed temperature, Convection, Radiation + convection, Natural convection + radiation (still air), Heat flux, Heat load | Insulated |
 | Static structural | Fixed support, Frictionless support, Displacement, Force, Pressure | Free |
+| Topology optimisation | Fixed support, Frictionless support, Force, Pressure (and symmetry planes) | Free |
 | Vibration (modal) | Fixed support, Added mass | Free |
 | Electronics cooling (CFD) | Velocity inlet, Pressure outlet, Slip wall, Wall with fixed temperature, Wall with convection | Adiabatic wall (air box sides: slip) |
 | External aerodynamics (CFD) | Wall, Slip wall, Symmetry, Moving wall | Wall (no-slip) |
@@ -197,6 +198,7 @@ Heat sources are set on parts (body settings), not on faces, in the heat and coo
 |---|---|
 | Heat transfer in solids | Analysis (steady/transient), End time, Time step, Start temperature, Number of saved frames |
 | Static structural | Gravity |
+| Topology optimisation | Mass to keep, Smallest feature size, Most iterations, Extra solid layers round supports and loads (and per part: In the design space / keep solid) |
 | Vibration (modal) | Number of modes, Excitation frequency range (modes within 15 % of the range are flagged) |
 | Electronics cooling | Air flow (forced/natural), Room temperature, Radiation between surfaces, Emissivity, Fluid, Flow model, Contact resistance, Gravity, Analysis, End time, Time step, Iterations, CPU cores |
 | External aerodynamics | Fluid, Flow model, Flow speed (m/s, below about 100), Forward axis, Up axis, Pitch angle (nose down +), Sideslip angle, Vehicle mass, Rotor drag coefficient k, Auto trim, Moment point offsets, Reference area, Reference length, Turbulence intensity, Analysis, End time, Time step, Iterations, CPU cores |
@@ -925,6 +927,37 @@ corner matters.
 
 Stress is averaged at the nodes within each part only. Where two parts of different material touch, each part
 shows its own stress (the stress jumps there in reality).
+
+
+## Topology optimisation: the stiffest shape for the mass you choose
+
+**What it does.** You say which faces are held and which carry loads, and how much of the part's mass to keep (30 % is a good first try). The optimiser takes material away where it carries little load and keeps it where it carries a lot. You get the stiffest shape that weighs that much (the same shape is also the lightest one for that stiffness). It is a starting point for a design, not a finished part.
+
+**How to use it.**
+1. Start a **Topology optimisation** study and import the part (the bundled bracket works).
+2. In **Setup** put a **Fixed support** (or frictionless support) on the held faces and a **Force** or **Pressure** on the loaded faces. The material next to them always stays. A part that must not change (a bolt, a pad) is set to **In the design space: keep solid** in its card.
+3. Choose **Mass to keep**. **Smallest feature size** 0 means automatic: 4 % of the part's size and never less than four mesh cells. A larger value gives a simpler, sturdier shape; a smaller one needs a finer mesh.
+4. **Mesh** as usual. Medium gives members a few cells wide; a finer mesh gives finer detail, not a different shape.
+5. **Solve** (**Find the shape**). Before it starts the step says what it will need (elements, memory) and refuses, with the reason, a run that cannot work: no support, no load, a mesh too large for the free memory, a target below the material that is kept solid. While it runs the shape draws itself in the 3D view every second or so, a chart shows the stiffness kept, the mass and the sharpness, and **Stop and keep this shape** ends the run at any time with the shape found so far. Most runs settle in 50 to 120 iterations.
+6. **Results** says in words what was kept: "This shape keeps 35 % of the mass and 70 % of the stiffness of the solid part". The slider **Show material denser than** decides which material the picture shows (50 % is the usual choice); colours are the density, 0 empty and 1 solid. The sections and cuts of the Results step work on the shape.
+
+**Reading the numbers.**
+
+| Number | Meaning |
+|---|---|
+| Mass kept | The share of the part's mass in the shape. It equals your target; the sharp shape at 50 % is close to it. |
+| Stiffness kept | How stiff the shape is against the solid part under the same loads. 100 % would be as stiff as solid. |
+| Smallest feature | The thinnest member allowed, in mm and in mesh cells. Below four cells the stiffness figure can change by several per cent with the mesh. |
+| Sharpness | The share of the changeable material that is solid or empty (not grey). Grey material is something the optimiser could not decide; the slider decides how to show it. |
+
+**What to keep in mind.**
+- **It is a concept shape.** It is the stiffest for the one set of loads you gave; stress is not checked and a sharp corner can still be overstressed. Rebuild or smooth it in CAD, then check it with a **Static structural** study with the same supports and loads.
+- **One load case.** The shape suits those loads only; the setup warns when only one load is set. Several load cases are not available yet.
+- **Own weight is not included** (it changes with the shape).
+- **Prescribed displacements are refused**: the stiffness objective is defined for forces. Use a force or a pressure.
+- **Linear tetrahedra** keep each iteration fast; they read stiffer than the quadratic ones of the Static structural study, especially on thin parts. After the run the solid part is solved again with the quadratic elements and the difference is shown in the results.
+- **Symmetry.** Use a symmetry plane (Setup) to optimise half of a symmetric part: the optimiser treats the plane as a mirror and the shape is smooth across it. A whole symmetric 3D model is not forced to stay symmetric.
+- **Vibration is not optimised.** A stiffer shape at the same mass often has higher natural frequencies, but nothing here controls them: check the result with a Vibration (modal) study.
 
 
 ## Flutter (multiphysics: structure + air)

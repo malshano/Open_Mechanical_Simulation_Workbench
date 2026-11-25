@@ -77,42 +77,53 @@ def _proj(x, beta, eta=0.5):
     return (a + t) / (a + b), beta * (1 - t * t) / (a + b)
 
 
+def preflight(pb: Problem, s: Settings) -> dict:
+    """Everything that can be refused or noted before a run, without building the filter: the share of the mass to keep, the smallest feature size
+    against the mesh, the size of the problem against the memory that is free, the material kept solid round supports and loads.
+    Returns {"radius", "estimate", "notes", "kept_solid_share"}; raises ProblemError with what to change."""
+    if not 0.02 <= s.volume_fraction < 1.0:
+        raise ProblemError("The mass to keep must be between 2 % and 99 % of the part.")
+    notes = list(pb.notes)
+    r = s.radius if s.radius else default_radius(pb)
+    if r < MIN_CELLS * pb.h:
+        notes.append(f"The smallest feature size ({r * 1e3:.2g} mm) is below {MIN_CELLS:g} element sizes, so it was raised to {MIN_CELLS * pb.h * 1e3:.2g} mm: a member "
+                     "must be several cells wide, or the shape and its stiffness depend on the mesh. Use a finer mesh for finer members.")
+        r = MIN_CELLS * pb.h
+    elif r < GOOD_CELLS * pb.h:
+        notes.append(f"The smallest feature size is {r / pb.h:.1f} element sizes. It works, but the stiffness figure can still change by several per cent with the mesh; "
+                     f"{GOOD_CELLS:g} or more element sizes ({GOOD_CELLS * pb.h * 1e3:.2g} mm) makes it mesh-independent.")
+    est = estimate(pb, r)
+    if est["unknowns"] > est["dof_limit"]:
+        raise ProblemError(f"The mesh gives {est['unknowns']:,} unknowns (limit {est['dof_limit']:,}"
+                           + ("" if est["dof_limit"] == MAX_DOF else "; 400,000 with the optional 'pypardiso' package") + "). Use a coarser mesh for the optimisation.")
+    if est["filter_pairs"] > MAX_PAIRS:
+        raise ProblemError(f"The smallest feature size ({r * 1e3:.3g} mm) is large for a mesh with {pb.n:,} elements ({est['filter_pairs'] / 1e6:.0f} million filter links). "
+                           "Reduce the feature size or use a coarser mesh.")
+    if est["memory_bytes"] > 0.6 * est["free_bytes"]:
+        raise ProblemError(f"This run needs about {est['memory_bytes'] / 2 ** 30:.1f} GB and only {est['free_bytes'] / 2 ** 30:.1f} GB is free: use a coarser mesh, "
+                           "a larger smallest feature size, or close other programs.")
+    total = float(pb.weight.sum())
+    kept = float(pb.weight[~pb.design].sum()) / total
+    if kept >= s.volume_fraction:
+        raise ProblemError(f"The material kept solid (round the supports and loads, and the parts you marked 'keep solid') already weighs {100 * kept:.0f} % of the part, which is "
+                           f"more than the {100 * s.volume_fraction:.0f} % to keep. Ask for more, load and support smaller faces, or let more parts change.")
+    return {"radius": r, "estimate": est, "notes": notes, "kept_solid_share": kept}
+
+
 class Optimiser:
     def __init__(self, problem: Problem, settings: Settings | None = None, log=print):
         self.pb, self.s, self.log = problem, settings or Settings(), log
         s, pb = self.s, problem
-        if not 0.02 <= s.volume_fraction < 1.0:
-            raise ProblemError("The mass to keep must be between 2 % and 99 % of the part.")
-        self.notes = list(pb.notes)
-        r = s.radius if s.radius else default_radius(pb)
-        if r < MIN_CELLS * pb.h:
-            self.notes.append(f"The smallest feature size ({r * 1e3:.2g} mm) is below {MIN_CELLS:g} element sizes, so it was raised to {MIN_CELLS * pb.h * 1e3:.2g} mm: a member "
-                              "must be several cells wide, or the shape and its stiffness depend on the mesh. Use a finer mesh for finer members.")
-            r = MIN_CELLS * pb.h
-        elif r < GOOD_CELLS * pb.h:
-            self.notes.append(f"The smallest feature size is {r / pb.h:.1f} element sizes. It works, but the stiffness figure can still change by several per cent with the mesh; "
-                              f"{GOOD_CELLS:g} or more element sizes ({GOOD_CELLS * pb.h * 1e3:.2g} mm) makes it mesh-independent.")
-        self.radius = r
-        est = estimate(pb, r)
-        self.estimate = est
-        if est["unknowns"] > est["dof_limit"]:
-            raise ProblemError(f"The mesh gives {est['unknowns']:,} unknowns (limit {est['dof_limit']:,}"
-                               + ("" if est["dof_limit"] == MAX_DOF else "; 400,000 with the optional 'pypardiso' package") + "). Use a coarser mesh for the optimisation.")
-        if est["filter_pairs"] > MAX_PAIRS:
-            raise ProblemError(f"The minimum member size ({r * 1e3:.3g} mm) is large for a mesh with {pb.n:,} elements ({est['filter_pairs'] / 1e6:.0f} million filter links). "
-                               "Reduce the member size or use a coarser mesh.")
-        if est["memory_bytes"] > 0.6 * est["free_bytes"]:
-            raise ProblemError(f"This run needs about {est['memory_bytes'] / 2 ** 30:.1f} GB and only {est['free_bytes'] / 2 ** 30:.1f} GB is free: use a coarser mesh, "
-                               "a larger minimum member size, or close other programs.")
+        info = preflight(pb, s)
+        self.notes = info["notes"]
+        r = self.radius = info["radius"]
+        self.estimate = info["estimate"]
         self.P = self._filter(r)
         self.PT = self.P.T.tocsr()
         w = pb.weight
         self.m_total = float(w.sum())
         self.m_target = s.volume_fraction * self.m_total
-        self.m_passive = float(w[pb.passive].sum())
-        if self.m_passive >= self.m_target:
-            raise ProblemError(f"The elements kept solid round the supports and loads already weigh {100 * self.m_passive / self.m_total:.0f} % of the part, which is "
-                               f"more than the {100 * s.volume_fraction:.0f} % to keep. Ask for more, or load and support smaller faces.")
+        self.m_passive = float(w[~pb.design].sum())
         self.free = np.ones(pb.ndof, bool)
         self.free[pb.fixed] = False
         K1 = pb.asm.matrix(pb.Ke * pb.E0[:, None])

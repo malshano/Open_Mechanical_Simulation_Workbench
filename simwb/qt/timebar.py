@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QPushButton, QSlid
 
 from .exports import fmt_time
 from .ids import wid
-from .panels.common import _muted
+from .panels.common import FlowLayout, _muted
 
 
 class TimeBar(QWidget):
@@ -51,13 +51,12 @@ class TimeBar(QWidget):
         self.rec.setObjectName("ghostBorder")
         self.rec.clicked.connect(lambda _=False: self.recordRequested.emit())
         self.kind = QLabel("")
-        row.addWidget(self.kind)
-        row.addStretch(1)
-        row.addWidget(QLabel("Video"))
-        row.addWidget(self.fps)
-        row.addWidget(self.orbit)
-        row.addWidget(self.rec)
-        v.addLayout(row)
+        holder = QWidget()                              # (wraps: a row that cannot shrink made the whole Results panel wider than its dock, and its right edge was cut off)
+        flow = FlowLayout(holder, 6, 4)
+        flow.setContentsMargins(0, 0, 0, 0)
+        for w in (self.kind, QLabel("Video"), self.fps, self.orbit, self.rec):
+            flow.addWidget(w)
+        v.addWidget(holder)
         self.note = wid(_muted(""), "results.time.note")
         v.addWidget(self.note)
         self._timer = QTimer(self)

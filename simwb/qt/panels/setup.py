@@ -287,7 +287,7 @@ class SetupPanel(_Panel):
                     v.addWidget(ok, 0, Qt.AlignLeft)
                 params = spec.get("body_params") or []
                 if params:
-                    f = ParamForm(params, {"heat_W": b.get("heat_W", 0.0)}, f"setup.body.{b['id']}.param")
+                    f = ParamForm(params, {"heat_W": b.get("heat_W", 0.0), "optimise": b.get("optimise", "yes")}, f"setup.body.{b['id']}.param")
                     f.changed.connect(lambda k, val, bid=b["id"]: self._body_param(bid, k, val))
                     v.addWidget(f)
             self.holder.addWidget(card)

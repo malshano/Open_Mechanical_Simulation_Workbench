@@ -648,7 +648,7 @@ class Project:
             "id": b["id"], "name": cfg.get("name") or b["name"], "role": b["role"],
             "material": mat, "material_label": (materials.SOLIDS.get(mat) or {}).get("label"),
             "material_is_default": bool(cfg.get("material_is_default")),
-            "heat_W": cfg.get("heat_W", 0.0), "volume_cm3": b["volume"] * 1e6, "bbox": b["bbox"],
+            "heat_W": cfg.get("heat_W", 0.0), "optimise": cfg.get("optimise", "yes"), "volume_cm3": b["volume"] * 1e6, "bbox": b["bbox"],
             "centroid": b["centroid"],
         }
 
@@ -662,7 +662,7 @@ class Project:
             for b in s["body_list"]:
                 bb = b["bbox"]
                 size = [round((bb[i + 3] - bb[i]) * 1000, 1) for i in range(3)]
-                extra = (f" material={b['material']}" + (f" heat={b['heat_W']} W" if self.spec["body_params"] else "")
+                extra = (f" material={b['material']}" + (f" heat={b['heat_W']} W" if any(q["key"] == "heat_W" for q in self.spec["body_params"]) else "")
                          if b["role"] == "solid" else "")
                 lines.append(f"  - id {b['id']} '{b['name']}' role={b['role']} size(mm)={size}{extra}")
         if self.study == "external_aero" and self.parts():  # (a flow study's bodies are the air; the solids are its parts)
@@ -1841,7 +1841,7 @@ class Project:
         self.save()
 
     def set_body(self, body_id: int, material: str | None = None, heat_W: float | None = None,
-                 name: str | None = None):
+                 name: str | None = None, optimise: str | None = None):
         b = next((b for b in self.bodies() if b["id"] == int(body_id)), None)
         if b is None:
             raise ValueError(f"No body with id {body_id}")
@@ -1859,6 +1859,10 @@ class Project:
             cfg["heat_W"] = q
         if name:
             cfg["name"] = name
+        if optimise is not None:
+            if optimise not in ("yes", "keep solid"):
+                raise ValueError("A part is either in the design space ('yes') or kept solid ('keep solid')")
+            cfg["optimise"] = optimise
         self.mark_stale(("solve",))
         self.save()
         return self._body_view(b)
@@ -4154,7 +4158,7 @@ class Project:
         live = job.extra.setdefault("topopt", {"history": [], "density": None, "iteration": 0, "max_iter": cfg.max_iter})
         try:
             JOBS.update(job, 0.02, "Setting up the optimisation")
-            pb = tprob.build(m, props, self.data["bcs"], keep_layers=int(s.get("keep_layers") or 0), gravity=None,
+            pb = tprob.build(m, props, self.data["bcs"], design_bodies=self._design_bodies(), keep_layers=int(s.get("keep_layers") or 0), gravity=None,
                              log=lambda msg: JOBS.update(job, None, msg, log=msg))
             opt = tsimp.Optimiser(pb, cfg, log=lambda msg: JOBS.update(job, None, msg, log=msg) if not msg.startswith("iteration") else None)
             live["radius_mm"] = opt.radius * 1e3
@@ -4169,8 +4173,10 @@ class Project:
                 live["c_full"] = getattr(opt, "c_full", None)
                 n, per = rec["iteration"], rec["seconds"] / max(rec["iteration"], 1)
                 kept = (opt.c_full / rec["compliance"]) if getattr(opt, "c_full", None) and rec["compliance"] > 0 else None
-                left = max(cfg.max_iter - n, 0) * per
-                JOBS.update(job, 0.05 + 0.85 * min(n / cfg.max_iter, 1.0),
+                left = max(min(cfg.max_iter, max(90, int(n * 1.4))) - n, 0) * per          # (most runs settle in 50 to 120 iterations: not every iteration is used)
+                same = sum(1 for h in live["history"] if h["beta"] == rec["beta"])         # (progress by the four stages of sharpening, not by the iteration limit that is rarely reached)
+                frac = (math.log2(max(rec["beta"], 1.0)) + min(same / max(cfg.stage_iters, 1), 1.0)) / 4.0
+                JOBS.update(job, 0.05 + 0.85 * min(frac, 0.99),
                             f"Iteration {n}: " + (f"{100 * kept:.0f} % of the stiffness kept, " if kept else "") + f"{100 * rec['mass_fraction']:.0f} % of the mass"
                             + (f" (up to {left / 60:.1f} min left)" if left > 90 else ""))
             res = opt.run(on_iter=on_iter, should_stop=lambda: bool(job.extra.get("user_stop")))
@@ -4224,6 +4230,44 @@ class Project:
         self.data["solve"] = {"status": "done", "backend": "builtin", "finished": _now(), "summary": rep}
         self.save()
         return rep
+
+    def _design_bodies(self) -> list:
+        """The ids of the parts the optimiser may change (those not marked 'keep solid')."""
+        ids = [b["id"] for b in self.bodies() if b["role"] == "solid" and (self.data["bodies"].get(str(b["id"])) or {}).get("optimise", "yes") != "keep solid"]
+        if not ids:
+            raise ValueError("Every part is marked 'keep solid': nothing is left for the optimiser to change. Set at least one part to 'In the design space: yes' in Setup.")
+        return ids
+
+    def topopt_preflight(self) -> dict:
+        """Before Solve: whether the optimisation can start on this mesh, and what it will need. {ok, message, notes, radius_mm, estimate, kept_solid_share}
+        (checked on the stored mesh; kept until the mesh, the conditions or the settings change)."""
+        mp = self.mesh_dir / "mesh.npz"
+        if not mp.exists() or self.data["mesh"].get("status") not in ("ready", "stale"):
+            return {"ok": None, "message": "Generate the mesh first: the checks of size and memory are made on it."}
+        key = (mp.stat().st_mtime_ns, json.dumps([self.data["settings"], self.data["bcs"], self.data["bodies"]], sort_keys=True, default=str))
+        if getattr(self, "_topo_pf", (None,))[0] == key:
+            return self._topo_pf[1]
+        from .topopt import problem as tprob
+        from .topopt import simp as tsimp
+
+        s = self.data["settings"]
+        member = float(s.get("member_mm") or 0.0)
+        cfg = tsimp.Settings(volume_fraction=float(s.get("mass_percent") or 30.0) / 100.0, radius=member / 1000.0 if member > 0 else None,
+                             max_iter=int(s.get("max_iterations") or 200))
+        try:
+            props = {}
+            for b in self.bodies():
+                bc = self.data["bodies"].get(str(b["id"]), {})
+                mat = materials.get_solid(bc.get("material") or "aluminium_6061")
+                props[b["id"]] = {"E": mat["E"], "nu": mat["nu"], "rho": mat["rho"], "name": bc.get("name") or b["name"]}
+            pb = tprob.build(self.load_mesh(), props, self.data["bcs"], design_bodies=self._design_bodies(), keep_layers=int(s.get("keep_layers") or 0), log=lambda *_: None)
+            info = tsimp.preflight(pb, cfg)
+            out = {"ok": True, "message": "", "notes": info["notes"], "radius_mm": info["radius"] * 1e3, "element_mm": pb.h * 1e3,
+                   "estimate": info["estimate"], "kept_solid_share": info["kept_solid_share"]}
+        except (tprob.ProblemError, ValueError) as e:
+            out = {"ok": False, "message": str(e)}
+        self._topo_pf = (key, out)
+        return out
 
     def topopt_live(self) -> dict | None:
         """What the running (or last) optimisation has so far: {iteration, max_iter, history, density (per element, or None), radius_mm, c_full}."""

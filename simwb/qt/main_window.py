@@ -742,6 +742,8 @@ class MainWindow(QMainWindow):
                         self._draw_flow_tools(r, info)
                         return
                     rng = r["range"]
+                    if rng is None and st["study"] == "topology_optimization" and r["field"] == "Density":
+                        rng = (0.0, 1.0)              # (0 is empty and 1 is solid, whatever part of the range is shown)
                     if rng is None and flow and info.get("p99", 0) > info.get("p01", 0):   # (the extremes of a flow sit at one wall point: the colours use the range of nearly all of it)
                         rng = (info["p01"], info["p99"])
                     self.view.show_geometry(False)
@@ -755,6 +757,18 @@ class MainWindow(QMainWindow):
                     else:
                         self._fit_once((self.engine.pid, "results"), "iso" if flow else None)
                     self.panels["results"].draw_marks()
+                    return
+            if self.step == "solve" and st["study"] == "topology_optimization":
+                p = self.engine.topopt_live_payload()
+                if not p and st["solve"].get("status") == "done":      # (a study opened again: the saved shape)
+                    try:
+                        p = self.engine.result_surface("Density")
+                    except Exception:  # noqa: BLE001
+                        p = None
+                if p:                             # (the shape found so far, drawn again every second or so while the run goes on)
+                    self.view.show_geometry(False)
+                    self.view.show_surface(p, name="Density", unit="", cmap="viridis", vrange=(0.0, 1.0))
+                    self._fit_once((self.engine.pid, "solve-topopt"))
                     return
             self.view.clear_overlay()
             try:                                  # (the geometry is rebuilt in place by a turn, a move or a CAD edit: the file it is drawn from changes)

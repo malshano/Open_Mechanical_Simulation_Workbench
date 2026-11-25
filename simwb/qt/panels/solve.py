@@ -211,6 +211,23 @@ class SolvePanel(_Panel):
         self.chart = wid(J.ResidualChart(), "solve.residuals.chart")
         self.chart.setVisible(False)
         self.v.addWidget(self.chart)
+        # ---- topology optimisation: what the run needs, how it is going
+        self.topo = False
+        self._live_t = 0.0
+        self.topnote = wid(QLabel(""), "solve.topopt.preflight")
+        self.topnote.setWordWrap(True)
+        self.topnote.setTextFormat(Qt.RichText)
+        self.v.addWidget(self.topnote)
+        self.topinfo = wid(_muted(""), "solve.topopt.live")
+        self.topinfo.setWordWrap(True)
+        self.v.addWidget(self.topinfo)
+        from ..charts import XYChart
+        self.topchart = wid(XYChart(), "solve.topopt.chart")
+        self.topchart.setMinimumHeight(170)
+        self.topchart.setToolTip("How the stiffness kept and the mass change as the optimiser works. The mass settles at your target at once; the stiffness kept "
+                                 "rises as the shape finds its load paths. 'Sharpness' is the share of the material that is solid or empty (not grey).")
+        self.topchart.setVisible(False)
+        self.v.addWidget(self.topchart)
         self.v.addWidget(_h("Solver"))                       # (below the run, its progress and its state: the run leads the step)
         self.v.addLayout(self.solver_box)
         self.v.addWidget(self._sw_block)
@@ -447,6 +464,8 @@ class SolvePanel(_Panel):
             self.resid.setText(J.latest_residuals(res))
             self.chart.set_data(res)
         self.running = status == "running"
+        if self.topo:
+            self._topo_live(job)
         self._buttons()
 
     # ------------------------------------------------------------------ what the panel shows
@@ -505,10 +524,71 @@ class SolvePanel(_Panel):
         self.blockers = [c["message"] for c in (st.get("checks") or []) if c.get("level") == "error"]
         self.done = s == "done"
         self.st = st
+        self.topo = st["study"] == "topology_optimization"
+        if self.topo:
+            self._topo_refresh(st)
+        else:
+            self.topchart.setVisible(False)
+            self.topnote.setVisible(False)
+            self.topinfo.setVisible(False)
         self._options(st)
         self._software()
         self._advanced(st)
         self._buttons()
+
+    # ------------------------------------------------------------------ topology optimisation
+    def _topo_series(self, hist, c_full):
+        its = [h["iteration"] for h in hist]
+        kept = [100.0 * c_full / h["compliance"] if c_full and h["compliance"] > 0 else float("nan") for h in hist]
+        return [{"name": "Stiffness kept (%)", "x": its, "y": kept},
+                {"name": "Mass (%)", "x": its, "y": [100.0 * h["mass_fraction"] for h in hist]},
+                {"name": "Sharpness (%)", "x": its, "y": [100.0 * (1.0 - h["grey"]) for h in hist]}]
+
+    def _topo_live(self, job):
+        """A progress event of the optimisation: the line, the chart, and (about once a second) the shape in the 3D view."""
+        import time
+        live = (job.extra or {}).get("topopt") if job is not None else None
+        if not live or not live.get("history"):
+            return
+        h = live["history"]
+        kept = 100.0 * live["c_full"] / h[-1]["compliance"] if live.get("c_full") and h[-1]["compliance"] > 0 else None
+        self.topinfo.setText(f"The shape is {100 * (1 - h[-1]['grey']):.0f} % sharp (solid or empty) and gets sharper as it settles. Stop keeps the shape as it is now.")
+        self.topinfo.setVisible(True)
+        self.topchart.set_data(self._topo_series(h, live.get("c_full")), xunit="iteration", yunit="%", ylim=(0, 105), legend=True)
+        self.topchart.setVisible(True)
+        now = time.monotonic()
+        if self.win is not None and self.win.step == "solve" and now - self._live_t > 1.2:
+            self._live_t = now
+            self.win.update_view()
+
+    def _topo_refresh(self, st):
+        """What the optimisation will need (checked on the mesh before it starts) and the history of the last run."""
+        pf = self.engine.project().topopt_preflight()
+        t = theme.tokens()
+        if pf.get("ok") is False:
+            self.topnote.setText("<b>The optimisation cannot start:</b> " + pf["message"])
+            self.topnote.setStyleSheet(f"color: {t['bad_text']};")
+            self.blockers = list(getattr(self, "blockers", [])) + [pf["message"]]
+        elif pf.get("ok"):
+            e = pf["estimate"]
+            lines = [f"Ready: {e['elements']:,} elements, smallest feature {pf['radius_mm']:.1f} mm ({pf['radius_mm'] / pf['element_mm']:.1f} element sizes), "
+                     f"needs about {e['memory_bytes'] / 2 ** 30:.1f} GB of memory; {100 * pf['kept_solid_share']:.0f} % of the mass is kept solid round supports and loads."]
+            lines += [n for n in pf["notes"]]
+            self.topnote.setText("<br>".join(lines))
+            self.topnote.setStyleSheet(f"color: {t['muted']};")
+        else:
+            self.topnote.setText(pf.get("message", ""))
+            self.topnote.setStyleSheet(f"color: {t['muted']};")
+        self.topnote.setVisible(bool(self.topnote.text()))
+        if not self.running:
+            top = (st["solve"].get("summary") or {}).get("topopt")
+            live = self.engine.project().topopt_live()
+            hist = (live or {}).get("history") or (top or {}).get("history")
+            c_full = (live or {}).get("c_full") or (top or {}).get("compliance_solid")
+            if hist:
+                self.topchart.set_data(self._topo_series(hist, c_full), xunit="iteration", yunit="%", ylim=(0, 105), legend=True)
+            self.topchart.setVisible(bool(hist))
+            self.topinfo.setVisible(False)
 
     def _options(self, st):
         """Max iterations, cores and the study to start from (flow studies), and the expected run time."""
@@ -692,7 +772,12 @@ class SolvePanel(_Panel):
         self.btn.style().unpolish(self.btn)
         self.btn.style().polish(self.btn)
         self.view_results.setObjectName("primary")
-        self.stop.setVisible(self.running and self.flow)
+        self.stop.setVisible(self.running and (self.flow or self.topo))
+        if self.topo:
+            self.btn.setText("Working…" if self.running else "↻  Find the shape again" if again else "▶  Find the shape")
+            self.stop.setText("Stop and keep this shape")
+            self.stop.setToolTip("Stop now and keep the shape found so far. It is usable: the optimiser improves it step by step")
+            self.cancel.setToolTip("Stop and throw this run away")
         self.cancel.setVisible(self.running)
         self.case_row.setVisible(self.flow)
         self.case.setEnabled(getattr(self, "mesh_ready", False) and not self.running and not blockers)

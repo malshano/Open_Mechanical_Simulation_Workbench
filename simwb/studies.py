@@ -677,7 +677,9 @@ STUDIES["topology_optimization"] = {
     "face_bc_types": {k: STUDIES["static_structural"]["face_bc_types"][k] for k in ("fixed_support", "frictionless_support", "force", "pressure")},
     "default_face_bc": {"label": "Free"},
     "body_roles": ["solid"],
-    "body_params": [],
+    "body_params": [P("optimise", "In the design space", "", "yes", options=["yes", "keep solid"],
+                      help="yes: the optimiser may remove material from this part. keep solid: the part stays as it is (a bolt, a mounting pad, a part that must not change) "
+                           "but still carries load.")],
     "settings": [
         P("mass_percent", "Mass to keep", "%", 30.0, min=5, max=90,
           help="The share of the part's mass that the result keeps. The optimiser finds the stiffest shape that weighs this much. 30 % is a good first try; "
