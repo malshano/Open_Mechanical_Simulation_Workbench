@@ -36,6 +36,12 @@ not installed. Physics changes should come with a check against an analytical re
 - Keep the style of the surrounding code; update the user and technical manuals when behaviour changes.
 - Do not commit generated files, studies, solver installations, or CAD you do not have the right to share.
 
+## Branch flow: staging before main
+
+Work branches are merged into the **`staging`** branch first; `main` receives only what has been through `staging`.
+Everything in `staging` is a **beta release** (version `0.4.0bN`), so merge only what you are willing to ship as a
+beta. See [CLAUDE.md](CLAUDE.md) for the details.
+
 ## Rules for main
 
 `main` is protected on GitHub:
