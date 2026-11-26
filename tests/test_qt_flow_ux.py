@@ -114,6 +114,24 @@ def test_stop_recording_keeps_the_pictures_made_so_far(ctl, tmp_path):
     assert any("Recording stopped" in t["text"] for t in win.toasts.history) and win.view.banner.text() == ""
 
 
+def test_the_temporary_pictures_are_deleted_once_the_video_is_made_and_when_it_is_stopped(ctl, tmp_path, monkeypatch):
+    """The pictures of a recording are temporary files; only the MP4 stays. They are removed after a finished video and after a stopped one."""
+    import tempfile
+    from pathlib import Path
+    made = []
+    real = tempfile.mkdtemp
+    monkeypatch.setattr(tempfile, "mkdtemp", lambda *a, **k: made.append(real(*a, **k)) or made[-1])
+    p, win, out = _record_setup(ctl, tmp_path)
+    ctl.do("results.video", {"path": str(out), "fps": 4})                                      # (runs to the end)
+    assert out.exists() and len(made) == 1 and not Path(made[0]).exists()
+    out.unlink()
+    stop = lambda i: win.view.banner.button.click() if i == 3 else None                      # noqa: E731
+    p.timebar.timeChanged.connect(stop)
+    ctl.do("results.video", {"path": str(out), "fps": 4})                                      # (stopped at picture 4)
+    p.timebar.timeChanged.disconnect(stop)
+    assert out.exists() and len(made) == 2 and not Path(made[1]).exists()
+
+
 def test_stopping_before_two_pictures_makes_no_video_and_says_so(ctl, tmp_path):
     import pytest
 
