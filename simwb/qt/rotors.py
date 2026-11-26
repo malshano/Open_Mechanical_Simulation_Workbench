@@ -10,10 +10,11 @@ The engine keeps them (simwb.project set_rotors / detect_rotors / reset_thrusts 
 axis_info / rotate_geometry)."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSlider, QVBoxLayout, QWidget
 
 from .. import orient, studies
+from .. import zones as zone_tools
 from . import theme
 from .forms import ParamForm, fmt_num
 from .ids import wid
@@ -64,6 +65,13 @@ class Rotors:
     def __init__(self, panel):
         self.panel = panel
         self.oblique: dict | None = None
+        self.turn: dict = {}                       # {zone index: degrees}: how far the preview has turned what is inside the zone
+        self.playing: int | None = None            # the zone whose turn preview is running
+        self._timer = QTimer(panel)
+        self._timer.setInterval(80)
+        self._timer.timeout.connect(self._tick)
+        self._where: dict = {}                     # classification of the parts of each zone, kept while nothing changes
+        self.sliders: dict = {}
 
     @property
     def pr(self):
@@ -160,6 +168,85 @@ class Rotors:
         zs = self.zones()
         z = zs.pop(i)
         return self._save_zones(zs, f"Moving zone {z['name']} deleted")
+
+    # ------------------------------------------------------------------ the zones in the 3D view, and the turn preview
+    def where(self, i: int, z: dict) -> list:
+        """How each part lies to zone i: inside, partly or outside (zones.classify_parts), kept until the zone or the geometry changes."""
+        key = (repr({k: z.get(k) for k in ("center", "axis", "radius", "length")}), self.panel.engine.state()["geometry"].get("updated"))
+        hit = self._where.get(i)
+        if hit is None or hit[0] != key:
+            hit = (key, zone_tools.classify_parts(z, self.pr.faces()))
+            self._where[i] = hit
+        return hit[1]
+
+    def draw_zones(self, active=None):
+        """The cylinders of the zones in the 3D view, and for a zone the preview has turned a ghost of what is inside it, turned."""
+        v = self.panel.view
+        if v is None:
+            return
+        zs = self.panel.engine.state().get("moving_zones") or []
+        ghosts = {}
+        for i, z in enumerate(zs):
+            if self.turn.get(i):
+                ids = [fid for b in self.where(i, z) if b["where"] == zone_tools.INSIDE for fid in b["faces"]]
+                if ids:
+                    ghosts[i] = zone_tools.triangles_of(self.pr.faces(), ids)
+        v.zone_view.set(zs, active, self.turn, ghosts)
+
+    def set_turn(self, i: int, deg: float):
+        """Preview the zone turned by deg degrees: the parts inside it turn about its axis in the 3D view (nothing is stored)."""
+        zs = self.panel.engine.state().get("moving_zones") or []
+        if not 0 <= i < len(zs):
+            raise ValueError(f"No moving zone {i + 1} (there are {len(zs)})")
+        self.turn[i] = float(deg) % 360.0
+        self.draw_zones(i)
+        s = self.sliders.get(i)
+        try:
+            if s is not None and not s[0].isSliderDown() and s[0].value() != int(round(self.turn[i])):
+                s[0].blockSignals(True)
+                s[0].setValue(int(round(self.turn[i])))
+                s[0].blockSignals(False)
+            if s is not None:
+                s[1].setText(self.turn_text(zs[i], self.turn[i]))
+        except RuntimeError:
+            self.sliders.pop(i, None)
+
+    def turn_text(self, z: dict, deg: float) -> str:
+        fd = zone_tools.frame_degrees(self.panel.engine.state().get("settings"))
+        t = f"{fmt_num(round(deg, 1))}°"
+        if fd > 0:
+            t += f" = {fmt_num(round(deg / fd, 1))} saved frames of {fmt_num(fd)}°"
+        if z.get("rpm"):
+            t += f" = {fmt_num(round(deg / zone_tools.degrees_per_second(z) * 1000, 2))} ms at {fmt_num(z['rpm'])} rpm"
+        return t
+
+    def play(self, i: int, on: bool = True):
+        """Turn the preview round and round (a few degrees at a time) or stop it."""
+        self.playing = i if on else None
+        if on:
+            self._timer.start()
+        else:
+            self._timer.stop()
+
+    def _tick(self):
+        zs = self.panel.engine.state().get("moving_zones") or []
+        i = self.playing
+        if i is None or not 0 <= i < len(zs):
+            self._timer.stop()
+            return
+        fd = zone_tools.frame_degrees(self.panel.engine.state().get("settings"))
+        step = fd if fd > 0 else 6.0
+        self.set_turn(i, self.turn.get(i, 0.0) + (step if (zs[i].get("rpm") or 1) >= 0 else -step))
+
+    def stop_preview(self):
+        """Back to the model as it is (leaving the step): the turn is zero, the play stops, the cylinders go."""
+        self._timer.stop()
+        self.playing = None
+        self.turn = {}
+        self.sliders = {}
+        v = self.panel.view
+        if v is not None:
+            v.zone_view.clear()
 
     # ------------------------------------------------------------------ a centre of rotation picked on the model
     def start_pick(self, kind: str, i: int, on: bool = True):
@@ -291,6 +378,52 @@ class Rotors:
         lab.setToolTip("The weight of the vehicle (mass × 9.81) and the thrust of all rotors together")
         return lab
 
+    def _parts_note(self, i: int, z: dict) -> QLabel:
+        """Which parts are inside the zone (they turn with it), which are outside, and a warning for a part the zone's boundary cuts through."""
+        try:
+            rows = self.where(i, z)
+        except Exception:  # noqa: BLE001
+            rows = []
+        ins = [b["name"] for b in rows if b["where"] == zone_tools.INSIDE]
+        part = [b for b in rows if b["where"] == zone_tools.PARTLY]
+        out = [b["name"] for b in rows if b["where"] == zone_tools.OUTSIDE]
+        text = "Inside (turns with the zone): " + (", ".join(ins) if ins else "no part yet - fit the zone round the rotating part") + ". "
+        if out:
+            text += "Outside: " + ", ".join(out) + ". "
+        if part:
+            text += ("⚠ The zone's boundary cuts through " + ", ".join(f"{b['name']} ({round(b['share'] * 100)} % inside)" for b in part)
+                     + ": the mesh cannot match there. Make the zone larger, or smaller, so that every part is wholly inside or outside.")
+        lab = wid(QLabel(text), f"setup.zone.{i}.parts")
+        lab.setWordWrap(True)
+        if part:
+            lab.setStyleSheet(f"color: {theme.tokens()['warn_text']};")
+        else:
+            lab.setObjectName("muted")
+        return lab
+
+    def _turn_row(self, i: int, z: dict) -> QHBoxLayout:
+        """Preview the turn: a slider over one revolution and a play button; the parts inside the zone turn in the 3D view before any solver time is spent."""
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Preview the turn"))
+        play = wid(QPushButton("▶"), f"setup.zone.{i}.turn_play")
+        play.setObjectName("toggle")
+        play.setCheckable(True)
+        play.setChecked(self.playing == i)
+        play.setToolTip("Turn the zone and what is inside it round and round in the 3D view (a preview: nothing is stored)")
+        play.toggled.connect(lambda on, i=i: self.play(i, on))
+        row.addWidget(play)
+        sl = wid(QSlider(Qt.Horizontal), f"setup.zone.{i}.turn")
+        sl.setRange(0, 360)
+        sl.setValue(int(round(self.turn.get(i, 0.0))))
+        sl.setToolTip("Turn the parts inside the zone by this angle, to see how they sit in it and where they would pass the boundary")
+        row.addWidget(sl, 1)
+        lab = wid(QLabel(self.turn_text(z, self.turn.get(i, 0.0))), f"setup.zone.{i}.turn_text")
+        lab.setObjectName("muted")
+        row.addWidget(lab)
+        sl.valueChanged.connect(lambda val, i=i: self.set_turn(i, float(val)))
+        self.sliders[i] = (sl, lab)
+        return row
+
     def build_zones(self, st, busy) -> list:
         aero = st["study"] == "external_aero"
         why = "A job is running: wait until it has finished" if busy else ""
@@ -379,6 +512,8 @@ class Rotors:
             pk.setEnabled(not busy)
             pk.toggled.connect(lambda on, i=i: self.start_pick("zone", i, on))
             v.addWidget(pk, 0, Qt.AlignLeft)
+            v.addWidget(self._parts_note(i, z))
+            v.addLayout(self._turn_row(i, z))
             out.append(card)
         add = _btn("＋ Add rotating zone", "setup.zone.add", why or "A cylinder of air turning about the up axis, in the middle of the parts")
         add.setEnabled(not busy)

@@ -77,6 +77,44 @@ def moved_and_turned(r: dict, R: np.ndarray, shift: np.ndarray) -> dict:
     return out
 
 
+def rotation_between(a, b) -> np.ndarray:
+    """The smallest turn (3 x 3) that takes direction a onto direction b (both are made unit length; a turn of half a revolution about a
+    direction across them when they are opposite)."""
+    a = np.asarray(a, float)
+    b = np.asarray(b, float)
+    a, b = a / (np.linalg.norm(a) or 1.0), b / (np.linalg.norm(b) or 1.0)
+    v = np.cross(a, b)
+    c = float(a @ b)
+    if np.linalg.norm(v) < 1e-12:
+        if c > 0:
+            return np.eye(3)
+        h = np.array([1.0, 0.0, 0.0]) if abs(a[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+        u = np.cross(a, h)
+        u /= np.linalg.norm(u)
+        return 2.0 * np.outer(u, u) - np.eye(3)
+    K = np.array([[0.0, -v[2], v[1]], [v[2], 0.0, -v[0]], [-v[1], v[0], 0.0]])
+    return np.eye(3) + K + K @ K / (1.0 + c)
+
+
+def align_with_direction(r: dict, n) -> tuple:
+    """(R, side, degrees): the turn about the region's middle that lays the side of the region that already points closest to direction n
+    (a box: one of its own axes, either way; a cylinder: its axis) parallel to n, by the smallest turn. `side` is the axis index (0 x, 1 y, 2 z of
+    a box in its own axes; 0 for a cylinder's axis)."""
+    n = np.asarray(n, float)
+    n = n / (np.linalg.norm(n) or 1.0)
+    if r.get("shape") == "cylinder":
+        a, b = np.asarray(r["start"], float), np.asarray(r["end"], float)
+        axes = [(b - a) / (np.linalg.norm(b - a) or 1.0)]
+    else:
+        R0 = rotation_of(r)
+        axes = [R0[:, k] for k in range(3)]
+    k = int(np.argmax([abs(float(ax @ n)) for ax in axes]))
+    a = axes[k] * (1.0 if float(axes[k] @ n) >= 0 else -1.0)
+    R = rotation_between(a, n)
+    ang = float(np.degrees(np.arccos(np.clip(float(a @ n), -1.0, 1.0))))
+    return R, k, ang
+
+
 MIN_SIZE = 1e-3          # a region is never made smaller than this (m): a 1 mm box or a 1 mm long, 1 mm radius cylinder
 
 

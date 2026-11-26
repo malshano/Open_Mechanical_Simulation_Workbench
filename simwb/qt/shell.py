@@ -433,6 +433,9 @@ class Shell(QObject):
                             lambda: (setattr(sp, "active", None), sp.redo()), "Finish picking faces for this condition")
         if w.step == "mesh" and w.panels["mesh"].adv.xform.active:
             xf = w.panels["mesh"].adv.xform
+            if xf.aligning:
+                return ("pick", "Click the face to line the region up with (a face of the model or a wall of the air volume): its nearest side is turned parallel to it", 0,
+                        "Cancel", lambda: xf.stop_align(), "Stop choosing a face (the region stays as previewed)")
             return ("pick", "Drag an arrow to move the region, a ring to turn it, a square-ended arrow to resize it (Shift: round steps), or type the numbers; then press Apply", 0,
                     "Cancel", lambda: xf.cancel(), "Leave the region as it is")
         if w.step == "mesh" and getattr(w.panels["mesh"], "picking_part", False):

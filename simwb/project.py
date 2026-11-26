@@ -3552,8 +3552,16 @@ class Project:
             d = self._mesh_view(m, m["quality"], "-", clip_axis, clip_pos, hide_fluid, None, layers=True)
             d.update({"metric": "layers", "label": "Wall layers"})
             return d
+        if metric == "zones":
+            if poor is not None:
+                raise ValueError("'poor' selects cells by their quality; use it with the quality metric")
+            m = self.load_mesh()
+            lab = self.zone_cell_labels(m)
+            d = self._mesh_view(m, m["quality"], "-", clip_axis, clip_pos, hide_fluid, None, zone_labels=lab)
+            d.update({"metric": "zones", "label": "Rotating zones"})
+            return d
         if metric != "region" and metric not in meshviz.METRICS:
-            raise ValueError(f"Unknown mesh metric '{metric}'. Available: {', '.join(meshviz.METRICS)}, region, layers")
+            raise ValueError(f"Unknown mesh metric '{metric}'. Available: {', '.join(meshviz.METRICS)}, region, layers, zones")
         m = self.load_mesh()
         label, unit, worse = meshviz.METRICS["quality" if metric == "region" else metric]
         if metric == "region":
@@ -3575,7 +3583,37 @@ class Project:
                       "range": meshviz.display_range(metric, vals)})
         return d
 
-    def _mesh_view(self, m, vals, unit, clip_axis, clip_pos, hide_fluid, poor, region=False, log=False, layers=False):
+    def mesh_zone_count(self) -> int:
+        """How many rotating zones the stored mesh has (their boundary is meshed with it); 0 without a mesh."""
+        try:
+            m = self.load_mesh()
+        except Exception:  # noqa: BLE001
+            return 0
+        z = m.get("zone_tri_zone")
+        return int(len(set(np.asarray(z).tolist()))) if z is not None and len(z) else 0
+
+    def zone_cell_labels(self, m) -> np.ndarray:
+        """Per tetrahedron: 0 outside every rotating zone, k + 1 inside zone k of the study (the cells enclosed by the zone's meshed boundary, as the
+        solver case takes them)."""
+        from .solvers.openfoam.cases import _enclosed_cells
+        zs = self.data.get("moving_zones") or []
+        ztri, ztz = m.get("zone_tris"), m.get("zone_tri_zone")
+        if not zs or ztri is None or not len(ztri):
+            raise ValueError("The mesh has no rotating zone: add one in Setup and generate the mesh again")
+        tets = np.asarray(m["tets"], np.int64)
+        cc = m["nodes"][tets].mean(axis=1)
+        lab = np.zeros(len(tets), np.int32)
+        for k, z in enumerate(zs):
+            rel = cc - np.asarray(z["center"], float)
+            a = np.asarray(studies.AXES[z["axis"]], float)
+            ax = rel @ a
+            inside = (np.abs(ax) <= z["length"] / 2) & (np.linalg.norm(rel - np.outer(ax, a), axis=1) <= z["radius"])
+            if ztz is not None and (np.asarray(ztz) == k).any():
+                inside = _enclosed_cells(tets, np.asarray(ztri)[np.asarray(ztz) == k], inside)
+            lab[inside] = k + 1
+        return lab
+
+    def _mesh_view(self, m, vals, unit, clip_axis, clip_pos, hide_fluid, poor, region=False, log=False, layers=False, zone_labels=None):
         if poor is not None:
             q = m["quality"]
             sel = np.where(q < float(poor))[0]
@@ -3602,6 +3640,8 @@ class Project:
         rs.surf_group = np.zeros(len(rs.surf_tris), np.int32)
 
         def paint(tris, cells):
+            if zone_labels is not None:
+                return self._zone_payload(rs, tris, cells, zone_labels)
             if layers:
                 return self._layer_payload(rs, m, tris, cells)
             if region:
@@ -3640,6 +3680,19 @@ class Project:
             c = a + (b - a) * (i / max(n - 1, 1))
             out.append("#%02x%02x%02x" % tuple(int(round(x)) for x in c))
         return out
+
+    def _zone_payload(self, rs, tris, cells, lab):
+        """The triangles coloured by the rotating zone their cell is in: grey outside every zone, one colour per zone inside."""
+        zs = self.data.get("moving_zones") or []
+        cols = ["#9b6cff", "#ff7ab6", "#5ad1a6", "#f5b942"]
+        cats = [{"name": "Outside the zones (fixed cells)", "color": "#8a93a6"}] + [
+            {"name": f"{z['name']}: cells that turn ({'sliding mesh' if z.get('method') == 'sliding' else 'MRF'})", "color": cols[i % len(cols)]} for i, z in enumerate(zs)]
+        fv = lab[cells].astype(np.float32) if len(cells) else np.zeros(0, np.float32)
+        d = rs._tri_payload(tris, cells, "Quality", face_vals=fv)
+        d["unit"] = "-"
+        d["categories"] = cats
+        d["present"] = [int(i) for i in np.unique(fv)] if len(fv) else []
+        return d
 
     def _layer_payload(self, rs, m, tris, cells):
         """The triangles coloured by the layer their cell belongs to: 0 = an ordinary tetrahedron, 1 = the layer at the wall, 2 = the next ..."""

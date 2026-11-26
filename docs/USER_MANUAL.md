@@ -752,6 +752,11 @@ gravity too). A line at the top of the panel says what the last action did, or w
 - **Moving zones** (flow studies): **＋ Add rotating zone**; each zone has its name, **Method** (MRF steady, or sliding mesh in a transient external
   flow), speed, axis, centre, radius, length, **Cell size inside** (empty = automatic), **Fit around part** and **⌖ Centre on a cylinder or circular
   edge…**. If the picked axis is not along x, y or z, the panel offers **Turn the model** (or **Leave it**).
+  **Each zone is drawn in the 3D view** (Setup and Mesh) as a translucent purple cylinder with its name, speed and method on it; a sliding-mesh zone has a heavier
+  outline, because its boundary is the sliding interface. A tick on the two flat faces shows how far it has turned. Under the zone's numbers a line says which parts
+  are **inside** (they turn with it), which are **outside**, and warns in the warning colour about a part the zone's boundary cuts through (the mesh cannot
+  match there: make the zone larger or smaller). **Preview the turn** (a slider over one revolution, and ▶) turns a purple ghost of what is inside the zone;
+  with a transient analysis it says how many saved frames the angle is (the **Saved frame every** setting). Nothing is stored; leaving the step puts it away.
 - The settings are headed (**Flow condition**, **Loads**, **Modes and vibration source** ...). A transient external flow with
   sliding zones shows a **Suggested end time** with **Use it**.
 
@@ -800,6 +805,9 @@ layers** - and **Generate mesh**.
   **Move by** (mm) and **Turn about** (degrees). The region is drawn as it would be; **Apply** stores it, **Reset** puts the preview back,
   **Cancel** leaves the region alone. A box keeps its turn (a note on its card says so; its corner numbers are the box before the turn);
   a cylinder moves its end points. The tetrahedral mesh follows a turned box exactly; the hex-dominant mesh refines the box round it.
+  **Line up with a face…** (in the same session) turns the region so that the side of it that already points closest to a face is parallel to that face
+  (a cylinder: its axis): click the button, then click a face of the model or a wall of the air volume. Tick **and put its middle on the face** to move the
+  region there too. It is only previewed: the numbers show the turn, and **Apply** stores it.
 - **Refinement regions**: **＋ Box** and **＋ Cylinder** as before; each region now shows roughly how many cells it alone makes (in the
   warning colour above three million), and a box has **Fit around part…** to put it round a part. In a flow study with rotating zones,
   **＋ Wake behind rotating zones** adds a cylinder of zone-size cells two diameters downstream of each zone, and **＋ Tip-vortex rings**
@@ -810,7 +818,8 @@ layers** - and **Generate mesh**.
   polyhedra, the largest aspect ratio and the share of the wall that got layers; with wall layers also the cells with the layers, the
   layers made, the first and all layers and the non-orthogonality and skewness of the mesh with them; then the time it took.
 - **Colour the mesh by** quality, **Cell size**, **Region**, **Aspect ratio**, **Size jump** (the largest size ratio to a neighbour),
-  **Cell volume** or **Wall layers** (flow studies with layers: the mesh the solver runs, each layer in its own colour and the tetrahedra
+  **Cell volume**, **Rotating zones** (flow studies with a rotating zone in a mesh made after it was added: the cells that turn with each zone in its
+  colour, the others grey; a cut through the zone shows where its boundary, the sliding interface, lies in the mesh) or **Wall layers** (flow studies with layers: the mesh the solver runs, each layer in its own colour and the tetrahedra
   in grey; choosing it opens a cut through the object if none is open). A hex-dominant mesh is shown by quality and region only (the other buttons are greyed and say why). Under the buttons,
   the **cell budget** shows, for each band of cell sizes, the share of the cells and of the volume, with remarks when a size jump or a
   fine region uses too many cells.

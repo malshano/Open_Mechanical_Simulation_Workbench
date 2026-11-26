@@ -81,6 +81,7 @@ class SetupPanel(_Panel):
         self.draw_marks()
 
     def left(self):
+        self.rot.stop_preview()
         self.view.set_pick_mode(None)
         self.view.set_selection([])
         self.view.set_face_tints({})
@@ -145,6 +146,7 @@ class SetupPanel(_Panel):
         self.view.set_face_tints(tints)
         self.view.set_labels(labels)
         self.view.set_arrows(arrows)
+        self.rot.draw_zones()
         if self.active:
             bc = next((b for b in st.get("bcs") or [] if b["id"] == self.active), None)
             self.view.set_selection(bc.get("faces", []) if bc else [])
