@@ -36,7 +36,7 @@ def test_the_study_is_offered_and_takes_only_the_conditions_it_can_use(P):
     from simwb import studies
     st = studies.STUDIES["topology_optimization"]
     assert st["label"] == "Topology optimisation" and st["solver"] == "builtin_fem"
-    assert set(st["face_bc_types"]) == {"fixed_support", "frictionless_support", "force", "pressure", "symmetry"}   # (the plane of a half model; no prescribed displacement, no heat)
+    assert set(st["face_bc_types"]) == {"fixed_support", "frictionless_support", "force", "pressure", "keep_solid", "symmetry"}   # (the plane of a half model; no prescribed displacement, no heat)
     s = studies.default_settings("topology_optimization")
     assert s["mass_percent"] == 30.0 and s["member_mm"] == 0.0 and s["max_iterations"] == 200
     pr = P.create_project("T", "topology_optimization")
@@ -95,11 +95,15 @@ def test_the_shape_is_checked_with_the_quadratic_solver_and_the_answer_is_kept(b
     pr, holes, front = bracket
     pr.add_bc("Bolts", "fixed_support", holes)
     pr.add_bc("Camera", "force", front, {"fx_N": -20.0, "fy_N": 0, "fz_N": 0})
+    pad = [f["id"] for f in sorted((f for f in pr.faces() if f["surface_type"] == "Plane" and f["id"] not in front and f["id"] not in holes and 2e-5 < f["area"] < 4e-4),
+                                   key=lambda f: f["area"])][:1]               # (a modest face: a pad as thick as the smallest feature round a whole wall would be refused)
+    assert pad
+    pr.add_bc("Pad", "keep_solid", pad)                                                                 # (a face to keep: no load, no support)
     pr.set_mesh(preset="coarse")
     _wait(pr.generate_mesh())
     rep = _wait(pr.solve())
     t = rep["topopt"]
-    assert t["kept_solid"] and {k["name"] for k in t["kept_solid"]} == {"Bolts", "Camera"}            # (what was kept solid, and how much of the mass)
+    assert t["kept_solid"] and {k["name"] for k in t["kept_solid"]} == {"Bolts", "Camera", "Pad"}            # (what was kept solid, and how much of the mass)
     assert t["connectivity"]["loads_joined"] and "pieces" in t["connectivity"]
     ck = _wait(pr.topopt_check(0.5))
     assert ck["threshold"] == 0.5 and ck["max_von_mises_MPa"] > 0 and ck["min_safety_factor"] > 0

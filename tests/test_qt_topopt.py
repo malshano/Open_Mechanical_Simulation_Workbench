@@ -11,8 +11,25 @@ def wait(c, t=900):
 
 @pytest.fixture
 def topo(ctl):
+    """The bundled example (a bulky bracket): two bolt holes held at one end, a pin hole loaded at the other."""
     c = ctl
     c.do("study.example", {"study": "topology_optimization"})
+    wait(c)
+    pr = c.engine.project()
+    cyl = [f for f in pr.faces() if f["surface_type"] == "Cylinder"]
+    pr.add_bc("Bolts", "fixed_support", [f["id"] for f in cyl if f["centroid"][0] < 0.03])
+    pr.add_bc("Pin load", "force", [f["id"] for f in cyl if f["centroid"][0] > 0.07], {"fx_N": 0.0, "fy_N": 0.0, "fz_N": -300.0})
+    c.engine.changed.emit()
+    return c
+
+
+@pytest.fixture
+def thin(ctl):
+    """The thin camera mount: its walls are thinner than the smallest feature size, which the window says and offers a remedy for."""
+    from qt_support import EXAMPLES
+    c = ctl
+    c.do("study.new", {"name": "Thin", "study": "topology_optimization"})
+    c.do("geometry.import", {"path": str(EXAMPLES / "camera_mount.step")})
     wait(c)
     pr = c.engine.project()
     holes = [f["id"] for f in pr.faces() if f["surface_type"] == "Cylinder"]
@@ -146,3 +163,22 @@ def test_the_shape_can_be_checked_and_saved_from_the_results(topo, tmp_path):
     assert "Press the button to check this one" in _text(c, "results.topopt.check.result")
     out = c.engine.topopt_export_stl(str(tmp_path / "shape.stl"))
     assert out["triangles"] > 100 and (tmp_path / "shape.stl").stat().st_size == 84 + 50 * out["triangles"]
+
+
+def test_the_warnings_sit_under_the_headline_and_the_remedy_button_refines_the_mesh(thin):
+    c = thin
+    _mesh(c)
+    c.do("step.go", {"step": "solve"})
+    c.do("solve.run")
+    wait(c)
+    c.widget_do("solve.results", "click")
+    lay = c.win.panels["results"].pages["summary"]
+    order = []
+    for i in range(lay.count()):
+        w = lay.itemAt(i).widget()
+        order.append((w.property("wid") if w is not None else None))
+    assert order.index("results.topopt.headline") < order.index("results.topopt.cautions")        # (what looks odd comes straight after the headline)
+    assert c.widget_do("results.topopt.refine")["visible"] is True                                  # (the walls are thinner than the smallest feature: the way out is one click)
+    before = c.engine.state()["mesh"]["preset"]
+    c.widget_do("results.topopt.refine", "click")
+    assert c.state()["window"]["step"] == "mesh" and c.engine.state()["mesh"]["preset"] != before

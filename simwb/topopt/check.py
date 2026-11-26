@@ -51,9 +51,11 @@ def held_pieces(tets, tlab, sup_mask, load_mask) -> np.ndarray:
     return np.flatnonzero((ns >= MIN_SUPPORT_NODES) & (nl >= 1))
 
 
-def connectivity(nodes, tets, density, threshold: float, weight, supports: dict, loads: dict) -> dict:
+def connectivity(nodes, tets, density, threshold: float, weight, supports: dict, loads: dict, passive=None, keeps: dict | None = None) -> dict:
     """The shape at a density threshold: how many pieces it has, how much of it floats, and which support faces are not joined to the loaded part.
-    supports / loads: {condition name: [node array of each of its faces]}. weight: per element (the mass share of a piece)."""
+    supports / loads: {condition name: [node array of each of its faces]}. weight: per element (the mass share of a piece). passive: per element, the material kept solid by
+    design: a piece that is almost all of it (the skin on a bolt hole, a pad that carries nothing) is not a floating island, it is reported through its support or keep-solid
+    condition. keeps: {name: [node arrays]} of Keep solid faces, reported like supports."""
     keep = np.asarray(density) >= threshold
     t = np.asarray(tets, np.int64)[keep]
     n = len(nodes)
@@ -68,10 +70,15 @@ def connectivity(nodes, tets, density, threshold: float, weight, supports: dict,
     nl = nodes_per_piece(t, tlab, load_mask)
     main = int(nl.argmax()) if nl.max() > 0 else -1                           # (the piece that holds most of the loaded nodes)
     share = np.bincount(tlab, weights=w, minlength=int(tlab.max()) + 1)
-    pieces = int((share > 0).sum())
-    floating = float(w[tlab != main].sum() / w.sum()) if main >= 0 else 1.0
+    if passive is not None:
+        pas = np.bincount(tlab, weights=w * np.asarray(passive, bool)[keep], minlength=len(share)) / np.maximum(share, 1e-30)
+        island = (pas < 0.9) & (np.arange(len(share)) != main) & (share > 0)               # (pieces of design material that are joined to nothing that matters)
+    else:
+        island = (np.arange(len(share)) != main) & (share > 0)
+    pieces = int(island.sum()) + (1 if main >= 0 else 0)
+    floating = float(share[island].sum() / w.sum()) if main >= 0 else 1.0
     unattached = {}
-    for name, faces in supports.items():
+    for name, faces in {**supports, **(keeps or {})}.items():
         bad = 0
         for nd in faces:
             mask = np.zeros(n, bool)
@@ -81,6 +88,5 @@ def connectivity(nodes, tets, density, threshold: float, weight, supports: dict,
                 bad += 1
         if bad:
             unattached[name] = {"faces": len(faces), "unattached": bad}
-    others = np.delete(share, main) if 0 <= main < len(share) else share
     return {"pieces": pieces, "floating_share": floating, "unattached": unattached, "loads_joined": main >= 0, "threshold": threshold,
-            "largest_floating_share": float(others.max() / w.sum()) if pieces > 1 and main >= 0 and len(others) else 0.0}
+            "largest_floating_share": float(share[island].max() / w.sum()) if island.any() else 0.0}

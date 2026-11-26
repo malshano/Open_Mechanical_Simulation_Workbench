@@ -880,7 +880,7 @@ MCP_EXTRA = [
     ("create_project", "Create a project. study: heat_conduction | static_structural | topology_optimization | vibration_modal | aeroelastic_flutter | cht_enclosure | "
                        "external_aero. "
                        "Optional step_path imports a STEP file (absolute path); or example = a bundled example name "
-                       "(heated_plate.step, camera_mount.step, heatsink_duct.step, quadcopter.step). "
+                       "(heated_plate.step, camera_mount.step, heatsink_duct.step, quadcopter.step, topology_bracket.step). "
                        "location = the folder the user chose to save the study in (full path; a sub-folder named "
                        "after the study is made there): ASK the user first, never choose it yourself.",
      {"type": "object", "properties": {"name": STR, "study": STR, "step_path": STR, "example": STR, "location": STR},

@@ -4227,7 +4227,8 @@ class Project:
         bcs_ = [b for b in self.data["bcs"] if b.get("faces")]
         faces_of = lambda kinds: {b["name"]: [tcheck.face_nodes(m["tris"], m["tri_surf"], [f]) for f in b["faces"]] for b in bcs_ if b["type"] in kinds}  # noqa: E731
         top["connectivity"] = tcheck.connectivity(m["nodes"], m["tets"].astype(np.int64), res["density"], 0.5, pb.weight,
-                                                  faces_of(("fixed_support", "frictionless_support")), faces_of(("force", "pressure")))
+                                                  faces_of(("fixed_support", "frictionless_support")), faces_of(("force", "pressure")), passive=pb.passive,
+                                                  keeps=faces_of(("keep_solid",)))
         res["notes"] = list(res["notes"])
         cn = top["connectivity"]
         if not cn["loads_joined"]:
@@ -4236,7 +4237,9 @@ class Project:
             if cn["floating_share"] > 0.005:
                 res["notes"].append(f"{100 * cn['floating_share']:.1f} % of the shape at 50 % floats in {cn['pieces'] - 1} piece(s) not joined to the loaded part: they carry nothing.")
             for name, u in cn["unattached"].items():
-                res["notes"].append(f"Support '{name}': {u['unattached']} of its {u['faces']} face(s) are not joined to the loaded part, so they carry no load in this shape.")
+                kind_ = "Keep solid" if any(b["name"] == name and b["type"] == "keep_solid" for b in bcs_) else "Support"
+                res["notes"].append(f"{kind_} '{name}': {u['unattached']} of its {u['faces']} face(s) are not joined to the loaded part, so they carry no load in this shape"
+                                    + (" (the material stays, as you asked)." if kind_ == "Keep solid" else "."))
         if len([b for b in bcs_ if b["type"] in ("force", "pressure")]) == 1:
             res["notes"].append("One load case: the shape suits this load only (several load cases are not available yet).")
         rep = {"topopt": top, "warnings": list(res["notes"]), "solve_time_s": res["seconds"], "n_dof": res["n_unknowns"], "n_elements": res["n_elements"],
@@ -4274,7 +4277,7 @@ class Project:
         keep = d >= thr
         if not keep.any():
             raise ValueError("Nothing is above that density: lower the threshold")
-        bcs = [b for b in self.data["bcs"] if b.get("faces")]
+        bcs = [b for b in self.data["bcs"] if b.get("faces") and b["type"] != "keep_solid"]     # (the static solvers know no 'keep solid': it is only a wish of the optimiser)
         sup_faces = {int(f) for b in bcs if b["type"] in ("fixed_support", "frictionless_support") for f in b["faces"]}
         load_faces = {int(f) for b in bcs if b["type"] in ("force", "pressure") for f in b["faces"]}
         tri_nodes = lambda faces: np.unique(m["tris"][np.isin(m["tri_surf"], list(faces))].ravel())  # noqa: E731
@@ -4325,12 +4328,18 @@ class Project:
         JOBS.update(job, 0.6, "Solving the solid part for comparison")
         res_solid = static_fem.solve(m, props, bcs, log=quiet)
         a, b = res_shape["report"], res_solid["report"]
+        lt = np.isin(m["tri_surf"], list(load_faces))                              # (how much of the loaded area is in the checked shape: the force acts on what is there)
+        lo_ = m["tris"][lt]
+        area_of = lambda tr_: float(0.5 * np.linalg.norm(np.cross(nodes[tr_[:, 1]] - nodes[tr_[:, 0]], nodes[tr_[:, 2]] - nodes[tr_[:, 0]]), axis=1).sum())  # noqa: E731
+        sub_lt = np.isin(surf, list(load_faces))
+        load_area_share = (area_of(orig[sub_lt]) / area_of(lo_)) if len(lo_) and area_of(lo_) > 0 else 1.0
         top = (self.data["solve"].get("summary") or {}).get("topopt") or {}
         ratio = (2 * b["strain_energy_J"]) / (2 * a["strain_energy_J"]) if a["strain_energy_J"] > 0 else None     # (stiffness kept, by the quadratic solver)
         out = {"threshold": thr, "max_von_mises_MPa": a["max_von_mises_MPa"], "peak_von_mises_unaveraged_MPa": a.get("peak_von_mises_unaveraged_MPa"),
                "min_safety_factor": a.get("min_safety_factor"), "max_displacement_mm": a["max_displacement_mm"],
                "solid_max_von_mises_MPa": b["max_von_mises_MPa"], "solid_max_displacement_mm": b["max_displacement_mm"],
                "stiffness_kept_quadratic": ratio, "stiffness_kept_optimiser": top.get("stiffness_kept"), "left_out_share": left_out,
+               "load_area_share": load_area_share,
                "mass_kg": a.get("mass_kg"), "warnings": list(a.get("warnings") or []), "stress_error_percent": a.get("stress_error_percent")}
         if cross_check:                                                          # (the same shape and the solid part, by a different program: CalculiX)
             from .solvers import calculix

@@ -853,6 +853,12 @@ class ResultsPanel(_Panel):
         if so > 0 and sm / so > 3.0:
             lines.append(f"The largest movement anywhere is {sm / so:.0f} times the solid part's, much more than the loss of stiffness: 'stiffness kept' measures the work the load does, an average, "
                          "while a slender region can move a lot. Look at the Deformation field.")
+        lines.append("Stress at the held faces and under the loads depends on the mesh (a point load has no finite stress): read the peaks there as indicative"
+                     + (f"; the unaveraged peak is {g(ck['peak_von_mises_unaveraged_MPa'])} MPa" if ck.get("peak_von_mises_unaveraged_MPa") else "") + ".")
+        lines.append("The shape at a threshold depends on thin members near it: check at 30 %, 50 % and 70 % to see how much the answer moves.")
+        if ck.get("load_area_share", 1.0) < 0.95:
+            lines.append(f"Only {100 * ck['load_area_share']:.0f} % of the loaded faces is in this shape, so the force acts on that part: the stiffness above is not a like-for-like "
+                         "comparison with the solid part (it can even look stiffer). Lower the threshold to bring more of the loaded faces in.")
         if ck.get("left_out_share", 0) > 0.001:
             lines.append(f"{100 * ck['left_out_share']:.1f} % of the shape is in pieces not joined to a support; they carry nothing and were left out of the check.")
         for w in ck.get("warnings") or []:
@@ -894,6 +900,23 @@ class ResultsPanel(_Panel):
         row.addWidget(self.topo_ccx)
         row.addWidget(stl)
 
+    def _topopt_refine(self):
+        from ...gmsh_worker import PRESETS
+        pr = self.engine.project()
+        order = list(PRESETS)
+        cur = pr.data["mesh"].get("preset", "medium")
+        if cur not in order or order.index(cur) == len(order) - 1:
+            self.win.statusBar().showMessage("The mesh is already on the finest preset: choose a larger smallest feature size instead", 8000)
+            return
+        try:
+            pr.set_mesh(preset=order[order.index(cur) + 1])
+            pr.set_settings(member_mm=0.0)
+            self.engine.changed.emit()
+            self.win.go("mesh")
+            self.win.statusBar().showMessage(f"Mesh preset set to {order[order.index(cur) + 1]}: generate the mesh, then find the shape again", 9000)
+        except Exception as e:  # noqa: BLE001
+            self._fail(e)
+
     def _topopt_check(self):
         try:
             self.engine.project().topopt_check(self.engine.topopt_threshold(), cross_check=bool(self.topo_ccx.isVisible() and self.topo_ccx.isChecked()))
@@ -931,8 +954,18 @@ class ResultsPanel(_Panel):
         g = lambda kg: fmt_num(round(kg * 1000, 1)) + " g"          # noqa: E731
         kept, stiff = t.get("mass_fraction") or 0.0, t.get("stiffness_kept") or 0.0
         lay.addWidget(wid(_note(f"A stiff shape for these loads: it keeps {100 * kept:.0f} % of the mass ({g(t.get('mass_kg_kept') or 0)} of {g(t.get('mass_kg_solid') or 0)}) and, "
-                                f"by the optimiser's estimate, {100 * stiff:.0f} % of the stiffness of the solid part. A concept: its stress has not been checked.", "ok"),
+                                f"by the optimiser's estimate, {100 * stiff:.0f} % of the stiffness of the solid part. A concept: its stress has not been checked.",
+                                "warn" if (s.get("warnings") or []) else "ok"),
                           "results.topopt.headline"))
+        holder = QWidget()                                                       # (wraps: three buttons side by side are wider than the dock)
+        row = FlowLayout(holder, 6, 4)
+        row.setContentsMargins(0, 0, 0, 0)
+        self._topopt_buttons(row)
+        lay.addWidget(holder)
+        self._topo_check_lay = QVBoxLayout()                                   # (rebuilt when the slider moves: the check belongs to one threshold)
+        self._topo_check_lay.setContentsMargins(0, 0, 0, 0)
+        lay.addLayout(self._topo_check_lay)
+        self._topopt_check_card(self._topo_check_lay, t)
         holder = QWidget()                                                       # (wraps: three buttons side by side are wider than the dock)
         row = FlowLayout(holder, 6, 4)
         row.setContentsMargins(0, 0, 0, 0)
@@ -956,6 +989,13 @@ class ResultsPanel(_Panel):
                 lab.setWordWrap(True)
                 bv.addWidget(lab)
             lay.addWidget(wid(box, "results.topopt.cautions"))
+            if any("cannot thin" in w_ or "read" in w_ and "stiffer" in w_ for w_ in notes):
+                fix = wid(QPushButton("Refine the mesh and run again"), "results.topopt.refine")
+                fix.setObjectName("ghostBorder")
+                fix.setToolTip("One finer mesh preset, the smallest feature size back on automatic: finer cells let the shape thin its walls and make the stiffness figure more exact. "
+                               "Takes you to the Mesh step; generating the mesh and running again are two more clicks.")
+                fix.clicked.connect(self._topopt_refine)
+                lay.addWidget(fix, 0, Qt.AlignLeft)
         ratio = (t.get("radius_mm") or 0) / max(t.get("element_size_mm") or 1e-9, 1e-9)
         end = ("settled" if t.get("converged") else "stopped by you: usable" if t.get("stopped") else "limit reached: may still change")
         return [("Mass kept", f"{100 * kept:.0f}", "%", "", f"{g(t.get('mass_kg_kept') or 0)} of {g(t.get('mass_kg_solid') or 0)}", "Density"),

@@ -673,7 +673,7 @@ STUDIES["topology_optimization"] = {
     "solver": "builtin_fem",
     "solver_label": "Built-in optimiser (SIMP on linear tetrahedra)",
     "description": "The stiffest shape for the mass you choose: material is removed where it carries little load.",
-    "examples": ["camera_mount.step"],
+    "examples": ["topology_bracket.step"],
     "face_bc_types": {k: STUDIES["static_structural"]["face_bc_types"][k] for k in ("fixed_support", "frictionless_support", "force", "pressure")},
     "default_face_bc": {"label": "Free"},
     "body_roles": ["solid"],
@@ -693,6 +693,12 @@ STUDIES["topology_optimization"] = {
           help="The mesh cells touching a supported or loaded face always stay solid. Add layers to keep more material round them (bolt bosses, load pads)."),
     ],
     "needs": ["materials for all parts", "a support that holds the part", "at least one force or pressure"],
+}
+STUDIES["topology_optimization"]["face_bc_types"]["keep_solid"] = {
+    "label": "Keep solid", "color": "#8a93a6",
+    "help": "The material next to these faces is never removed: a mounting pad, a bolt boss, a sealing face, a surface another part sits on. It carries no load of its own; "
+            "it only stays.",
+    "params": [],
 }
 EXPLAIN["topology_optimization"] = (
     "Topology optimisation: you mark the faces that are held and the faces that carry loads, and choose how much of the part's mass to keep. The optimiser "

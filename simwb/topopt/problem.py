@@ -14,7 +14,7 @@ import scipy.sparse as sp
 
 from .fe import Assembler, unit_stiffness
 
-SUPPORTED = ("fixed_support", "frictionless_support", "symmetry", "force", "pressure", "free")
+SUPPORTED = ("fixed_support", "frictionless_support", "symmetry", "force", "pressure", "keep_solid", "free")
 
 
 class ProblemError(ValueError):
@@ -43,6 +43,10 @@ class Problem:
     bc_report: dict = field(default_factory=dict)
     body_id: np.ndarray | None = None
     thickness: float = 0.0                              # a typical wall thickness (m): twice the volume over the surface area
+    keep_points: dict = field(default_factory=dict)    # {condition name: centres of its triangles}: the faces that keep material
+    passive0: np.ndarray | None = None                  # the kept-solid elements before they were thickened (see grow_kept)
+    design0: np.ndarray | None = None
+    owners0: dict = field(default_factory=dict)
     owners: dict = field(default_factory=dict)         # {condition name: the elements it keeps solid}
     mirror_planes: list = field(default_factory=list)   # [(axis, position)] flat symmetry planes of a half model: the filter sees the mirrored part
 
@@ -53,6 +57,25 @@ class Problem:
     @property
     def ndof(self) -> int:
         return self.asm.ndof
+
+    def grow_kept(self, r: float):
+        """Keep the material within half the smallest feature size (r / 2) of every Keep solid face, not only the one layer of cells that owns the face: a skin one cell
+        thick is no pad and no boss, it hangs on the rest by its edges. (Supports and loads keep the single layer: thicker kept layers there made the result depend on
+        the mesh.) Idempotent; call it with the radius the run uses."""
+        from scipy.spatial import cKDTree
+        if self.passive0 is None:
+            self.passive0, self.design0, self.owners0 = self.passive.copy(), self.design.copy(), {k: v.copy() for k, v in self.owners.items()}
+        passive, design = self.passive0.copy(), self.design0.copy()
+        owners = {k: v.copy() for k, v in self.owners0.items()}
+        for name, pts in self.keep_points.items():
+            if not len(pts):
+                continue
+            d, _ = cKDTree(pts).query(self.centroid)
+            near = d <= 0.5 * r
+            passive |= near
+            design &= ~near
+            owners[name] = np.union1d(owners.get(name, np.zeros(0, np.int64)), np.flatnonzero(near))
+        self.passive, self.design, self.owners = passive, design, owners
 
     def penalty_matrix(self, k: float):
         if not self.pen:
@@ -95,7 +118,7 @@ def _tri_geometry(p, t, tr, own):
     return nA / np.maximum(A, 1e-300)[:, None], A
 
 
-def build(mesh: dict, body_props: dict, bcs: list, design_bodies=None, keep_layers: int = 0, gravity=None, log=print) -> Problem:
+def build(mesh: dict, body_props: dict, bcs: list, design_bodies=None, keep_layers: int = 0, gravity=None, log=print, keep_conditions_solid: bool = True) -> Problem:
     """mesh: nodes, tets, tet_vol, tris, tri_surf. body_props: {id: {E, nu, rho, name}}. bcs: the project's face conditions.
     design_bodies: ids of the parts that may change (None: all). keep_layers: extra layers of elements kept solid round the supports and loads."""
     p = np.asarray(mesh["nodes"], float)
@@ -125,6 +148,7 @@ def build(mesh: dict, body_props: dict, bcs: list, design_bodies=None, keep_laye
     pen = []
     planes = []
     owners = {}
+    keep_pts = {}
     passive = np.zeros(N, bool)
     applied = np.zeros(3)
     rep = {}
@@ -149,9 +173,11 @@ def build(mesh: dict, body_props: dict, bcs: list, design_bodies=None, keep_laye
         n_hat, A = _tri_geometry(p, t, tr, own[sel])
         nodes = np.unique(tr.ravel())
         prm = bc.get("params") or {}
-        if kind != "symmetry":                                    # (material is kept where the part is held or loaded; a mirror plane is neither)
+        if (kind != "symmetry" and keep_conditions_solid) or kind == "keep_solid":   # (material is kept where the part is held or loaded, and where the user says; a mirror plane is neither)
             passive[own[sel]] = True
             owners[bc.get("name", kind)] = np.unique(own[sel])
+            if kind == "keep_solid":                                  # (a pad or a boss: real thickness; supports and loads keep the single layer of cells that owns the face)
+                keep_pts[bc.get("name", kind)] = p[tr].mean(axis=1)
         rep[bc.get("name", kind)] = {"type": kind, "area_m2": float(A.sum())}
         if kind == "fixed_support":
             n_support += 1
@@ -183,6 +209,8 @@ def build(mesh: dict, body_props: dict, bcs: list, design_bodies=None, keep_laye
                 fixed[int(3 * nd + k)] = 0.0
             if (~along).any():                                     # (a tilted or curved face: held by a stiff penalty)
                 pen.append((nodes[~along], nn[~along]))
+        elif kind == "keep_solid":                                 # (no force, no support: only the material next to these faces stays)
+            pass
         else:                                                      # force or pressure
             n_load += 1
             if kind == "force":
@@ -214,4 +242,4 @@ def build(mesh: dict, body_props: dict, bcs: list, design_bodies=None, keep_laye
     a_, b_, c_ = p[tris[:, 0]], p[tris[:, 1]], p[tris[:, 2]]
     area = float(0.5 * np.linalg.norm(np.cross(b_ - a_, c_ - a_), axis=1).sum()) or 1e-30
     return Problem(p, t, V, rho * V, E, Ke, asm, f, fd, np.array([fixed[int(d)] for d in fd]), pen, passive, design, c, h, applied, notes, rep, tv,
-                   thickness=2.0 * float(V.sum()) / area, owners=owners, mirror_planes=planes)
+                   thickness=2.0 * float(V.sum()) / area, owners=owners, mirror_planes=planes, keep_points=keep_pts)

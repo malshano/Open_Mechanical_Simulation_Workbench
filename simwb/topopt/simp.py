@@ -27,6 +27,7 @@ from .fe import element_energy
 from .problem import Problem, ProblemError
 
 MAX_PAIRS = 40_000_000
+TARGET_PAIRS = 35_000_000          # a default feature size is shrunk (towards 3 cells) until the filter has no more links than this
 
 
 @dataclass
@@ -42,6 +43,7 @@ class Settings:
     tol: float = 2e-3                    # the largest change of the filtered density between two iterations that counts as settled
     xmin: float = 1e-3
     emin: float = 1e-9                   # stiffness of empty material, relative to solid
+    cleanup_islands: bool = True         # at the end, empty the pieces that float (joined to no support) and let the freed mass go where it works
 
 
 MIN_CELLS = 3.0          # the smallest member size, in element sizes: below this the shape and its stiffness depend on the mesh (14 % at 2, 6 % at 2.5)
@@ -85,6 +87,13 @@ def preflight(pb: Problem, s: Settings) -> dict:
         raise ProblemError("The mass to keep must be between 2 % and 99 % of the part.")
     notes = list(pb.notes)
     r = s.radius if s.radius else default_radius(pb)
+    if not s.radius:                                                             # (a feature size nobody chose: as large as is wise, as small as the filter can afford)
+        r0 = r
+        while r > MIN_CELLS * pb.h * 1.001 and estimate(pb, r)["filter_pairs"] > TARGET_PAIRS:
+            r = max(MIN_CELLS * pb.h, 0.92 * r)
+        if r < r0 * 0.999:
+            notes.append(f"The smallest feature size was set to {r * 1e3:.1f} mm ({r / pb.h:.1f} mesh cells), below the {r0 * 1e3:.1f} mm that would suit this mesh best, so that the filter fits in memory "
+                         "and the iterations stay quick. A coarser mesh allows a larger one.")
     if r < MIN_CELLS * pb.h:
         notes.append(f"The smallest feature size ({r * 1e3:.2g} mm) is below {MIN_CELLS:g} element sizes, so it was raised to {MIN_CELLS * pb.h * 1e3:.2g} mm: a member "
                      "must be several cells wide, or the shape and its stiffness depend on the mesh. Use a finer mesh for finer members.")
@@ -95,6 +104,7 @@ def preflight(pb: Problem, s: Settings) -> dict:
     if pb.thickness > 0 and r > 0.9 * pb.thickness:
         notes.append(f"The walls are about {pb.thickness * 1e3:.1f} mm thick and the smallest feature is {r * 1e3:.1f} mm, so the optimiser cannot thin them. "
                      "To thin walls use a finer mesh and a smaller smallest feature size.")
+    pb.grow_kept(r)                                                              # (kept material gets real thickness before the share of the mass kept solid is judged)
     est = estimate(pb, r)
     if est["unknowns"] > est["dof_limit"]:
         raise ProblemError(f"The mesh gives {est['unknowns']:,} unknowns (limit {est['dof_limit']:,}"
@@ -134,6 +144,12 @@ class Optimiser:
         self.Kpen = pb.penalty_matrix(self.kpen)
         self._solid = K1
         self.idx = np.flatnonzero(pb.design)
+        self.void = np.zeros(len(self.idx), bool)                     # (design elements emptied for good: the pieces that float)
+        self.sup_mask = np.zeros(len(pb.nodes), bool)
+        self.sup_mask[np.unique(pb.fixed // 3)] = True
+        self.load_mask = np.abs(pb.f.reshape(-1, 3)).sum(axis=1) > 0
+        self.removed_share = 0.0
+        self.removed_pieces = 0
         self.log(f"Topology optimisation: {pb.n:,} elements ({len(self.idx):,} free to change), {pb.ndof:,} unknowns, member size {r * 1e3:.3g} mm, "
                  f"keep {100 * s.volume_fraction:.0f} % of the mass")
 
@@ -239,6 +255,7 @@ class Optimiser:
         mv = s.move if beta <= 2.0 else s.move * 2.0 / beta       # (smaller steps as the shape sharpens: the designs stops flipping between its limits)
         lo = np.maximum(s.xmin, xd - mv)
         hi = np.minimum(1.0, xd + mv)
+        lo[self.void] = hi[self.void] = s.xmin
         l1, l2 = np.log(B.min() * 1e-6), np.log(B.max() * 1e6)
         xn = xd
         for _ in range(60):
@@ -254,6 +271,7 @@ class Optimiser:
 
     # ------------------------------------------------------------------ the loop
     def run(self, on_iter=None, should_stop=None) -> dict:
+        from . import check as tcheck
         pb, s = self.pb, self.s
         t0 = time.time()
         base = self.baseline()
@@ -261,27 +279,29 @@ class Optimiser:
         self.c_full = c_full
         self.log(f"Solid part: compliance {c_full:.4g} J x 2; equation residual {base['balance']:.1e}")
         xd = np.full(len(self.idx), min(max(s.volume_fraction, 0.05), 0.95))
-        beta = 1.0 if s.projection else 1.0
+        beta = 1.0
         hist, since = [], 0
         stopped = converged = False
-        xb = None
         wd = pb.weight[self.idx]
-        for it in range(1, s.max_iter + 1):
+
+        def step(xd, beta):
             ev = self.evaluate(xd, beta)
             xn = self.oc(xd, ev["dc"], ev["dm"], beta)
             df = np.zeros(pb.n)
             df[self.idx] = xn - xd
             change = float(np.abs(self.P @ df)[self.idx].max())      # (how much the filtered density, the shape itself, changes)
-            xb = ev["xb"]
-            des = xb[self.idx]
+            des = ev["xb"][self.idx]
             grey = float((wd * ((des > 0.1) & (des < 0.9))).sum() / wd.sum())
-            rec = {"iteration": it, "compliance": ev["c"], "mass_fraction": ev["m"] / self.m_total, "change": change, "beta": beta, "grey": grey,
+            rec = {"iteration": len(hist) + 1, "compliance": ev["c"], "mass_fraction": ev["m"] / self.m_total, "change": change, "beta": beta, "grey": grey,
                    "seconds": time.time() - t0}
             hist.append(rec)
-            self.log(f"iteration {it}: compliance {ev['c']:.4g}, mass {100 * rec['mass_fraction']:.1f} %, change {change:.3f}, beta {beta:g}, grey {100 * grey:.0f} %")
+            self.log(f"iteration {rec['iteration']}: compliance {ev['c']:.4g}, mass {100 * rec['mass_fraction']:.1f} %, change {change:.3f}, beta {beta:g}, grey {100 * grey:.0f} %")
             if on_iter is not None:
-                on_iter(rec, xb)
-            xd = xn
+                on_iter(rec, ev["xb"])
+            return xn, change
+
+        for it in range(1, s.max_iter + 1):
+            xd, change = step(xd, beta)
             since += 1
             last = [h["compliance"] for h in hist[-10:] if h["beta"] == beta]
             stalled = len(last) >= 10 and (max(last) - min(last)) < 4e-3 * float(np.mean(last))
@@ -294,6 +314,32 @@ class Optimiser:
             if should_stop is not None and should_stop():
                 stopped = True
                 break
+        # pieces that float carry nothing: empty them and let the mass they held go to the load path (two rounds at most)
+        if s.cleanup_islands and not stopped:
+            for _ in range(2):
+                xb = self.evaluate(xd, beta)["xb"]
+                keep = np.flatnonzero(xb >= 0.5)
+                if not len(keep):
+                    break
+                t = pb.tets[keep]
+                tlab = tcheck.tet_components(t)
+                good = tcheck.held_pieces(t, tlab, self.sup_mask, self.load_mask)
+                if not len(good):
+                    break
+                island = np.zeros(pb.n, bool)
+                island[keep[~np.isin(tlab, good)]] = True
+                cand = island[self.idx] & ~self.void
+                share = float(wd[cand].sum() / self.m_total)
+                if not cand.any() or share < 0.002:
+                    break
+                self.void |= cand
+                xd = np.where(self.void, s.xmin, xd)
+                self.removed_share += share
+                self.removed_pieces += int(len(np.unique(tlab[~np.isin(tlab, good)])))
+                for _k in range(40):
+                    xd, change = step(xd, beta)
+                    if change < s.tol or (should_stop is not None and should_stop()):
+                        break
         # the shape that goes with the last design variables: one more evaluation, so density and numbers agree
         fin = self.evaluate(xd, beta)
         xb = fin["xb"]
@@ -307,10 +353,12 @@ class Optimiser:
             "iterations": len(hist), "converged": converged, "stopped": stopped, "history": hist, "seconds": time.time() - t0,
             "radius_m": self.radius, "settings": asdict(s), "notes": self.notes, "force_balance_error": getattr(self, "balance", None),
             "n_elements": pb.n, "n_design": int(len(self.idx)), "n_unknowns": pb.ndof, "kept_solid_fraction": self.m_passive / self.m_total,
-            "u": fin["u"], "element_energy": fin["ce"],
+            "u": fin["u"], "element_energy": fin["ce"], "removed_floating_share": self.removed_share,
         }
         if not converged and not stopped:
             self.notes.append(f"The iteration limit ({s.max_iter}) was reached before the shape settled, so it may still change: run more iterations before relying on it.")
+        if self.removed_share > 0:
+            self.notes.append(f"{self.removed_pieces} piece(s) that floated, joined to no support, were emptied ({100 * self.removed_share:.1f} % of the mass); that mass went to the load path.")
         if out["grey_fraction"] > 0.25:
             self.notes.append(f"{100 * out['grey_fraction']:.0f} % of the material is still grey (between solid and empty), so the threshold you pick changes the shape and its mass. "
                               "A larger smallest feature size, a finer mesh or more iterations make it sharper.")

@@ -276,3 +276,69 @@ def test_blocks_that_touch_only_along_an_edge_are_two_pieces_and_a_piece_needs_t
     lab = check.tet_components(t)
     assert list(check.held_pieces(t, lab, sup, load)) == [0]                           # the whole beam: touches the support on a face, carries the load
     assert len(check.held_pieces(t, lab, sup, np.zeros_like(load))) == 0                # no load on it: nothing to carry
+
+
+def test_the_published_mbb_benchmark_is_reproduced_by_the_tetrahedron_optimiser():
+    """The half MBB beam of the 88-line paper (Andreassen et al. 2011): 60 x 20, keep 50 %, penalty 3, a density filter of radius 3 cells. The reference is that
+    paper's algorithm ported line by line (quadrilaterals); the optimiser under test uses tetrahedra and its own code. Same problem, two codes."""
+    ref = benchmarks.top88_reference(60, 20, 0.5, 3.0, 3.0, 2)
+    pb = benchmarks.mbb_slab_problem(60, 20)
+    res = Optimiser(pb, Settings(volume_fraction=0.5, radius=3.0, projection=False, max_iter=300, tol=2e-3, cleanup_islands=False), log=QUIET).run()
+    assert res["mass_fraction"] == pytest.approx(0.5, abs=1e-6)
+    assert res["compliance"] == pytest.approx(ref["c"], rel=0.08)                     # (measured: +3 %; linear tetrahedra are a little stiffer than bilinear quadrilaterals)
+    c = pb.centroid
+    ci = np.floor(c[:, [0, 2]] + 1e-9).astype(int)
+    cell, cnt = np.zeros((20, 60)), np.zeros((20, 60))
+    np.add.at(cell, (ci[:, 1], ci[:, 0]), res["density"])
+    np.add.at(cnt, (ci[:, 1], ci[:, 0]), 1)
+    cell /= cnt
+    assert np.corrcoef(cell.ravel(), ref["x"][::-1].ravel())[0, 1] > 0.97              # (measured: 0.992: the same truss)
+
+
+def test_the_reference_port_meets_its_volume_and_lowers_the_compliance():
+    ref = benchmarks.top88_reference(30, 10, 0.5, 3.0, 1.5, 1)
+    assert ref["x"].mean() == pytest.approx(0.5, abs=1e-3) and ref["iterations"] > 20
+    assert ref["history"][-1]["c"] < ref["history"][0]["c"]
+
+
+def test_elements_emptied_for_good_stay_empty_and_a_keep_solid_face_only_keeps_material():
+    mesh, props, bcs = benchmarks.cantilever(L=2.0, W=0.4, H=1.0, h=0.2, load="patch")
+    top = np.zeros(len(mesh["tris"]), int)
+    cen = mesh["nodes"][mesh["tris"]].mean(axis=1)
+    top[(cen[:, 2] > 1.0 - 1e-9) & (cen[:, 0] > 0.9) & (cen[:, 0] < 1.3)] = 7
+    mesh["tri_surf"] = np.where(top > 0, 7, mesh["tri_surf"])
+    plain = build(mesh, props, bcs)
+    kept = build(mesh, props, bcs + [{"name": "Pad", "type": "keep_solid", "faces": [7], "params": {}}])
+    assert kept.passive.sum() > plain.passive.sum() and "Pad" in kept.owners
+    assert kept.passive[kept.owners["Pad"]].all() and np.allclose(kept.f, plain.f) and np.allclose(kept.applied, plain.applied)   # (no force, no support: only material that stays)
+    opt = Optimiser(kept, Settings(volume_fraction=0.8, radius=0.6), log=QUIET)      # (the material kept round supports, loads and the pad is thick now: ask for more)
+    opt.void[:6] = True
+    xn = opt.oc(np.full(len(opt.idx), 0.4), -np.ones(len(opt.idx)), np.ones(len(opt.idx)), 1.0)
+    assert (xn[:6] == opt.s.xmin).all() and (xn[6:] > opt.s.xmin).any()
+
+
+def test_a_run_reports_the_floating_pieces_it_emptied_or_none():
+    mesh, props, bcs = _cantilever(load="patch")
+    pb = build(mesh, props, bcs)
+    res = Optimiser(pb, Settings(volume_fraction=0.4, radius=0.6, max_iter=80), log=QUIET).run()
+    assert res["removed_floating_share"] >= 0.0 and res["mass_fraction"] == pytest.approx(0.4, abs=1e-6)
+    off = Optimiser(pb, Settings(volume_fraction=0.4, radius=0.6, max_iter=80, cleanup_islands=False), log=QUIET).run()
+    assert off["removed_floating_share"] == 0.0
+
+
+def test_a_keep_solid_face_keeps_a_pad_of_real_thickness_but_supports_and_loads_keep_the_single_layer():
+    mesh, props, bcs = benchmarks.cantilever(L=2.0, W=0.4, H=1.0, h=0.1, load="patch")
+    cen = mesh["nodes"][mesh["tris"]].mean(axis=1)
+    mesh["tri_surf"] = np.where((cen[:, 2] < 1e-9) & (cen[:, 0] > 0.9) & (cen[:, 0] < 1.3), 7, mesh["tri_surf"])     # a pad on the underside
+    pb = build(mesh, props, bcs + [{"name": "Pad", "type": "keep_solid", "faces": [7], "params": {}}])
+    n0 = int(pb.passive.sum())
+    pad_pts = pb.keep_points["Pad"]
+    assert set(pb.keep_points) == {"Pad"}                                                          # (only the user's face is thickened)
+    pb.grow_kept(0.4)                                                                             # a smallest feature of 0.4: keep the material within 0.2 of the pad
+    n_big = int(pb.passive.sum())
+    assert n_big > n0 and (pb.passive & pb.design).sum() == 0
+    near = np.linalg.norm(pb.centroid[:, None, :] - pad_pts[None, ::25, :], axis=2).min(axis=1) < 0.15
+    assert pb.passive[near].all()                                                                  # (a pad, not a skin)
+    pb.grow_kept(0.2)                                                                             # idempotent and reversible: it is the radius that decides
+    assert n0 < int(pb.passive.sum()) < n_big
+    assert "Pad" in pb.owners and len(pb.owners["Pad"]) > 1
