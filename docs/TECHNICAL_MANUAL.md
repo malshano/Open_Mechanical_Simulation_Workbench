@@ -369,7 +369,7 @@ Produces `results/result.npz`: `nodes`, `tets`, `tet_region`, `regions`, per-fie
 |---|---|
 | `at(i)` | New `ResultSet` for saved time `i` (expands `frame_map`, swaps moving `nodes`). |
 | `field_info()` | min/max over all times, `change_over_time`. |
-| `surface`, `slice`, `clip`, `iso` | Return payload dicts. `iso` uses marching tetrahedra (`_contour`), optional smoothing (node->cell->node averaging) and a wall gap that drops triangles near wall points. |
+| `surface`, `slice`, `clip`, `iso` | Return payload dicts. `iso` uses marching tetrahedra (`_contour`; every triangle is wound to face the way the field falls, so the surface has one orientation: consistent normals and an enclosed volume), optional smoothing of the field (node->cell->node averaging; it shrinks thin vortices, off by default in the Qt app) and a wall gap that drops triangles near wall points. The Qt app smooths the surface geometry for display with `simwb/surfsmooth.py` (vtkWindowedSincPolyDataFilter: pass band 0.1 -> 0.02 and 6 -> 30 passes over the amount 0-100, the cut border fixed); tested for the change of area and volume on noisy synthetic fields (`tests/test_surfsmooth.py`). |
 | `nodal(field)`, `_to_nodes(a)` | Cell values averaged to nodes; NaN cells ignored. |
 
 ### 8.6 CAD edits (`simwb/cad_edit.py`)

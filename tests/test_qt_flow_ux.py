@@ -243,3 +243,79 @@ def test_a_result_without_moving_parts_says_so_in_the_button_tooltip(ctl):
     import pytest
     with pytest.raises(ValueError, match="no moving part"):
         p.vis.apply(only_moving=True)
+
+
+# ---------------------------------------------------------------- #61: vortex surfaces: a smoothing amount that updates live, unsmoothed one click away
+def _iso_study(ctl):
+    make_flow_study(ctl, noise=0.4, n=9)                          # (a noisy Q-criterion: rough surfaces that follow the mesh)
+    ctl.do("results.tab", {"name": "flow"})
+    ctl.do("results.flow", {"planes": [], "iso": True, "iso_k": 3, "iso_gap": 0})
+    return ctl.win.panels["results"].flow
+
+
+def _iso_positions(ctl):
+    import numpy as np
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+    pd = ctl.win.view.overlay_actors[0].GetMapper().GetInput()
+    P = vtk_to_numpy(pd.GetPoints().GetData())
+    C = vtk_to_numpy(pd.GetPolys().GetConnectivityArray()).reshape(-1, 3)
+    return P[C].mean(1).copy(), pd.GetNumberOfPolys()                  # (the centre of each triangle: the shaded surface may share its points differently)
+
+
+def test_vortex_surfaces_are_smoothed_by_default_and_the_view_says_so(ctl):
+    f = _iso_study(ctl)
+    ov = ctl.state()["view"]["overlay"]
+    assert f.iso_polish.isChecked() and f.iso_amount.value() == 40 and f.iso_smooth.value() == 0     # (surface smoothing on; the old data smoothing off)
+    assert ov["iso_smoothing"]["passes"] > 0 and ov["smooth_shading"] is True and "(smoothed)" in ov["name"]
+    note = f.iso_smooth_note.text()
+    assert "Smoothed for display" in note and "data is unchanged" in note and "Area " in note, note
+
+
+def test_the_unsmoothed_surface_is_one_click_away_and_is_exactly_the_mesh_surface(ctl):
+    import numpy as np
+    f = _iso_study(ctl)
+    smooth_pos, n1 = _iso_positions(ctl)
+    f.iso_polish.setChecked(False)                                                                  # the one click
+    ov = ctl.state()["view"]["overlay"]
+    raw_pos, n0 = _iso_positions(ctl)
+    assert ov["iso_smoothing"]["passes"] == 0 and ov["smooth_shading"] is False and "(smoothed)" not in ov["name"]
+    assert "exactly as the mesh made them" in f.iso_smooth_note.text() and not f.iso_amount.isEnabled()
+    assert n0 == n1 and np.abs(smooth_pos - raw_pos).max() > 1e-4                                  # (same triangles, other positions)
+    f.iso_polish.setChecked(True)
+    again, _ = _iso_positions(ctl)
+    assert np.allclose(again, smooth_pos, atol=1e-6) and f.iso_amount.isEnabled()                   # (and back, as it was)
+
+
+def test_the_amount_follows_the_slider_live_without_extracting_the_surface_again(ctl):
+    import numpy as np
+    from PySide6.QtTest import QTest
+    f = _iso_study(ctl)
+    a, _ = _iso_positions(ctl)
+    extractions = []
+    real = ctl.engine.flow_layers
+    ctl.engine.flow_layers = lambda *x, **k: (extractions.append(1), real(*x, **k))[1]
+    for v in (50, 60, 70, 80):                                                                     # (dragging: several values, one redraw when it pauses)
+        f.iso_amount.setValue(v)
+    QTest.qWait(400)
+    b, _ = _iso_positions(ctl)
+    assert ctl.state()["view"]["overlay"]["iso_smoothing"]["strength"] == 80 and np.abs(a - b).max() > 1e-4
+    assert len(extractions) == 1                                                                   # (one redraw; the surface itself is the cached one)
+    assert f.request()["iso"]["surface_smooth"] == 80
+
+
+def test_the_control_api_sets_the_amount_and_zero_means_unsmoothed(ctl):
+    f = _iso_study(ctl)
+    ctl.do("results.flow", {"iso_surface_smooth": 75})
+    assert ctl.state()["view"]["overlay"]["iso_smoothing"]["strength"] == 75
+    ctl.do("results.flow", {"iso_surface_smooth": 0})
+    assert ctl.state()["view"]["overlay"]["iso_smoothing"]["passes"] == 0 and not f.iso_polish.isChecked()
+
+
+def test_smoothing_does_not_change_the_data_or_the_size_of_the_drawn_surface(ctl):
+    import numpy as np
+    f = _iso_study(ctl)
+    q_before = ctl.engine.project().results().fields["Q-criterion"][1].copy()
+    ctl.do("results.flow", {"iso_surface_smooth": 100})
+    sm = ctl.state()["view"]["overlay"]["iso_smoothing"]
+    assert np.array_equal(ctl.engine.project().results().fields["Q-criterion"][1], q_before)         # (display only)
+    assert abs(sm["area_change"]) < 0.25 and (sm["volume_change"] is None or abs(sm["volume_change"]) < 0.1)

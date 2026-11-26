@@ -4,7 +4,7 @@ paths. Every tool has its own switch and they can be combined; the
 object is drawn in grey under them. Plain widgets with ids (results.flow.*), so that the control API and the tests reach every one."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QDoubleValidator
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSlider, QSpinBox,
                                QVBoxLayout, QWidget)
@@ -86,13 +86,35 @@ class FlowTools(QWidget):
         self.iso_gap.setToolTip("Leave out the surfaces this close to the walls: the shear of the boundary layer gives a large Q there too and would hide the vortices")
         self.iso_gap.valueChanged.connect(lambda *_: self._emit())
         iv.addLayout(self._row("Keep clear of walls", self.iso_gap))
+        # smoothing: of the surface (a display filter that keeps its size, below) and, if wanted, of the data before the surface is made
+        self.iso_polish = self._check("results.flow.iso.polish", "Smooth the surfaces",
+                                      "Round off the roughness that follows the mesh cells so the surfaces look like a liquid. Untick to see them exactly as the mesh made them")
+        self.iso_polish.setChecked(True)
+        iv.addWidget(self.iso_polish)
+        self.iso_amount = self._slider("results.flow.iso.amount", 0, 100, 40,
+                                       "How much: to the right the surface is rounder. It keeps its size and thin parts (it does not shrink)")
+        self.iso_amount.setTracking(True)                      # (live: the surface follows the handle; the redraw waits for a pause in the dragging)
+        self.iso_amount.valueChanged.disconnect()
+        self._amount_timer = QTimer(self)
+        self._amount_timer.setSingleShot(True)
+        self._amount_timer.setInterval(150)
+        self._amount_timer.timeout.connect(self._emit)
+        self.iso_amount.valueChanged.connect(lambda *_: self._amount_timer.start())
+        self.iso_polish.toggled.connect(lambda on: self.iso_amount.setEnabled(on))
+        iv.addLayout(self._row("Amount", self.iso_amount))
+        self.iso_smooth_note = _muted("")
+        self.iso_smooth_note.setObjectName("muted")
+        wid(self.iso_smooth_note, "results.flow.iso.smooth_note")
+        iv.addWidget(self.iso_smooth_note)
         self.iso_smooth = QSpinBox()
         wid(self.iso_smooth, "results.flow.iso.smooth")
         self.iso_smooth.setRange(0, 3)
-        self.iso_smooth.setValue(1)
-        self.iso_smooth.setToolTip("Smoothing passes of the surfaces (0 = as the mesh made them)")
+        self.iso_smooth.setValue(0)
+        self.iso_smooth.setSuffix(" passes")
+        self.iso_smooth.setToolTip("Averages the data over the mesh cells before the surfaces are made (0 = off). It removes single-cell lumps but also "
+                                   "weakens thin vortices: one pass can take away a third of a thin vortex. Use Smooth the surfaces first")
         self.iso_smooth.valueChanged.connect(lambda *_: self._emit())
-        iv.addLayout(self._row("Smoothing", self.iso_smooth))
+        iv.addLayout(self._row("Smooth the data first", self.iso_smooth))
         v.addWidget(self.iso_box)
         # ---- volume rendering
         v.addWidget(_h("Volume rendering"))
@@ -435,6 +457,16 @@ class FlowTools(QWidget):
             self._rebuild_planes()
         self._iso_note()
 
+    def show_smoothing(self, sm: dict, n_tris: int = 0):
+        """Say what the drawn vortex surfaces are: smoothed for display (and by how much their area changed), or as the mesh made them."""
+        if not n_tris:
+            self.iso_smooth_note.setText("No vortex surface at this level: move the slider to the right.")
+        elif sm.get("passes"):
+            self.iso_smooth_note.setText(f"Smoothed for display (the data is unchanged). Area {sm['area_change'] * 100:+.1f} %"
+                                         + (f", volume {sm['volume_change'] * 100:+.1f} %" if sm.get("volume_change") is not None else "") + ".")
+        else:
+            self.iso_smooth_note.setText("Shown exactly as the mesh made them.")
+
     def _iso_note(self):
         q = next((f for f in self.infos if f["name"] == "Q-criterion"), None)
         if q and q.get("max"):
@@ -444,7 +476,8 @@ class FlowTools(QWidget):
         axis = next((k for k, b in self.vec_axis.items() if b.isChecked()), "y")
         return {"region": self.region.currentData(), "res": int(self.res.currentData()),
                 "iso": {"on": self.iso_on.isChecked() and self.iso_box.isVisibleTo(self), "k": self.iso_k.value(), "color": self.iso_color.currentText(),
-                        "gap": self.iso_gap.value(), "smooth": self.iso_smooth.value()},
+                        "gap": self.iso_gap.value(), "smooth": self.iso_smooth.value(),
+                        "surface_smooth": self.iso_amount.value() if self.iso_polish.isChecked() else 0},
                 "volume": {"on": self.vol_on.isChecked(), "field": self.vol_field.currentText(), "density": self.vol_density.value() / 10.0,
                            "style": self.vol_style.currentData(), "range": self._scale_value(self.vol_scale)},
                 "vectors": {"on": self.vec_on.isChecked(), "axis": axis, "frac": self.vec_pos.value() / 1000.0, "n": self.vec_n.value(),

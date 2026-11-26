@@ -671,7 +671,8 @@ class Control(QObject):
            "streams_range": ("array", "[lo, hi] colour range of the paths; [] automatic", False),
            "streams_animate": (B, "dots moving along the paths", False), "streams_speed": (N, "0.1..4: playback speed of the dots", False),
            "iso": (B, "vortex surfaces (Q-criterion) on/off", False), "iso_k": (N, "2..60: weaker vortices shown", False), "iso_color": (S, "field the surfaces are coloured by", False),
-           "iso_gap": (N, "keep clear of walls, mm", False), "iso_smooth": (N, "0..3", False),
+           "iso_gap": (N, "keep clear of walls, mm", False), "iso_smooth": (N, "0..3: passes of averaging of the DATA before the surfaces are made (default 0; it shrinks thin vortices)", False),
+           "iso_surface_smooth": (N, "0..100: how much the surfaces are smoothed for display (0 = as the mesh made them; the data and the size are unchanged)", False),
            "volume": (B, "volume rendering on/off", False), "volume_field": (S, "field of the cloud", False), "volume_density": (N, "0.5..30", False),
            "volume_style": (S, "map|smoke", False),
            "vectors": (B, "arrows on a plane on/off", False), "vectors_axis": (S, "x|y|z", False), "vectors_pos": (N, "0..1 across the region", False),
@@ -1120,6 +1121,11 @@ class Control(QObject):
                     f.iso_gap.setValue(float(v))
                 elif k == "iso_smooth":
                     f.iso_smooth.setValue(int(v))
+                elif k == "iso_surface_smooth":
+                    amount = max(0, min(100, int(round(float(v)))))
+                    f.iso_polish.setChecked(amount > 0)
+                    if amount:
+                        f.iso_amount.setValue(amount)
                 elif k == "volume":
                     f.vol_on.setChecked(bool(v))
                 elif k == "volume_field":
@@ -1154,6 +1160,7 @@ class Control(QObject):
                     f.set_scale(k.split("_")[0], *(list(v)[:2] if v else (None, None)))
         finally:
             f._quiet = False
+            f._amount_timer.stop()
         f.changed.emit()
         return {"flow": f.request()}
 

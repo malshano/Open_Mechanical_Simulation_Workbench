@@ -328,7 +328,8 @@ Surfaces of equal Q-criterion wrap vortex cores (tip vortices, wakes).
 | **Colour by** | Any field painted on the vortex surface. |
 | **Weaker vortices shown** (slider) | Move right to show weaker vortices too (more surfaces); left for only the strongest. The starting position comes from the propeller's rotation rate (or flow speed over reference length). |
 | **Keep clear of walls [mm]** | Leaves out surface pieces this close to walls, where boundary-layer shear makes Q large. Default 2 % of the smallest rotating-zone radius. |
-| **Smoothing** | 0-3 passes of averaging before drawing. Default 1. |
+| **Smooth the surfaces** (tick box) and **Amount** (slider, 0-100, default 40) | Rounds off the roughness that follows the mesh cells, so the surfaces look like a liquid. It follows the slider live. **Untick the box** to see the surfaces exactly as the mesh made them. It is a display filter: the data is unchanged, and the line under the slider says so and gives the change of the surface area (and of the enclosed volume of a closed surface). The size is kept: a non-shrinking filter (windowed sinc, as in Taubin smoothing) moves the points, so a thin vortex does not get thinner (at the default, well under 1 % of its volume; at 100, a vortex only one and a half cells across loses about 2 %). The surface is drawn with smooth shading while it is smoothed. |
+| **Smooth the data first** (0-3 passes, default 0) | Averages the data over the mesh cells before the surfaces are made. It removes single-cell lumps but also flattens thin vortices (one pass can take away more than a third of a thin vortex, three can remove it), so it is off by default; earlier versions had one pass on. Prefer the surface smoothing. |
 | **Opacity** | Of the vortex surfaces. |
 
 ### 8.3 Contour planes
@@ -621,7 +622,7 @@ The tabs are the ones of section 8, with these differences and additions.
   - **Vortex surfaces** (turbulence): surfaces of equal Q-criterion (rotation beats strain). The slider **Weaker vortices shown** works
     towards the right (the Q value under it falls): at the strong end the surfaces only wrap the wall layer on the object; towards the
     weak end the tip vortices, the leading-edge vortex and the wake appear, and also more noise. **Coloured by** picks the field painted on
-    them; **Keep clear of walls** hides the surface near the object; **Smoothing** rounds it. For a wake use the whole air box, a weak
+    them; **Keep clear of walls** hides the surface near the object; **Smooth the surfaces** and its **Amount** round it (untick the box for the surface as the mesh made it; the legend says "(smoothed)"). For a wake use the whole air box, a weak
     setting and turn the view (**Z** for the top, **-X** from behind).
   - **Volume rendering**: the whole flow as a see-through cloud (field, density, colour map or smoke).
   - **Arrows** on a plane (axis, position, number across) and **Particle paths** (number, where they start, steps). With **Animate the

@@ -253,6 +253,21 @@ class Engine(QObject):
         return rs.surface(field, groups=(s.get("default_groups") or None) if groups is None else list(groups),
                           hide_regions=tuple(s.get("default_hidden_regions") or ()), below=cut)
 
+    def smooth_iso(self, payload: dict, strength: float):
+        """(the vortex-surface payload with its vertices smoothed for display, stats): a display filter on the surface that keeps its size
+        (simwb.surfsmooth), kept for the same payload and strength so that moving the slider back and forth is quick."""
+        from ..surfsmooth import smooth_payload
+        cache = self.__dict__.setdefault("_smooth_cache", {})
+        key = (id(payload), round(float(strength)))
+        hit = cache.get(key)
+        if hit and hit[0] is payload:
+            return hit[1], hit[2]
+        out, stats = smooth_payload(payload, strength)
+        if len(cache) > 8:
+            cache.clear()
+        cache[key] = (payload, out, stats)
+        return out, stats
+
     def flow_defaults(self) -> dict:
         """What the Flow tab starts from: the keep-clear-of-walls distance of the vortex surfaces (mm, 2 % of the reference length) and
         the free-stream speed."""
@@ -288,7 +303,7 @@ class Engine(QObject):
             qmax = memo(("qmax",), lambda: max(f["max"] for f in rs.field_info() if f["name"] == "Q-criterion"))
             level = qmax * 10 ** (-float(iso.get("k", 48)) / 10.0)
             cf = iso.get("color") if iso.get("color") in rs.fields else None
-            gap, sm = float(iso.get("gap", 0.0)), int(iso.get("smooth", 1))
+            gap, sm = float(iso.get("gap", 0.0)), int(iso.get("smooth", 0))
             out["iso"] = memo(("iso", round(level, 12), cf, gap, sm), lambda: rs.iso(
                 "Q-criterion", level, cf, hide_regions=hide, wall_groups=walls, wall_gap=max(0.0, gap) / 1000.0, smooth=min(max(sm, 0), 3)))
             out["iso_level"] = level

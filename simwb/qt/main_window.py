@@ -820,10 +820,13 @@ class MainWindow(QMainWindow):
         if "iso" in L:
             cf = t["iso"]["color"] if t["iso"]["color"] in fields else r["field"]
             f = fields.get(cf, {})
-            surf = merge_payloads(L["iso"], self.engine.flow_object(cf, ti, groups=groups))
+            polished, sm = self.engine.smooth_iso(L["iso"], t["iso"].get("surface_smooth", 0))     # (a display filter: the data is not changed)
+            surf = merge_payloads(polished, self.engine.flow_object(cf, ti, groups=groups))
             rng = (f["p01"], f["p99"]) if f.get("p99", 0) > f.get("p01", 0) else None
-            self.view.show_surface(surf, name=f"Vortex surfaces, coloured by {cf}", unit=f.get("unit", ""), cmap=r["cmap"], reverse=r["reverse"],
-                                   bands=r["bands"], vrange=rng)
+            self.view.show_surface(surf, name=f"Vortex surfaces{' (smoothed)' if sm['passes'] else ''}, coloured by {cf}", unit=f.get("unit", ""),
+                                   cmap=r["cmap"], reverse=r["reverse"], bands=r["bands"], vrange=rng, smooth_shading=bool(sm["passes"]))
+            self.view.overlay_info["iso_smoothing"] = sm
+            ft.show_smoothing(sm, L["iso"].get("n_tris", 0))
             legend = True
         else:
             one = L.get("planes", [])

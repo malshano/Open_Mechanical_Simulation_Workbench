@@ -14,6 +14,7 @@ The web version (`python -m simwb.server`) stays, for remote machines and for Cl
 | Step panels | `simwb/qt/panels.py` | Geometry, Setup (materials), Mesh (colour by quality / cell size / region, cut), Solve, Results (summary tiles, field, colour map, bands, deformation) |
 | Recording notice, Stop, pause when minimised | `simwb/qt/recording.py` | the MP4 button's `Recording`; `exports.record(gate=...)` asks it before every picture |
 | "Show in the view" list (parts, air box, zone / region outlines of a flow result) | `simwb/qt/visibility.py` | one list for the Results step; the window draws what `selection()` says (`main_window.update_view`) |
+| Vortex-surface smoothing | `simwb/surfsmooth.py` | windowed-sinc display filter on the iso payload (does not shrink); the view shades it smooth (`show_surface(smooth_shading=)`) |
 | Engine facade | `simwb/qt/engine.py` | cases and jobs, as Qt signals |
 | Claude assistant | `simwb/qt/assistant.py` | the same `agent.ChatSession` and tools as the web chat (no shell, no file access); log in / out; suggestion chips; chat is kept per study |
 
