@@ -625,11 +625,29 @@ The tabs are the ones of section 8, with these differences and additions.
     them; **Keep clear of walls** hides the surface near the object; **Smooth the surfaces** and its **Amount** round it (untick the box for the surface as the mesh made it; the legend says "(smoothed)"). For a wake use the whole air box, a weak
     setting and turn the view (**Z** for the top, **-X** from behind).
   - **Volume rendering**: the whole flow as a see-through cloud (field, density, colour map or smoke).
-  - **Arrows** on a plane (axis, position, number across) and **Particle paths** (number, where they start, steps). With **Animate the
+  - **Arrows** on a plane (axis, position, number across) and **Particle paths** (number, where they start - the upstream face, anywhere, or **a disk you place**, moved with its handle - steps). With **Animate the
     particles** (on by default) dots run along the paths, as the air moves; **Dot speed** sets how fast.
   - **Automatic colour range**: every plane, the cloud, the arrows and the paths have their own. Untick it and type **from** and **to**
     to fix the colours of that tool; while it is ticked the boxes show the range used.
   - A Region of the whole air box with a fine grid needs more memory; if the window is slow, go back to a coarser grid.
+- **Handles in the 3D view** (Results step): everything that has a position has a handle you can drag, and the numbers follow it (and it follows
+  the numbers). A **plane** (a contour plane, the plane of the arrows, the section of a part) is a coloured sheet with a ball and an arrow in its
+  middle: drag the ball or the arrow along the plane's axis; **Shift** snaps to round steps; the sheet stops at the edge of the region. Looked at
+  straight along its axis, a plane is dragged up and down the screen instead. A **point** is a ball: a pinned value or an end of the line plot
+  slides over the model under the pointer and reads its value there; the disk the particles start on has arrows (red x, green y, blue z) as
+  well as a ball. While you drag, only the handle, the numbers and the labels move; the flow is cut again, the paths drawn again and the line
+  plotted again when you let go. The handles of a tab are shown while that tab is shown:
+
+  | Control | Tab | Handle | Numbers |
+  |---|---|---|---|
+  | Contour plane (each) | Flow | sheet over the region | slider, **Position (mm)**, the label under it |
+  | Plane of the vector arrows | Flow | sheet | slider, **Position (mm)** |
+  | Start of the particle paths: **A disk you place** | Flow | disk with a ball and x, y, z arrows | **Disk centre X, Y, Z**, **Disk radius** (mm) |
+  | Section of a part | Display (and the bar over the 3D view) | sheet over the part | slider, **Position (mm)**, the bar's value |
+  | Pinned value (each) | Probe | ball on the model | **X, Y, Z** (mm) under each pin: type a point and it goes to the nearest place on the model |
+  | Ends A and B of the line plot | Probe | ball on the model | **X, Y, Z** of each end |
+
+  The refinement regions and the rotating zones of the Mesh and Setup steps have their own handles (they are not in the Results step).
 - **Probe**: pin values by clicking the coloured result; line plot between two points or from the minimum to the maximum.
 - **Time bar** (Display, under the field; transient results): the saved time shown, a slider over the saved times and **▶ Play** /
   **❚❚ Pause**. Pinned values are cleared when the time changes; the line plot follows the time. A note says when the field hardly

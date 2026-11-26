@@ -502,7 +502,7 @@ class Control(QObject):
             "study": st,
             "panels": panels,
             "view": {"overlay": view.overlay_info, "geometry": view.geometry_info, "camera": view.camera(),
-                     "pick_mode": view.pick_mode, "selection": view.selection, "face_tints": view.face_tints,
+                     "pick_mode": view.pick_mode, "selection": view.selection, "handles": view.handles.describe(), "face_tints": view.face_tints,
                      "legend": getattr(view.legend, "spec", None) and {k: v for k, v in view.legend.spec.items() if k != "table"},
                      "gl": view.rw is not None},
             "docks": {d.objectName().removeprefix("dock."): d.isVisible() for d in win.findChildren(QDockWidget)},
@@ -713,6 +713,22 @@ class Control(QObject):
                                 "(its name, e.g. 'body', or its text in the list), 'air', 'zones' (outline of the moving zones) or 'regions' (refinement regions); "
                                 "all: tick every surface; only_moving: just the parts that move with the mesh and their zone outline. Works while the time bar plays.",
           {"show": ("object", "{name: bool}", False), "all": (B, "tick every surface", False), "only_moving": (B, "only what moves", False)}, visibility)
+        def handle(key, value, shift=False):
+            hs = win.view.handles
+            if key not in hs.specs:
+                raise ValueError(f"There is no handle {key!r} now. Handles: {', '.join(hs.specs) or 'none (they show with the tab of the control: Flow, Probe, or a section)'}")
+            v = [float(x) / 1000.0 for x in value] if isinstance(value, (list, tuple)) else float(value) / 1000.0
+            if hs.specs[key]["kind"] == "plane" and isinstance(v, list):
+                raise ValueError("A plane's handle takes one number (mm along its axis)")
+            if hs.specs[key]["kind"] == "point" and not isinstance(v, list):
+                raise ValueError("A point's handle takes [x, y, z] in mm")
+            hs.simulate_move(key, v, shift=bool(shift))
+            return {"handle": hs.describe()["handles"][key]}
+        R("view.handle", "Drag a handle in the 3D view by its name (see ui_state: view.handles) to a position: a plane's handle (contour plane 'plane1', the arrows' "
+                         "plane 'vectors', the section 'section') to one number in mm along its axis; a point's handle (the particle seed disk 'seeds', a pinned point "
+                         "'pin1', the ends of the line 'lineA' and 'lineB') to [x, y, z] in mm (a pin or line end lands on the nearest place on the model). It is the same "
+                         "press-drag-release as the mouse: the controls follow and the real work is done on release.",
+          {"key": (S, "handle name", True), "value": ("array", "mm (a plane: one number; a point: [x, y, z])", True), "shift": (B, "snap to round steps", False)}, handle)
         R("results.temperature_limit", "Set the allowed temperature (°C) the parts bars compare against; omit or null to clear it.",
           {"value": (N, "°C", False)}, lambda value=None: {"limit": rp().set_tlimit(value)})
         R("results.mesh_check", "Start the mesh-sensitivity check: levels 1 (one preset finer) or 2 (three levels, grid-convergence index); a job.",

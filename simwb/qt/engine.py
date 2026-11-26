@@ -253,6 +253,22 @@ class Engine(QObject):
         return rs.surface(field, groups=(s.get("default_groups") or None) if groups is None else list(groups),
                           hide_regions=tuple(s.get("default_hidden_regions") or ()), below=cut)
 
+    def seed_disk_default(self) -> dict | None:
+        """Where a seed disk for the particle paths starts: across the flow, just upstream of the object (its centre in m, its radius in m)."""
+        if self.project().study not in FLOW_STUDIES:
+            return None
+        rs = self.project().results()
+        box = self._flow_box(rs, 0.3, 0.8)
+        if not box:
+            return None
+        b = np.asarray(box, float)
+        u = np.asarray(self._flow_summary().get("U_inf") or [1.0, 0.0, 0.0], float)
+        ax = int(np.argmax(np.abs(u)))
+        c = (b[:3] + b[3:]) / 2
+        c[ax] = b[ax] if u[ax] > 0 else b[3 + ax]
+        across = [b[3 + i] - b[i] for i in range(3) if i != ax]
+        return {"center": c.tolist(), "radius": 0.2 * min(across)}
+
     def smooth_iso(self, payload: dict, strength: float):
         """(the vortex-surface payload with its vertices smoothed for display, stats): a display filter on the surface that keeps its size
         (simwb.surfsmooth), kept for the same payload and strength so that moving the slider back and forth is quick."""
@@ -331,10 +347,22 @@ class Engine(QObject):
         st = tools.get("streams") or {}
         if st.get("on") and "Velocity" in rs.fields:
             u = np.asarray(s.get("U_inf") or [1.0, 0.0, 0.0], float)
-            seed = "everywhere" if st.get("seed") == "everywhere" else "upstream"
-            out["paths"] = memo(("par", int(st.get("n", 800)), int(st.get("steps", 160)), seed, tuple(np.round(u, 6))),
-                                lambda: resample.particle_paths(rs, box, min(res, 96), int(st.get("n", 800)), int(st.get("steps", 160)), seed,
-                                                                (u / (np.linalg.norm(u) or 1.0)).tolist(), hide_regions=hide))
+            seed = st.get("seed") if st.get("seed") in ("everywhere", "disk") else "upstream"
+            disk = st.get("disk") if seed == "disk" else None
+            seed_box = None
+            if disk:                                    # a disk you placed: a box across the flow, thin along it (the paths start on its inscribed disk)
+                c, r = np.asarray(disk["center"], float), float(disk["radius"])
+                ax = int(np.argmax(np.abs(u)))
+                half = np.full(3, r)
+                half[ax] = 1e-6
+                seed_box = np.concatenate([c - half, c + half]).tolist()
+            elif seed == "disk":
+                seed = "upstream"                       # (no disk placed yet: as before)
+            out["paths"] = memo(("par", int(st.get("n", 800)), int(st.get("steps", 160)), seed, tuple(np.round(u, 6)),
+                                 None if seed_box is None else tuple(np.round(seed_box, 6))),
+                                lambda: resample.particle_paths(rs, box, min(res, 96), int(st.get("n", 800)), int(st.get("steps", 160)),
+                                                                "box" if seed_box else seed, (u / (np.linalg.norm(u) or 1.0)).tolist(), hide_regions=hide,
+                                                                seed_box=seed_box))
         return out
 
     def summary_text(self) -> str:

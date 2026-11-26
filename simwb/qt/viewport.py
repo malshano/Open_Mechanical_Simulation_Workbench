@@ -30,6 +30,7 @@ import vtkmodules.vtkRenderingFreeType  # noqa: F401
 
 from . import colormaps, theme
 from .banner import Banner
+from .handles import HandleSet
 from .planehandle import PlaneHandle
 from .layerview import LayerView
 from .regionview import RegionView
@@ -144,6 +145,8 @@ class Viewport(QWidget):
         self.region_view = RegionView(self)         # the refinement regions of the Mesh step (regionview.py)
         self.plane_handle = PlaneHandle(self)      # the preview of a symmetry plane and its handle (planehandle.py)
         self.scale_handles = ScaleHandles(self)  # the resize handles of a refinement region (scalehandles.py)
+        self.handles = HandleSet(self)          # the drag handles of the Results step's positioning controls (handles.py)
+        self._hset_drag = False
         self.region_gizmo = RotateGizmo(self)    # moves and turns a refinement region (its own: the model is not previewed with it)
         self.gizmo = RotateGizmo(self)      # the rings that turn the model, its preview and the align arrow (gizmo.py)
         self._gizmo_drag = False
@@ -357,6 +360,23 @@ class Viewport(QWidget):
         w1, w2 = (d11 * d20 - d01 * d21) / den, (d00 * d21 - d01 * d20) / den
         w = np.array([1 - w1 - w2, w1, w2])
         return [float(x) for x in w @ o["base"][tri]]
+
+    def surface_point_under(self, x: float, y: float):
+        """(cell, point) of the drawn result under the pixel (x, y) (device pixels, origin top-left, as the handles count), or None."""
+        o, d = self.gizmo.ray(x, y)
+        reach = 50.0 * float(np.linalg.norm(np.array(self.ren.GetActiveCamera().GetPosition()) - np.array(self.ren.GetActiveCamera().GetFocalPoint()))) + 1.0
+        h = self.pick_ray(o.tolist(), (o + d * reach).tolist())
+        return (h["cell"], h["point"]) if h and h["kind"] == "surface" else None
+
+    def closest_surface_point(self, p):
+        """(cell, point) of the drawn result nearest to the world point p, or None when nothing is drawn."""
+        idx = self._overlay_index
+        if idx is None or not self.overlay_actors:
+            return None
+        from vtkmodules.vtkCommonCore import mutable
+        pt, cell, sub_id, d2 = [0.0, 0.0, 0.0], mutable(0), mutable(0), mutable(0.0)
+        idx.loc.FindClosestPoint([float(p[0]), float(p[1]), float(p[2])], pt, cell, sub_id, d2)
+        return int(cell), [float(c) for c in pt]
 
     def value_at(self, cell: int, point):
         """The field's value at a point of the drawn surface (a face's value, or the corners' values weighted by where in the triangle)."""
@@ -631,6 +651,10 @@ class Viewport(QWidget):
             self._plane_drag = True
             self.iren.SetInteractorStyle(None)
             return
+        if self.handles.on and self.handles.press(self._press[0], self.gizmo._size()[1] - 1 - self._press[1]):       # a handle of a positioning control
+            self._hset_drag = True
+            self.iren.SetInteractorStyle(None)
+            return
         i = self._label_at(*self._press) if self._label_state and self._style is not None else None
         if i is not None:                                   # a label is taken: it moves with the mouse and the camera stays where it is
             self._drag = (i, self._press, self._label_state[i]["off"], self._style)
@@ -642,6 +666,13 @@ class Viewport(QWidget):
             self._gizmo_drag = False
             q = self.iren.GetEventPosition()
             self._gz.release(q[0], self.gizmo._size()[1] - 1 - q[1], bool(self.iren.GetShiftKey()))
+            if self._style is not None:
+                self.iren.SetInteractorStyle(self._style)
+            return
+        if self._hset_drag:
+            self._hset_drag = False
+            q = self.iren.GetEventPosition()
+            self.handles.release(q[0], self.gizmo._size()[1] - 1 - q[1], bool(self.iren.GetShiftKey()))
             if self._style is not None:
                 self.iren.SetInteractorStyle(self._style)
             return
@@ -673,6 +704,9 @@ class Viewport(QWidget):
         if self._plane_drag:
             self.plane_handle.drag_to(q[0], self.gizmo._size()[1] - 1 - q[1], bool(self.iren.GetShiftKey()))
             return
+        if self._hset_drag:
+            self.handles.drag_to(q[0], self.gizmo._size()[1] - 1 - q[1], bool(self.iren.GetShiftKey()))
+            return
         if self._drag is not None:
             i, p0, off0, _ = self._drag
             self.move_label(i, off0[0] + q[0] - p0[0], off0[1] + q[1] - p0[1])
@@ -687,6 +721,8 @@ class Viewport(QWidget):
             return                                          # (over a ring: the cursor is a hand, no face is hovered)
         if self.plane_handle.on and self.plane_handle.hover_at(q[0], self.gizmo._size()[1] - 1 - q[1]):
             return                                          # (over the plane's arrow: the cursor is a hand)
+        if self.handles.on and self.handles.hover_at(q[0], self.gizmo._size()[1] - 1 - q[1]) is not None:
+            return                                          # (over a handle of a positioning control)
         over = bool(self._label_state) and self._label_at(*q) is not None        # (the cursor says that a label can be dragged)
         self.iren.setCursor(Qt.SizeAllCursor) if over else self.iren.unsetCursor()
         self.hover_at(*self._to_view(q))
