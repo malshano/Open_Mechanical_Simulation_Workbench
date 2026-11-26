@@ -246,7 +246,7 @@ class ResultSet:
     def surface(self, field, groups=None, hide_regions=(), below=None):
         """below: (axis, position) keeps only the faces on the low side of that plane (the half of an object left when a flow is cut open)."""
         m = np.ones(len(self.surf_tris), bool)
-        if groups:
+        if groups is not None:           # ([] is none of them: nothing is drawn)
             m = np.isin(self.surf_group, [self.groups.index(g) for g in groups if g in self.groups])
         if below is not None and len(self.surf_tris):
             m = m & (self.nodes[self.surf_tris].mean(1)[:, int(below[0])] <= float(below[1]))
@@ -336,6 +336,7 @@ class ResultSet:
         tri(r3, (0, 3), (1, 3), (2, 3))
         tri(r2, (0, 2), (0, 3), (1, 3))  # quad 02-03-13-12 as two triangles
         tri(r2, (0, 2), (1, 3), (1, 2))
+        owner = np.concatenate([r1, r3, r2, r2])                  # (the tet each triangle was cut from)
         E = np.concatenate(E).reshape(-1, 2) if len(t) else np.zeros((0, 2), np.int64)
         n = np.int64(len(self.nodes))
         keys, idx = np.unique(E[:, 0] * n + E[:, 1], return_inverse=True)  # one vertex per cut edge
@@ -345,6 +346,16 @@ class ResultSet:
         pos_ = self.nodes[a] + (self.nodes[b] - self.nodes[a]) * w
         vals = val[a] + (val[b] - val[a]) * w[:, 0]
         tris = idx.reshape(-1, 3)
+        if len(tris):                                              # (every triangle faces the way the function falls, so the surface is wound one way
+            P = self.nodes[ts[:, 1:]] - self.nodes[ts[:, :1]]       #  throughout: smooth shading and the enclosed volume need that)
+            dd = d[ts[:, 1:]] - d[ts[:, :1]]
+            flat = ~np.isfinite(np.linalg.det(P)) | (np.abs(np.linalg.det(P)) < 1e-300)      # (a tet with no volume has no gradient: those triangles keep their winding)
+            P = np.where(flat[:, None, None], np.eye(3), P)
+            g = np.linalg.solve(P, np.nan_to_num(dd, nan=0.0)[..., None])[..., 0]
+            g = np.where(flat[:, None], 0.0, g)
+            nrm = np.cross(pos_[tris[:, 1]] - pos_[tris[:, 0]], pos_[tris[:, 2]] - pos_[tris[:, 0]])
+            flip = np.einsum("ij,ij->i", nrm, g[owner]) > 0
+            tris = np.where(flip[:, None], tris[:, [0, 2, 1]], tris)
         if walls is not None and len(tris):
             from scipy.spatial import cKDTree
             near = cKDTree(walls[0]).query(pos_[tris].mean(1), distance_upper_bound=walls[1])[0] < walls[1]

@@ -51,9 +51,10 @@ def frame(view, lines=()) -> QImage:
     return img
 
 
-def record(view, out: str, fps: float, n_frames: int, go, orbit_deg: float = 0.0, text=lambda i: (), progress=None) -> dict:
+def record(view, out: str, fps: float, n_frames: int, go, orbit_deg: float = 0.0, text=lambda i: (), progress=None, gate=None) -> dict:
     """Draw n_frames pictures and encode them to the MP4 `out`. go(i) puts picture i in the view (a saved time; nothing for a turntable);
     the camera turns orbit_deg over the whole video (360: once around). text(i): the lines written on picture i. progress(i, n): feedback.
+    gate(i): asked before picture i; False ends the video there (the pictures made so far are kept; fewer than two raise RecordingStopped).
     The camera is put back as it was afterwards."""
     from ..export import encode_mp4
 
@@ -63,7 +64,10 @@ def record(view, out: str, fps: float, n_frames: int, go, orbit_deg: float = 0.0
     saved = (cam.GetPosition(), cam.GetFocalPoint(), cam.GetViewUp())
     tmp = Path(tempfile.mkdtemp(prefix="simwb_video_"))
     try:
+        made = 0
         for i in range(n_frames):
+            if gate is not None and not gate(i):
+                break
             go(i)
             if orbit_deg:
                 cam.SetPosition(*saved[0])
@@ -74,8 +78,14 @@ def record(view, out: str, fps: float, n_frames: int, go, orbit_deg: float = 0.0
             view.render()
             QApplication.processEvents()
             frame(view, text(i)).save(str(tmp / f"f{i:05d}.jpg"), "JPG", 92)
+            made += 1
             if progress:
                 progress(i + 1, n_frames)
+        stopped = made < n_frames
+        if made < 2:
+            from .recording import RecordingStopped
+            raise RecordingStopped("Stopped before two pictures were made: there is no video")
+        n_frames = made
         if progress:
             progress(n_frames, n_frames, "encoding")
         path = encode_mp4(tmp, fps, Path(out))
@@ -86,7 +96,7 @@ def record(view, out: str, fps: float, n_frames: int, go, orbit_deg: float = 0.0
         view.render()
         shutil.rmtree(tmp, ignore_errors=True)
     return {"file": str(path), "frames": n_frames, "fps": fps, "seconds": round(n_frames / fps, 2), "orbit_deg": orbit_deg,
-            "bytes": path.stat().st_size}
+            "bytes": path.stat().st_size, "stopped": stopped}
 
 
 def turntable_frames(fps: float, seconds: float = 4.0) -> int:

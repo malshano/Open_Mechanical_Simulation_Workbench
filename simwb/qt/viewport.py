@@ -30,6 +30,7 @@ import vtkmodules.vtkRenderingFreeType  # noqa: F401
 
 from . import colormaps, theme
 from .banner import Banner
+from .handles import HandleSet
 from .planehandle import PlaneHandle
 from .layerview import LayerView
 from .regionview import RegionView
@@ -127,6 +128,7 @@ class Viewport(QWidget):
         cam.SetViewUp(0, 0, 1)
         self.geo_actors: list = []
         self.air_actors: list = []          # the air box of a flow study: translucent, shown or hidden on request
+        self.air_over_results = False       # (the Results step draws the air box over the result too when it is switched on)
         self.air_on = False
         self.choose_air = False             # a real click on the air volume where its walls overlap asks which wall (set while a plane is picked)
         self._geo_shown = True
@@ -143,6 +145,8 @@ class Viewport(QWidget):
         self.region_view = RegionView(self)         # the refinement regions of the Mesh step (regionview.py)
         self.plane_handle = PlaneHandle(self)      # the preview of a symmetry plane and its handle (planehandle.py)
         self.scale_handles = ScaleHandles(self)  # the resize handles of a refinement region (scalehandles.py)
+        self.handles = HandleSet(self)          # the drag handles of the Results step's positioning controls (handles.py)
+        self._hset_drag = False
         self.region_gizmo = RotateGizmo(self)    # moves and turns a refinement region (its own: the model is not previewed with it)
         self.gizmo = RotateGizmo(self)      # the rings that turn the model, its preview and the align arrow (gizmo.py)
         self._gizmo_drag = False
@@ -356,6 +360,23 @@ class Viewport(QWidget):
         w1, w2 = (d11 * d20 - d01 * d21) / den, (d00 * d21 - d01 * d20) / den
         w = np.array([1 - w1 - w2, w1, w2])
         return [float(x) for x in w @ o["base"][tri]]
+
+    def surface_point_under(self, x: float, y: float):
+        """(cell, point) of the drawn result under the pixel (x, y) (device pixels, origin top-left, as the handles count), or None."""
+        o, d = self.gizmo.ray(x, y)
+        reach = 50.0 * float(np.linalg.norm(np.array(self.ren.GetActiveCamera().GetPosition()) - np.array(self.ren.GetActiveCamera().GetFocalPoint()))) + 1.0
+        h = self.pick_ray(o.tolist(), (o + d * reach).tolist())
+        return (h["cell"], h["point"]) if h and h["kind"] == "surface" else None
+
+    def closest_surface_point(self, p):
+        """(cell, point) of the drawn result nearest to the world point p, or None when nothing is drawn."""
+        idx = self._overlay_index
+        if idx is None or not self.overlay_actors:
+            return None
+        from vtkmodules.vtkCommonCore import mutable
+        pt, cell, sub_id, d2 = [0.0, 0.0, 0.0], mutable(0), mutable(0), mutable(0.0)
+        idx.loc.FindClosestPoint([float(p[0]), float(p[1]), float(p[2])], pt, cell, sub_id, d2)
+        return int(cell), [float(c) for c in pt]
 
     def value_at(self, cell: int, point):
         """The field's value at a point of the drawn surface (a face's value, or the corners' values weighted by where in the triangle)."""
@@ -630,6 +651,10 @@ class Viewport(QWidget):
             self._plane_drag = True
             self.iren.SetInteractorStyle(None)
             return
+        if self.handles.on and self.handles.press(self._press[0], self.gizmo._size()[1] - 1 - self._press[1]):       # a handle of a positioning control
+            self._hset_drag = True
+            self.iren.SetInteractorStyle(None)
+            return
         i = self._label_at(*self._press) if self._label_state and self._style is not None else None
         if i is not None:                                   # a label is taken: it moves with the mouse and the camera stays where it is
             self._drag = (i, self._press, self._label_state[i]["off"], self._style)
@@ -641,6 +666,13 @@ class Viewport(QWidget):
             self._gizmo_drag = False
             q = self.iren.GetEventPosition()
             self._gz.release(q[0], self.gizmo._size()[1] - 1 - q[1], bool(self.iren.GetShiftKey()))
+            if self._style is not None:
+                self.iren.SetInteractorStyle(self._style)
+            return
+        if self._hset_drag:
+            self._hset_drag = False
+            q = self.iren.GetEventPosition()
+            self.handles.release(q[0], self.gizmo._size()[1] - 1 - q[1], bool(self.iren.GetShiftKey()))
             if self._style is not None:
                 self.iren.SetInteractorStyle(self._style)
             return
@@ -672,6 +704,9 @@ class Viewport(QWidget):
         if self._plane_drag:
             self.plane_handle.drag_to(q[0], self.gizmo._size()[1] - 1 - q[1], bool(self.iren.GetShiftKey()))
             return
+        if self._hset_drag:
+            self.handles.drag_to(q[0], self.gizmo._size()[1] - 1 - q[1], bool(self.iren.GetShiftKey()))
+            return
         if self._drag is not None:
             i, p0, off0, _ = self._drag
             self.move_label(i, off0[0] + q[0] - p0[0], off0[1] + q[1] - p0[1])
@@ -686,6 +721,8 @@ class Viewport(QWidget):
             return                                          # (over a ring: the cursor is a hand, no face is hovered)
         if self.plane_handle.on and self.plane_handle.hover_at(q[0], self.gizmo._size()[1] - 1 - q[1]):
             return                                          # (over the plane's arrow: the cursor is a hand)
+        if self.handles.on and self.handles.hover_at(q[0], self.gizmo._size()[1] - 1 - q[1]) is not None:
+            return                                          # (over a handle of a positioning control)
         over = bool(self._label_state) and self._label_at(*q) is not None        # (the cursor says that a label can be dragged)
         self.iren.setCursor(Qt.SizeAllCursor) if over else self.iren.unsetCursor()
         self.hover_at(*self._to_view(q))
@@ -713,14 +750,14 @@ class Viewport(QWidget):
         for a in self.label_actors:
             a.SetVisibility(self._labels_visible())
         for a in self.air_actors:
-            a.SetVisibility(bool(on) and self.air_on)
+            a.SetVisibility((bool(on) or self.air_over_results) and self.air_on)
         self.render()
 
     def set_air_visible(self, on: bool):
         """Show or hide the air box (it never hides the part: it is translucent)."""
         self.air_on = bool(on)
         for a in self.air_actors:
-            a.SetVisibility(self._geo_shown and self.air_on)
+            a.SetVisibility((self._geo_shown or self.air_over_results) and self.air_on)
         if not self.air_on and self.hover_id in {p[0] for p in self._air_parts}:    # (a wall that was under the pointer must not stay lit once the box is hidden:
             self._set_hover(-1)                                                       #  its highlight is as big as the air volume and covers the model)
         self.geometry_info["air_visible"] = self.air_on and bool(self.air_actors)
@@ -961,12 +998,13 @@ class Viewport(QWidget):
     # ------------------------------------------------------------------ a field on a surface
     def show_surface(self, p: dict, *, name: str = "", unit: str = "", cmap: str = "turbo", reverse: bool = False,
                      bands: int = 0, vrange=None, edges: bool = False, deform: float | None = None, fixed_quality: bool = False,
-                     animate: bool = False, solid=None, contours=None, opacity: float = 1.0, outline: bool = False):
+                     animate: bool = False, solid=None, contours=None, opacity: float = 1.0, outline: bool = False, smooth_shading: bool = False):
         """A surface payload {positions, indices, values, per, [categories, present, scale, disp, disp_kind]} coloured by
         its values. vrange: (lo, hi) or None for the payload's own; fixed_quality: the red-is-bad scale of cell quality. solid: (r, g, b) draws it
         in that colour instead (the object, when a flow tool shows its own field); no colour bar then. contours: {'on', 'n', 'levels'}: lines of
         equal value, n evenly spaced between the lowest and highest value and any extra levels. opacity: 0.1..1 (see-through surfaces);
-        outline: with a deformation drawn, the thin outline of the part before it deformed."""
+        outline: with a deformation drawn, the thin outline of the part before it deformed. smooth_shading: shade it as a smooth surface (vertex normals,
+        kept sharp at edges over 50 degrees) instead of flat facets: for surfaces that were smoothed, such as vortex surfaces."""
         self.clear_overlay()
         if name != self._shown_name:
             self._shown_name = name
@@ -1043,12 +1081,23 @@ class Viewport(QWidget):
             m.SetScalarModeToUsePointData()
         if solid is not None:
             m.ScalarVisibilityOff()
-        act = self._actor(pd, mapper=m, color=solid)
+        drawn = pd
+        if smooth_shading and not self._anim:
+            nf = vtkPolyDataNormals()
+            nf.SetInputData(pd)
+            nf.ComputePointNormalsOn()
+            nf.SplittingOn()
+            nf.SetFeatureAngle(50.0)
+            nf.ConsistencyOn()
+            nf.Update()
+            drawn = nf.GetOutput()
+        act = self._actor(drawn, mapper=m, color=solid)
         act.GetProperty().SetEdgeVisibility(1 if edges else 0)
         act.GetProperty().SetLineWidth(1.0)
         op = min(max(float(opacity if opacity is not None else 1.0), 0.05), 1.0)
         act.GetProperty().SetOpacity(op)
         self.overlay_info["opacity"] = op
+        self.overlay_info["smooth_shading"] = drawn is not pd
         self.overlay_info["outline"] = False
         if outline and (self._anim or info.get("deform")):          # the undeformed part as a thin outline (its sharp edges and border)
             fe = vtkFeatureEdges()
@@ -1074,7 +1123,7 @@ class Viewport(QWidget):
             self.overlay_info["outline"] = True
             self.overlay_info["outline_segments"] = int(fe.GetOutput().GetNumberOfCells())
         # (flat per-face shading on the CAD facets, so the shape reads as a model)
-        act.GetProperty().SetInterpolationToFlat()
+        act.GetProperty().SetInterpolationToPhong() if drawn is not pd else act.GetProperty().SetInterpolationToFlat()
         self.ren.AddActor(act)
         self.overlay_actors.append(act)
         self._anim_poly = pd

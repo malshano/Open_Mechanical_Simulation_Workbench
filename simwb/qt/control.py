@@ -502,13 +502,14 @@ class Control(QObject):
             "study": st,
             "panels": panels,
             "view": {"overlay": view.overlay_info, "geometry": view.geometry_info, "camera": view.camera(),
-                     "pick_mode": view.pick_mode, "selection": view.selection, "face_tints": view.face_tints,
+                     "pick_mode": view.pick_mode, "selection": view.selection, "handles": view.handles.describe(), "face_tints": view.face_tints,
                      "legend": getattr(view.legend, "spec", None) and {k: v for k, v in view.legend.spec.items() if k != "table"},
                      "gl": view.rw is not None},
             "docks": {d.objectName().removeprefix("dock."): d.isVisible() for d in win.findChildren(QDockWidget)},
             "jobs_running": jobs,
             "shell": {"toasts": win.toasts.listing(), "section": win.shell.section_state(), "hover": win.shell.hover_text,
-                      "hint": win.view.banner.text(), "status_job": win.shell.job_msg.full if win.shell.current else "",
+                      "hint": win.view.banner.text(), "visibility": win.panels["results"].vis.state(), "recording": (win.panels["results"].recording.state() if win.panels["results"].recording else None),
+                      "status_job": win.shell.job_msg.full if win.shell.current else "",
                       "probe": {"checked": win.view.viewbar.probe.isChecked(), "enabled": win.view.viewbar.probe.isEnabled()}},
             "assistant": {"busy": a.busy, "login": a.who.text(), "status": a.status.text(),
                           "messages": len(a.log.get(a.pid or "", [])), "last": a.log.get(a.pid or "", [])[-3:]},
@@ -664,12 +665,14 @@ class Control(QObject):
                           "Omitted arguments stay.",
           {"region": (S, "object|all", False), "grid": (N, "48|64|96|128", False),
            "planes": ("array", "contour planes, replacing the list: [{field, axis x|y|z, position 0..1 across the region, opacity 0.1..1, range [lo, hi] (omit: automatic)}]; [] for none", False),
+           "plane_model": (S, "how the model is drawn with the planes: ghost (whole, see-through, the default) | solid (whole) | cut (opened at plane 1: the section view)", False),
            "volume_range": ("array", "[lo, hi] colour range of the cloud; [] automatic", False),
            "vectors_range": ("array", "[lo, hi] colour range of the arrows; [] automatic", False),
            "streams_range": ("array", "[lo, hi] colour range of the paths; [] automatic", False),
            "streams_animate": (B, "dots moving along the paths", False), "streams_speed": (N, "0.1..4: playback speed of the dots", False),
            "iso": (B, "vortex surfaces (Q-criterion) on/off", False), "iso_k": (N, "2..60: weaker vortices shown", False), "iso_color": (S, "field the surfaces are coloured by", False),
-           "iso_gap": (N, "keep clear of walls, mm", False), "iso_smooth": (N, "0..3", False),
+           "iso_gap": (N, "keep clear of walls, mm", False), "iso_smooth": (N, "0..3: passes of averaging of the DATA before the surfaces are made (default 0; it shrinks thin vortices)", False),
+           "iso_surface_smooth": (N, "0..100: how much the surfaces are smoothed for display (0 = as the mesh made them; the data and the size are unchanged)", False),
            "volume": (B, "volume rendering on/off", False), "volume_field": (S, "field of the cloud", False), "volume_density": (N, "0.5..30", False),
            "volume_style": (S, "map|smoke", False),
            "vectors": (B, "arrows on a plane on/off", False), "vectors_axis": (S, "x|y|z", False), "vectors_pos": (N, "0..1 across the region", False),
@@ -703,6 +706,29 @@ class Control(QObject):
         R("results.part", "Show or hide one part (result region) of the drawing.",
           {"name": (S, "part name (state: the tick boxes under Model)", True), "visible": (B, "default true", False)},
           lambda name, visible=True: (rp().set_part_visible(name, visible), {"hidden": rp().hidden_regions()})[1])
+        def visibility(show=None, all=False, only_moving=False):
+            rp().vis.apply(show or {}, all=bool(all), only_moving=bool(only_moving))
+            return {"visibility": rp().vis.state()}
+        R("results.visibility", "Flow results with an object (external flow): what the view draws ('Show in the view' list). show: {name: true|false} for a surface "
+                                "(its name, e.g. 'body', or its text in the list), 'air', 'zones' (outline of the moving zones) or 'regions' (refinement regions); "
+                                "all: tick every surface; only_moving: just the parts that move with the mesh and their zone outline. Works while the time bar plays.",
+          {"show": ("object", "{name: bool}", False), "all": (B, "tick every surface", False), "only_moving": (B, "only what moves", False)}, visibility)
+        def handle(key, value, shift=False):
+            hs = win.view.handles
+            if key not in hs.specs:
+                raise ValueError(f"There is no handle {key!r} now. Handles: {', '.join(hs.specs) or 'none (they show with the tab of the control: Flow, Probe, or a section)'}")
+            v = [float(x) / 1000.0 for x in value] if isinstance(value, (list, tuple)) else float(value) / 1000.0
+            if hs.specs[key]["kind"] == "plane" and isinstance(v, list):
+                raise ValueError("A plane's handle takes one number (mm along its axis)")
+            if hs.specs[key]["kind"] == "point" and not isinstance(v, list):
+                raise ValueError("A point's handle takes [x, y, z] in mm")
+            hs.simulate_move(key, v, shift=bool(shift))
+            return {"handle": hs.describe()["handles"][key]}
+        R("view.handle", "Drag a handle in the 3D view by its name (see ui_state: view.handles) to a position: a plane's handle (contour plane 'plane1', the arrows' "
+                         "plane 'vectors', the section 'section') to one number in mm along its axis; a point's handle (the particle seed disk 'seeds', a pinned point "
+                         "'pin1', the ends of the line 'lineA' and 'lineB') to [x, y, z] in mm (a pin or line end lands on the nearest place on the model). It is the same "
+                         "press-drag-release as the mouse: the controls follow and the real work is done on release.",
+          {"key": (S, "handle name", True), "value": ("array", "mm (a plane: one number; a point: [x, y, z])", True), "shift": (B, "snap to round steps", False)}, handle)
         R("results.temperature_limit", "Set the allowed temperature (°C) the parts bars compare against; omit or null to clear it.",
           {"value": (N, "°C", False)}, lambda value=None: {"limit": rp().set_tlimit(value)})
         R("results.mesh_check", "Start the mesh-sensitivity check: levels 1 (one preset finer) or 2 (three levels, grid-convergence index); a job.",
@@ -1095,6 +1121,8 @@ class Control(QObject):
                     if not isinstance(v, list):
                         raise ValueError("planes must be a list of {field, axis, position, opacity}")
                     f.set_planes(v, emit=False)
+                elif k == "plane_model":
+                    data(f.plane_model, v)
                 elif k == "region":
                     data(f.region, v)
                 elif k == "grid":
@@ -1109,6 +1137,11 @@ class Control(QObject):
                     f.iso_gap.setValue(float(v))
                 elif k == "iso_smooth":
                     f.iso_smooth.setValue(int(v))
+                elif k == "iso_surface_smooth":
+                    amount = max(0, min(100, int(round(float(v)))))
+                    f.iso_polish.setChecked(amount > 0)
+                    if amount:
+                        f.iso_amount.setValue(amount)
                 elif k == "volume":
                     f.vol_on.setChecked(bool(v))
                 elif k == "volume_field":
@@ -1143,6 +1176,7 @@ class Control(QObject):
                     f.set_scale(k.split("_")[0], *(list(v)[:2] if v else (None, None)))
         finally:
             f._quiet = False
+            f._amount_timer.stop()
         f.changed.emit()
         return {"flow": f.request()}
 

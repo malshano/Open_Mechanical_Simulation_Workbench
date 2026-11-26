@@ -150,10 +150,11 @@ class Engine(QObject):
     def result_fields(self) -> list:
         return self.project().results().field_info()
 
-    def result_surface(self, field: str, time_index: int = -1, section=None, hide=None):
+    def result_surface(self, field: str, time_index: int = -1, section=None, hide=None, groups=None):
         """The result field on the part's surface; with section=(axis 'x'|'y'|'z', fraction 0..1 of the part's extent) the part is cut there
         and the cells on the low side are shown with the cut faces open (the inside of the part). hide: result regions (parts) not drawn
-        (None: the study's own choice - the air of a cooling study is hidden)."""
+        (None: the study's own choice - the air of a cooling study is hidden). groups: the surface groups of a flow result to draw (None: the study's own
+        choice; [] none)."""
         rs = self.project().results().at(time_index)
         flow = self.project().study in FLOW_STUDIES
         box = self._flow_box(rs) if flow else None            # (a flow result is looked at close to the object, not across the whole far field)
@@ -161,7 +162,7 @@ class Engine(QObject):
         if section:
             ax, pos = self._section_pos(rs, section, box)
         if flow:
-            return self._flow_surface(rs, field, ax, pos, box, hide)
+            return self._flow_surface(rs, field, ax, pos, box, hide, groups)
         hide = tuple(hide or ())
         return rs.surface(field, hide_regions=hide) if ax is None else rs.clip(field, ax, pos, hide_regions=hide)
 
@@ -230,12 +231,12 @@ class Engine(QObject):
             return None
         return self._flow_box(self.project().results(), 0.3, 0.8, axis, pos)
 
-    def _flow_surface(self, rs, field: str, ax, pos, box, hide=None):
+    def _flow_surface(self, rs, field: str, ax, pos, box, hide=None, groups=None):
         """A flow or cooling result: the outside of the air box would hide everything, so draw the object (what the solver says to show:
         the body of an aircraft, the solid parts of a cooled assembly); with a section, the field on the plane through the air as well,
         and only the half of the object on the low side, cut open at the plane."""
         s = self._flow_summary()
-        groups = s.get("default_groups") or None
+        groups = (s.get("default_groups") or None) if groups is None else list(groups)
         hide = tuple(s.get("default_hidden_regions") or ()) if hide is None else tuple(hide)
         obj = rs.surface(field, groups=groups, hide_regions=hide, below=None if ax is None else (ax, pos))
         if ax is None:
@@ -244,12 +245,44 @@ class Engine(QObject):
         return merge_payloads(plane, obj)
 
     # ------------------------------------------------------------------ flow tools: vortex surfaces, volume, arrows, particle paths
-    def flow_object(self, field: str, time_index: int = -1, cut=None):
+    def flow_object(self, field: str, time_index: int = -1, cut=None, groups=None):
         """The object (or the solid parts) of a flow result coloured by a field: whole, or with cut=(axis index, position) only the part on the
-        low side of that plane, cut open there."""
+        low side of that plane, cut open there. groups: the surface groups to draw (None: the study's own choice)."""
         rs = self.project().results().at(time_index)
         s = self._flow_summary()
-        return rs.surface(field, groups=s.get("default_groups") or None, hide_regions=tuple(s.get("default_hidden_regions") or ()), below=cut)
+        return rs.surface(field, groups=(s.get("default_groups") or None) if groups is None else list(groups),
+                          hide_regions=tuple(s.get("default_hidden_regions") or ()), below=cut)
+
+    def seed_disk_default(self) -> dict | None:
+        """Where a seed disk for the particle paths starts: across the flow, just upstream of the object (its centre in m, its radius in m)."""
+        if self.project().study not in FLOW_STUDIES:
+            return None
+        rs = self.project().results()
+        box = self._flow_box(rs, 0.3, 0.8)
+        if not box:
+            return None
+        b = np.asarray(box, float)
+        u = np.asarray(self._flow_summary().get("U_inf") or [1.0, 0.0, 0.0], float)
+        ax = int(np.argmax(np.abs(u)))
+        c = (b[:3] + b[3:]) / 2
+        c[ax] = b[ax] if u[ax] > 0 else b[3 + ax]
+        across = [b[3 + i] - b[i] for i in range(3) if i != ax]
+        return {"center": c.tolist(), "radius": 0.2 * min(across)}
+
+    def smooth_iso(self, payload: dict, strength: float):
+        """(the vortex-surface payload with its vertices smoothed for display, stats): a display filter on the surface that keeps its size
+        (simwb.surfsmooth), kept for the same payload and strength so that moving the slider back and forth is quick."""
+        from ..surfsmooth import smooth_payload
+        cache = self.__dict__.setdefault("_smooth_cache", {})
+        key = (id(payload), round(float(strength)))
+        hit = cache.get(key)
+        if hit and hit[0] is payload:
+            return hit[1], hit[2]
+        out, stats = smooth_payload(payload, strength)
+        if len(cache) > 8:
+            cache.clear()
+        cache[key] = (payload, out, stats)
+        return out, stats
 
     def flow_defaults(self) -> dict:
         """What the Flow tab starts from: the keep-clear-of-walls distance of the vortex surfaces (mm, 2 % of the reference length) and
@@ -286,7 +319,7 @@ class Engine(QObject):
             qmax = memo(("qmax",), lambda: max(f["max"] for f in rs.field_info() if f["name"] == "Q-criterion"))
             level = qmax * 10 ** (-float(iso.get("k", 48)) / 10.0)
             cf = iso.get("color") if iso.get("color") in rs.fields else None
-            gap, sm = float(iso.get("gap", 0.0)), int(iso.get("smooth", 1))
+            gap, sm = float(iso.get("gap", 0.0)), int(iso.get("smooth", 0))
             out["iso"] = memo(("iso", round(level, 12), cf, gap, sm), lambda: rs.iso(
                 "Q-criterion", level, cf, hide_regions=hide, wall_groups=walls, wall_gap=max(0.0, gap) / 1000.0, smooth=min(max(sm, 0), 3)))
             out["iso_level"] = level
@@ -314,10 +347,22 @@ class Engine(QObject):
         st = tools.get("streams") or {}
         if st.get("on") and "Velocity" in rs.fields:
             u = np.asarray(s.get("U_inf") or [1.0, 0.0, 0.0], float)
-            seed = "everywhere" if st.get("seed") == "everywhere" else "upstream"
-            out["paths"] = memo(("par", int(st.get("n", 800)), int(st.get("steps", 160)), seed, tuple(np.round(u, 6))),
-                                lambda: resample.particle_paths(rs, box, min(res, 96), int(st.get("n", 800)), int(st.get("steps", 160)), seed,
-                                                                (u / (np.linalg.norm(u) or 1.0)).tolist(), hide_regions=hide))
+            seed = st.get("seed") if st.get("seed") in ("everywhere", "disk") else "upstream"
+            disk = st.get("disk") if seed == "disk" else None
+            seed_box = None
+            if disk:                                    # a disk you placed: a box across the flow, thin along it (the paths start on its inscribed disk)
+                c, r = np.asarray(disk["center"], float), float(disk["radius"])
+                ax = int(np.argmax(np.abs(u)))
+                half = np.full(3, r)
+                half[ax] = 1e-6
+                seed_box = np.concatenate([c - half, c + half]).tolist()
+            elif seed == "disk":
+                seed = "upstream"                       # (no disk placed yet: as before)
+            out["paths"] = memo(("par", int(st.get("n", 800)), int(st.get("steps", 160)), seed, tuple(np.round(u, 6)),
+                                 None if seed_box is None else tuple(np.round(seed_box, 6))),
+                                lambda: resample.particle_paths(rs, box, min(res, 96), int(st.get("n", 800)), int(st.get("steps", 160)),
+                                                                "box" if seed_box else seed, (u / (np.linalg.norm(u) or 1.0)).tolist(), hide_regions=hide,
+                                                                seed_box=seed_box))
         return out
 
     def summary_text(self) -> str:

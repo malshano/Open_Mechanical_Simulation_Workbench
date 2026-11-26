@@ -102,19 +102,20 @@ plus the toolbar and application bar. Status: ✅ done in the Qt app · 🟡 par
 | Tabs Summary / Display / Probe / Checks | ✅ | results |
 | KPI tiles with verdicts, parts bars (stress vs yield, temperatures, allowed temperature), heat balance, force/moment bars | ✅ (tiles; parts bars against yield; temperature bars with an allowed temperature and margins; where the heat goes; force / moment bars from a centre line; force at each support) | results |
 | Modal spectrum plot, flutter plots, sweep plot, residual history | ✅ (spectrum stems pick a mode; flutter frequency and damping with the critical speed; shake-test sweep log-log with peaks; residuals; forces / temperatures over time) | results |
-| Field choice, time bar for transient results, animate, turntable / MP4 | ✅ (time bar: slider, play / pause, note; ● MP4 of the saved times or a turntable, fps and orbit; Animate under the modes) - no 🎬 Promo look, no section-sweep video | results |
+| Field choice, time bar for transient results, animate, turntable / MP4 | ✅ (time bar: slider, play / pause, note; ● MP4 of the saved times or a turntable, fps and orbit, with a notice that this window is recorded and must not be minimised, a Stop recording bar, a pause when it is minimised; Animate under the modes) - no 🎬 Promo look, no section-sweep video | results |
 | Colours: map, reverse, bands | ✅ | - |
 | Contour lines on the result: on / off, number, extra values, value written on each line (new, not in the web version) | ✅ | - |
 | Range: auto / manual, histogram with drag-to-set | ✅ (area-weighted distribution in the map's colours, mean, share outside; drag sets, double-click resets) | results |
-| Model: surface opacity, edges, hide parts, hide air | ✅ (opacity slider, edges, a tick box per part, Hide the air for cooling studies) - no mirrored half | results |
+| Model: surface opacity, edges, hide parts, hide air | ✅ (opacity slider, edges, a tick box per part, Hide the air for cooling studies; for an external flow with a moving mesh a "Show in the view" list: each surface, the moving ones marked, the air box, zone and region outlines, Only what moves) - no mirrored half | results |
 | Deformation: animated / end state / off, scale, auto, true size ×1, outline of the undeformed part | ✅ (and the outline of the undeformed part, a note with the exaggeration; hidden when nothing deforms) | results |
 | Min / max labels on the model (they can be dragged with the mouse) | ✅ | results |
-| Probe: click points, pinned values list | ✅ (Probe tab: toggle, pinned values, labels) | results (+ viewtools) |
+| Probe: click points, pinned values list | ✅ (Probe tab: toggle, pinned values, labels; each pinned point has a ball in the 3D view that slides over the model and X, Y, Z boxes) | results (+ viewtools) |
 | Line plot: pick two points / min → max, hover marker, copy data | ✅ (pick two points, Min to max, hover value, copy data) | results (+ viewtools) |
-| Flow tools (CFD): contour planes (several, each with field, axis, position slider, opacity, remove; contour lines on them), vortex surfaces (Q-criterion: level, colour, keep clear of walls, smoothing), volume rendering (field, density, colour map / smoke), vector arrows on a plane, particle paths | ✅ (particles animated as dots along the paths, with a speed; an automatic or typed colour range per plane, cloud, arrows and paths) - the arrows have no length scale of their own | results |
+| Flow tools (CFD): contour planes (several, each with field, axis, position slider, opacity, remove; contour lines on them), vortex surfaces (Q-criterion: level, colour, keep clear of walls, surface smoothing amount with an off switch, smoothing of the data), volume rendering (field, density, colour map / smoke), vector arrows on a plane, particle paths | ✅ (particles animated as dots along the paths, with a speed; an automatic or typed colour range per plane, cloud, arrows and paths) - the arrows have no length scale of their own | results |
 | Export: Report (HTML), CSV table, VTK (ParaView) | ✅ (report, CSV, VTK) | results |
 | Mesh sensitivity, three-level check, model assumptions | ✅ (table of rows with GCI, verdict, Run / Check again, Three-level check (GCI), disabled with the reason; flow-model comparison; previous run; assumptions) | results |
-| Section along x/y/z while looking at results | ✅ (Display tab: axis and position; a control action) | viewtools |
+| Section along x/y/z while looking at results | ✅ (Display tab: axis, position, a number in mm and a handle in the 3D view; a control action) | viewtools |
+| Handles in the 3D view for every positioning control of the Results step (contour planes, arrows' plane, particle seed disk, section, pinned points, ends of the line) | ✅ one behaviour (`handles.py`), numbers follow the handle and the handle follows the numbers; control action `view.handle` | results |
 
 ## Definition of "done" for a row
 

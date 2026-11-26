@@ -4,7 +4,7 @@ paths. Every tool has its own switch and they can be combined; the
 object is drawn in grey under them. Plain widgets with ids (results.flow.*), so that the control API and the tests reach every one."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QDoubleValidator
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSlider, QSpinBox,
                                QVBoxLayout, QWidget)
@@ -40,7 +40,7 @@ class FlowTools(QWidget):
         v.addLayout(row)
         # ---- contour planes
         v.addWidget(_h("Contour planes"))
-        v.addWidget(_muted("Cuts through the flow, coloured by a field. Add as many as you like; move each along its axis with its slider."))
+        v.addWidget(_muted("Cuts through the flow, coloured by a field. Add as many as you like; move each along its axis with its slider, its number, or by dragging its handle (the ball and arrow on its sheet) in the 3D view."))
         self.planes: list = []                   # what each plane shows: {field, axis, frac 0..1 along the region, opacity 0.1..1}
         self._box = None                         # (the region in metres, for the positions in mm)
         self._plane_rows: list = []
@@ -52,6 +52,15 @@ class FlowTools(QWidget):
         self.plane_add.setToolTip("Another cut through the flow (a new plane starts across Y, in the middle)")
         self.plane_add.clicked.connect(lambda _=False: self.add_plane())
         v.addWidget(self.plane_add)
+        self.plane_model = self._combo("results.flow.planes.model", [("ghost", "Whole model, see-through"), ("solid", "Whole model, solid"),
+                                                                     ("cut", "Cut open at plane 1 (section view)")],
+                                       "How the model is drawn with the planes. A plane never cuts the model by itself: choose the section view here if you want the model opened at plane 1")
+        self.plane_model_row = QWidget()
+        mr = QVBoxLayout(self.plane_model_row)
+        mr.setContentsMargins(0, 0, 0, 0)
+        mr.addLayout(self._row("Model", self.plane_model))
+        v.addWidget(self.plane_model_row)
+        self.plane_model_row.setVisible(False)
         # ---- vortex surfaces
         self.iso_box = QWidget()
         iv = QVBoxLayout(self.iso_box)
@@ -77,13 +86,43 @@ class FlowTools(QWidget):
         self.iso_gap.setToolTip("Leave out the surfaces this close to the walls: the shear of the boundary layer gives a large Q there too and would hide the vortices")
         self.iso_gap.valueChanged.connect(lambda *_: self._emit())
         iv.addLayout(self._row("Keep clear of walls", self.iso_gap))
+        # smoothing: of the surface (a display filter that keeps its size, below) and, if wanted, of the data before the surface is made
+        self.iso_polish = self._check("results.flow.iso.polish", "Smooth the surfaces",
+                                      "Round off the roughness that follows the mesh cells so the surfaces look like a liquid. Untick to see them exactly as the mesh made them")
+        self.iso_polish.setChecked(True)
+        iv.addWidget(self.iso_polish)
+        self.iso_amount = self._slider("results.flow.iso.amount", 0, 100, 40,
+                                       "How much: to the right the surface is rounder. It keeps its size and thin parts (it does not shrink)")
+        self.iso_amount.setTracking(True)                      # (live: the surface follows the handle; the redraw waits for a pause in the dragging)
+        self.iso_amount.valueChanged.disconnect()
+        self._amount_timer = QTimer(self)
+        self._amount_timer.setSingleShot(True)
+        self._amount_timer.setInterval(150)
+        self._amount_timer.timeout.connect(self._emit)
+        self.iso_amount.valueChanged.connect(lambda *_: self._amount_timer.start())
+        self.iso_polish.toggled.connect(lambda on: self.iso_amount.setEnabled(on))
+        iv.addLayout(self._row("Amount", self.iso_amount))
+        self.iso_smooth_note = _muted("")
+        self.iso_smooth_note.setObjectName("muted")
+        wid(self.iso_smooth_note, "results.flow.iso.smooth_note")
+        iv.addWidget(self.iso_smooth_note)
         self.iso_smooth = QSpinBox()
         wid(self.iso_smooth, "results.flow.iso.smooth")
         self.iso_smooth.setRange(0, 3)
-        self.iso_smooth.setValue(1)
-        self.iso_smooth.setToolTip("Smoothing passes of the surfaces (0 = as the mesh made them)")
+        self.iso_smooth.setValue(0)
+        self.iso_smooth.setSuffix(" passes")
+        self.iso_smooth.setToolTip("Averages the data over the mesh cells before the surfaces are made (0 = off). It removes single-cell lumps but also "
+                                   "weakens thin vortices: one pass can take away a third of a thin vortex. Use Smooth the surfaces first")
         self.iso_smooth.valueChanged.connect(lambda *_: self._emit())
-        iv.addLayout(self._row("Smoothing", self.iso_smooth))
+        iv.addLayout(self._row("Smooth the data first", self.iso_smooth))
+        # (a hint you can see without hovering: averaging the data weakens thin vortices, so say so as soon as it is on)
+        self.iso_smooth_hint = _muted("Averaging the data weakens thin vortices (one pass can remove a third of one). "
+                                      "To make the surfaces look smoother, use Smooth the surfaces above and set this back to 0.")
+        wid(self.iso_smooth_hint, "results.flow.iso.smooth_hint")
+        self.iso_smooth_hint.setObjectName("warnText")             # (the theme's warning text colour, light and dark)
+        self.iso_smooth_hint.setVisible(False)
+        self.iso_smooth.valueChanged.connect(lambda n: self.iso_smooth_hint.setVisible(n > 0))
+        iv.addWidget(self.iso_smooth_hint)
         v.addWidget(self.iso_box)
         # ---- volume rendering
         v.addWidget(_h("Volume rendering"))
@@ -100,16 +139,20 @@ class FlowTools(QWidget):
         self.vol_scale = self._scale(v, "results.flow.volume.scale", "the cloud")
         # ---- vector arrows
         v.addWidget(_h("Vector arrows"))
-        v.addWidget(_muted("Arrows of the flow on a plane, pointing the way the air moves, coloured by speed."))
+        v.addWidget(_muted("Arrows of the flow on a plane, pointing the way the air moves, coloured by speed. Move the plane with the slider, the number or its handle in the 3D view."))
         self.vec_on = self._check("results.flow.vectors.on", "Show arrows", "Arrows of the velocity on a plane")
         v.addWidget(self.vec_on)
         w, self.vec_axis_grp, self.vec_axis = _seg([("x", "X"), ("y", "Y"), ("z", "Z")], "y", prefix="results.flow.vectors.axis")
         for k, b in self.vec_axis.items():
             b.setToolTip(f"The plane across {k.upper()}")
-            b.clicked.connect(lambda *_: self._emit())
+            b.clicked.connect(lambda *_: (self._vec_mm_show(), self._emit()))
         v.addLayout(self._row("Plane across", w))
         self.vec_pos = self._slider("results.flow.vectors.pos", 0, 1000, 500, "Where the plane cuts the region (from one side to the other)")
         v.addLayout(self._row("Position", self.vec_pos))
+        self.vec_mm = self._mm_box("results.flow.vectors.mm", "Where the plane cuts, in mm along its axis. Type a value, or drag the plane's handle in the 3D view")
+        self.vec_mm.valueChanged.connect(self._vec_mm)
+        v.addLayout(self._row("Position (mm)", self.vec_mm))
+        self.vec_pos.valueChanged.connect(lambda _=0: self._vec_mm_show())
         self.vec_n = QSpinBox()
         wid(self.vec_n, "results.flow.vectors.n")
         self.vec_n.setRange(4, 80)
@@ -131,9 +174,29 @@ class FlowTools(QWidget):
         self.par_n.setToolTip("Number of particles")
         self.par_n.valueChanged.connect(lambda *_: self._emit())
         v.addLayout(self._row("Particles", self.par_n))
-        self.par_seed = self._combo("results.flow.streams.seed", [("upstream", "Upstream face"), ("everywhere", "Everywhere")],
-                                    "Where the particles start: across the upstream face of the region, or anywhere in the air")
+        self.par_seed = self._combo("results.flow.streams.seed", [("upstream", "Upstream face"), ("everywhere", "Everywhere"), ("disk", "A disk you place")],
+                                    "Where the particles start: across the upstream face of the region, anywhere in the air, or on a disk that you move with its "
+                                    "handle in the 3D view (or by typing its centre) to follow the flow from one place")
         v.addLayout(self._row("Start", self.par_seed))
+        self.seed_box = QWidget()                               # (the disk: its centre in mm and its radius; shown when the start is a disk)
+        sb = QVBoxLayout(self.seed_box)
+        sb.setContentsMargins(0, 0, 0, 0)
+        sb.setSpacing(4)
+        self.seed_c = []
+        for a in "xyz":
+            b = self._mm_box(f"results.flow.streams.disk.{a}", f"The disk's centre along {a.upper()} in mm. Type a value, or drag the disk's handle in the 3D view")
+            b.valueChanged.connect(lambda *_: self._seed_typed())
+            self.seed_c.append(b)
+            sb.addLayout(self._row(f"Disk centre {a.upper()}", b))
+        self.seed_r = self._mm_box("results.flow.streams.disk.radius", "The radius of the disk the particles start on (they start across the flow)")
+        self.seed_r.setRange(0.1, 1e6)
+        self.seed_r.setValue(50.0)
+        self.seed_r.valueChanged.connect(lambda *_: self._seed_typed())
+        sb.addLayout(self._row("Disk radius", self.seed_r))
+        self.seed_set = False                                   # (the centre has been given, by the user or by the first drawing)
+        v.addWidget(self.seed_box)
+        self.seed_box.setVisible(False)
+        self.par_seed.currentIndexChanged.connect(lambda *_: self.seed_box.setVisible(self.par_seed.currentData() == "disk"))
         self.par_steps = QSpinBox()
         wid(self.par_steps, "results.flow.streams.steps")
         self.par_steps.setRange(20, 400)
@@ -155,6 +218,32 @@ class FlowTools(QWidget):
     def _emit(self):
         if not self._quiet:
             self.changed.emit()
+
+    # ------------------------------------------------------------------ the seed disk of the particle paths
+    def seed_disk(self):
+        """{'center': [x, y, z] m, 'radius': m} of the disk the particles start on (None when the start is not a disk or no centre is known yet)."""
+        if self.par_seed.currentData() != "disk" or not self.seed_set:
+            return None
+        return {"center": [b.value() / 1000.0 for b in self.seed_c], "radius": self.seed_r.value() / 1000.0}
+
+    def set_seed_disk(self, center=None, radius=None, final: bool = True):
+        """The disk moved (a handle, or a control action): its numbers follow; the paths are drawn again only when final."""
+        if center is not None:
+            for b, v in zip(self.seed_c, center):
+                b.blockSignals(True)
+                b.setValue(float(v) * 1000.0)
+                b.blockSignals(False)
+            self.seed_set = True
+        if radius is not None:
+            self.seed_r.blockSignals(True)
+            self.seed_r.setValue(float(radius) * 1000.0)
+            self.seed_r.blockSignals(False)
+        if final:
+            self._emit()
+
+    def _seed_typed(self):
+        self.seed_set = True
+        self._emit()
 
     # ------------------------------------------------------------------ contour planes
     def _names_now(self) -> list:
@@ -199,6 +288,7 @@ class FlowTools(QWidget):
         self._box = list(box) if box else None
         for i, _ in enumerate(self._plane_rows):
             self._pos_label(i)
+        self._vec_mm_show()
 
     def _pos_text(self, i: int, frac=None) -> str:
         p = self.planes[i]
@@ -212,6 +302,103 @@ class FlowTools(QWidget):
     def _pos_label(self, i: int, frac=None):
         if i < len(self._plane_rows):
             self._plane_rows[i]["pos_label"].setText(self._pos_text(i, frac))
+            self._pos_mm(i, frac)
+
+    def _span(self, axis: str):
+        """(low, high) of the region along an axis in metres, or None before the first drawing."""
+        if not self._box:
+            return None
+        ax = "xyz".index(axis)
+        return float(self._box[ax]), float(self._box[3 + ax])
+
+    def _mm_box(self, id_: str, tip: str) -> QDoubleSpinBox:
+        b = wid(QDoubleSpinBox(), id_)
+        b.setDecimals(1)
+        b.setRange(-1e7, 1e7)
+        b.setSingleStep(1.0)
+        b.setSuffix(" mm")
+        b.setKeyboardTracking(False)           # (a typed value counts when Enter is pressed or the box is left, not at every digit)
+        b.setToolTip(tip)
+        return b
+
+    def _pos_mm(self, i: int, frac=None):
+        """The number box of plane i shows where it is (no signal: it was moved by the slider or the handle)."""
+        if i >= len(self._plane_rows):
+            return
+        p = self.planes[i]
+        sp = self._span(p["axis"])
+        box = self._plane_rows[i]["mm"]
+        box.blockSignals(True)
+        if sp:
+            box.setRange(sp[0] * 1000, sp[1] * 1000)
+            box.setValue((sp[0] + (p["frac"] if frac is None else frac) * (sp[1] - sp[0])) * 1000)
+        box.setEnabled(bool(sp))
+        box.blockSignals(False)
+
+    def _plane_mm(self, i: int, mm: float):
+        """A position typed in mm: the slider, the label and the plane follow."""
+        sp = self._span(self.planes[i]["axis"]) if i < len(self.planes) else None
+        if sp and sp[1] > sp[0]:
+            self._plane_set(i, "frac", min(max((mm / 1000.0 - sp[0]) / (sp[1] - sp[0]), 0.0), 1.0))
+            self._plane_rows[i]["pos"].blockSignals(True)
+            self._plane_rows[i]["pos"].setValue(int(round(self.planes[i]["frac"] * 1000)))
+            self._plane_rows[i]["pos"].blockSignals(False)
+
+    # ---- what a handle in the 3D view does (the handle moves the plane; these keep the numbers with it)
+    def plane_position(self, i: int):
+        """(position in m, (low, high) of the region in m) of plane i, or None before the first drawing."""
+        sp = self._span(self.planes[i]["axis"])
+        return None if sp is None else (sp[0] + self.planes[i]["frac"] * (sp[1] - sp[0]), sp)
+
+    def set_plane_position(self, i: int, pos_m: float, final: bool = True):
+        """The plane moved to pos_m (m): the slider, the number and the label follow; the flow is cut again only when final (the handle was let go)."""
+        sp = self._span(self.planes[i]["axis"])
+        if not sp or sp[1] <= sp[0]:
+            return
+        frac = min(max((pos_m - sp[0]) / (sp[1] - sp[0]), 0.0), 1.0)
+        self.planes[i]["frac"] = frac
+        row = self._plane_rows[i]
+        row["pos"].blockSignals(True)
+        row["pos"].setValue(int(round(frac * 1000)))
+        row["pos"].blockSignals(False)
+        self._pos_label(i)
+        if final:
+            self._emit()
+
+    def vec_axis_now(self) -> str:
+        return next((k for k, b in self.vec_axis.items() if b.isChecked()), "y")
+
+    def vector_position(self):
+        sp = self._span(self.vec_axis_now())
+        return None if sp is None else (sp[0] + self.vec_pos.value() / 1000.0 * (sp[1] - sp[0]), sp)
+
+    def set_vector_position(self, pos_m: float, final: bool = True):
+        sp = self._span(self.vec_axis_now())
+        if not sp or sp[1] <= sp[0]:
+            return
+        self.vec_pos.blockSignals(True)
+        self.vec_pos.setValue(int(round(min(max((pos_m - sp[0]) / (sp[1] - sp[0]), 0.0), 1.0) * 1000)))
+        self.vec_pos.blockSignals(False)
+        self._vec_mm_show()
+        if final:
+            self._emit()
+
+    def _vec_mm_show(self):
+        sp = self._span(self.vec_axis_now())
+        self.vec_mm.blockSignals(True)
+        if sp:
+            self.vec_mm.setRange(sp[0] * 1000, sp[1] * 1000)
+            self.vec_mm.setValue((sp[0] + self.vec_pos.value() / 1000.0 * (sp[1] - sp[0])) * 1000)
+        self.vec_mm.setEnabled(bool(sp))
+        self.vec_mm.blockSignals(False)
+
+    def _vec_mm(self, mm: float):
+        sp = self._span(self.vec_axis_now())
+        if sp and sp[1] > sp[0]:
+            self.vec_pos.blockSignals(True)
+            self.vec_pos.setValue(int(round(min(max((mm / 1000.0 - sp[0]) / (sp[1] - sp[0]), 0.0), 1.0) * 1000)))
+            self.vec_pos.blockSignals(False)
+            self._emit()
 
     def _rebuild_planes(self):
         while self.planes_box.count():
@@ -220,6 +407,7 @@ class FlowTools(QWidget):
                 it.widget().deleteLater()
         self._plane_rows = []
         names = self._names_now()
+        self.plane_model_row.setVisible(bool(self.planes))       # (the choice only means something with a plane)
         for i, p in enumerate(self.planes):
             n = i + 1
             card = QFrame()
@@ -257,6 +445,9 @@ class FlowTools(QWidget):
             pos.sliderMoved.connect(lambda val, i=i: self._pos_label(i, val / 1000.0))
             pos.valueChanged.connect(lambda val, i=i: self._plane_set(i, "frac", val / 1000.0))
             cv.addLayout(self._row("Position", pos))
+            mm = self._mm_box(f"results.flow.plane.{n}.mm", "Where the plane cuts, in mm along its axis. Type a value, or drag the plane's handle in the 3D view")
+            mm.valueChanged.connect(lambda val, i=i: self._plane_mm(i, val))
+            cv.addLayout(self._row("Position (mm)", mm))
             pos_label = wid(_muted(""), f"results.flow.plane.{n}.where")
             cv.addWidget(pos_label)
             op = wid(QSlider(Qt.Horizontal), f"results.flow.plane.{n}.opacity")
@@ -277,7 +468,7 @@ class FlowTools(QWidget):
             for w_ in (sc["auto"], sc["lo"], sc["hi"]):
                 (w_.toggled if w_ is sc["auto"] else w_.editingFinished).connect(lambda *_, i=i, sc=sc: self._plane_range(i, sc))
             self.planes_box.addWidget(card)
-            self._plane_rows.append({"card": card, "field": field, "axis": btns, "pos": pos, "pos_label": pos_label, "opacity": op, "scale": sc})
+            self._plane_rows.append({"card": card, "field": field, "axis": btns, "pos": pos, "mm": mm, "pos_label": pos_label, "opacity": op, "scale": sc})
             self._pos_label(i)
 
     def _plane_range(self, i: int, sc: dict):
@@ -425,6 +616,16 @@ class FlowTools(QWidget):
             self._rebuild_planes()
         self._iso_note()
 
+    def show_smoothing(self, sm: dict, n_tris: int = 0):
+        """Say what the drawn vortex surfaces are: smoothed for display (and by how much their area changed), or as the mesh made them."""
+        if not n_tris:
+            self.iso_smooth_note.setText("No vortex surface at this level: move the slider to the right.")
+        elif sm.get("passes"):
+            self.iso_smooth_note.setText(f"Smoothed for display (the data is unchanged). Area {sm['area_change'] * 100:+.1f} %"
+                                         + (f", volume {sm['volume_change'] * 100:+.1f} %" if sm.get("volume_change") is not None else "") + ".")
+        else:
+            self.iso_smooth_note.setText("Shown exactly as the mesh made them.")
+
     def _iso_note(self):
         q = next((f for f in self.infos if f["name"] == "Q-criterion"), None)
         if q and q.get("max"):
@@ -434,14 +635,15 @@ class FlowTools(QWidget):
         axis = next((k for k, b in self.vec_axis.items() if b.isChecked()), "y")
         return {"region": self.region.currentData(), "res": int(self.res.currentData()),
                 "iso": {"on": self.iso_on.isChecked() and self.iso_box.isVisibleTo(self), "k": self.iso_k.value(), "color": self.iso_color.currentText(),
-                        "gap": self.iso_gap.value(), "smooth": self.iso_smooth.value()},
+                        "gap": self.iso_gap.value(), "smooth": self.iso_smooth.value(),
+                        "surface_smooth": self.iso_amount.value() if self.iso_polish.isChecked() else 0},
                 "volume": {"on": self.vol_on.isChecked(), "field": self.vol_field.currentText(), "density": self.vol_density.value() / 10.0,
                            "style": self.vol_style.currentData(), "range": self._scale_value(self.vol_scale)},
                 "vectors": {"on": self.vec_on.isChecked(), "axis": axis, "frac": self.vec_pos.value() / 1000.0, "n": self.vec_n.value(),
                             "range": self._scale_value(self.vec_scale)},
-                "streams": {"on": self.par_on.isChecked(), "n": self.par_n.value(), "seed": self.par_seed.currentData(), "steps": self.par_steps.value(),
+                "streams": {"on": self.par_on.isChecked(), "n": self.par_n.value(), "seed": self.par_seed.currentData(), "disk": self.seed_disk(), "steps": self.par_steps.value(),
                             "animate": self.par_anim.isChecked(), "speed": self.par_speed.value() / 10.0, "range": self._scale_value(self.par_scale)},
-                "planes": [dict(p) for p in self.planes]}
+                "planes": [dict(p) for p in self.planes], "plane_model": self.plane_model.currentData()}
 
     def any_on(self) -> bool:
         r = self.request()

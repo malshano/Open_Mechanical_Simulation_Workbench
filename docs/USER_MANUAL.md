@@ -328,7 +328,8 @@ Surfaces of equal Q-criterion wrap vortex cores (tip vortices, wakes).
 | **Colour by** | Any field painted on the vortex surface. |
 | **Weaker vortices shown** (slider) | Move right to show weaker vortices too (more surfaces); left for only the strongest. The starting position comes from the propeller's rotation rate (or flow speed over reference length). |
 | **Keep clear of walls [mm]** | Leaves out surface pieces this close to walls, where boundary-layer shear makes Q large. Default 2 % of the smallest rotating-zone radius. |
-| **Smoothing** | 0-3 passes of averaging before drawing. Default 1. |
+| **Smooth the surfaces** (tick box) and **Amount** (slider, 0-100, default 40) | Rounds off the roughness that follows the mesh cells, so the surfaces look like a liquid. It follows the slider live. **Untick the box** to see the surfaces exactly as the mesh made them. It is a display filter: the data is unchanged, and the line under the slider says so and gives the change of the surface area (and of the enclosed volume of a closed surface). The size is kept: a non-shrinking filter (windowed sinc, as in Taubin smoothing) moves the points, so a thin vortex does not get thinner (at the default, well under 1 % of its volume; at 100, a vortex only one and a half cells across loses about 2 %). The surface is drawn with smooth shading while it is smoothed. |
+| **Smooth the data first** (0-3 passes, default 0) | Averages the data over the mesh cells before the surfaces are made. It removes single-cell lumps but also flattens thin vortices (one pass can take away more than a third of a thin vortex, three can remove it), so it is off by default; earlier versions had one pass on. Prefer the surface smoothing. While it is above 0 a line under the box says so, in the warning colour. |
 | **Opacity** | Of the vortex surfaces. |
 
 ### 8.3 Contour planes
@@ -339,6 +340,9 @@ Cuts through the flow, coloured by a field, several at once, each with its own o
 2. Choose **Field** and **Plane** (x, y, z). Move **Position** with the slider (shown in mm).
 3. Set **Opacity** (10-100 %). Use a low value to see vortex surfaces behind the plane.
 4. **Remove** deletes a plane.
+
+A plane does not clip the model: the whole model stays visible (see-through by default). To open the model at a plane, choose
+**Model: Cut open at plane 1 (section view)** under the planes.
 
 Contour planes are clean rectangles over the shared **Region** (below), with a hole where a body is, and they follow the time slider. Their colours run over the range that holds nearly all of the flow (1st to 99th percentile), so the extremes on the blade tips do not wash the picture out.
 
@@ -611,30 +615,62 @@ The tabs are the ones of section 8, with these differences and additions.
   - **Contour planes**: cuts through the flow coloured by a field, as many as you like. A flow result opens with one (Velocity, across Y,
     in the middle). **+ Add contour plane** adds another; each has its **Field**, **Plane across** X, Y or Z, a **Position** slider that
     moves it along that axis (its place is written under it in mm; the plane is cut again when you let go), an **Opacity** slider (lower
-    it to see the object and the other tools behind) and **Remove**. With one plane alone the object is cut open at it and seen straight
-    on, as a section; with several planes, or other tools on, the object is drawn whole. The colours run over the range that holds nearly
-    all of the flow (1st to 99th percentile).
+    it to see the object and the other tools behind) and **Remove**. A plane never cuts the object by itself: the object stays whole.
+    **Model** (under the planes) chooses how it is drawn: **Whole model, see-through** (the default, so the part of a plane behind the
+    object still shows), **Whole model, solid**, or **Cut open at plane 1 (section view)**, which opens the object at the first plane and
+    shows it straight on. The colours run over the range that holds nearly all of the flow (1st to 99th percentile).
   - **Vortex surfaces** (turbulence): surfaces of equal Q-criterion (rotation beats strain). The slider **Weaker vortices shown** works
     towards the right (the Q value under it falls): at the strong end the surfaces only wrap the wall layer on the object; towards the
     weak end the tip vortices, the leading-edge vortex and the wake appear, and also more noise. **Coloured by** picks the field painted on
-    them; **Keep clear of walls** hides the surface near the object; **Smoothing** rounds it. For a wake use the whole air box, a weak
+    them; **Keep clear of walls** hides the surface near the object; **Smooth the surfaces** and its **Amount** round it (untick the box for the surface as the mesh made it; the legend says "(smoothed)"). For a wake use the whole air box, a weak
     setting and turn the view (**Z** for the top, **-X** from behind).
   - **Volume rendering**: the whole flow as a see-through cloud (field, density, colour map or smoke).
-  - **Arrows** on a plane (axis, position, number across) and **Particle paths** (number, where they start, steps). With **Animate the
+  - **Arrows** on a plane (axis, position, number across) and **Particle paths** (number, where they start - the upstream face, anywhere, or **a disk you place**, moved with its handle - steps). With **Animate the
     particles** (on by default) dots run along the paths, as the air moves; **Dot speed** sets how fast.
   - **Automatic colour range**: every plane, the cloud, the arrows and the paths have their own. Untick it and type **from** and **to**
     to fix the colours of that tool; while it is ticked the boxes show the range used.
   - A Region of the whole air box with a fine grid needs more memory; if the window is slow, go back to a coarser grid.
+- **Handles in the 3D view** (Results step): everything that has a position has a handle you can drag, and the numbers follow it (and it follows
+  the numbers). A **plane** (a contour plane, the plane of the arrows, the section of a part) is a coloured sheet with a ball and an arrow in its
+  middle: drag the ball or the arrow along the plane's axis; **Shift** snaps to round steps; the sheet stops at the edge of the region. Looked at
+  straight along its axis, a plane is dragged up and down the screen instead. A **point** is a ball: a pinned value or an end of the line plot
+  slides over the model under the pointer and reads its value there; the disk the particles start on has arrows (red x, green y, blue z) as
+  well as a ball. While you drag, only the handle, the numbers and the labels move; the flow is cut again, the paths drawn again and the line
+  plotted again when you let go. The handles of a tab are shown while that tab is shown:
+
+  | Control | Tab | Handle | Numbers |
+  |---|---|---|---|
+  | Contour plane (each) | Flow | sheet over the region | slider, **Position (mm)**, the label under it |
+  | Plane of the vector arrows | Flow | sheet | slider, **Position (mm)** |
+  | Start of the particle paths: **A disk you place** | Flow | disk with a ball and x, y, z arrows | **Disk centre X, Y, Z**, **Disk radius** (mm) |
+  | Section of a part | Display (and the bar over the 3D view) | sheet over the part | slider, **Position (mm)**, the bar's value |
+  | Pinned value (each) | Probe | ball on the model | **X, Y, Z** (mm) under each pin: type a point and it goes to the nearest place on the model |
+  | Ends A and B of the line plot | Probe | ball on the model | **X, Y, Z** of each end |
+
+  The refinement regions and the rotating zones of the Mesh and Setup steps have their own handles (they are not in the Results step).
 - **Probe**: pin values by clicking the coloured result; line plot between two points or from the minimum to the maximum.
 - **Time bar** (Display, under the field; transient results): the saved time shown, a slider over the saved times and **▶ Play** /
   **❚❚ Pause**. Pinned values are cleared when the time changes; the line plot follows the time. A note says when the field hardly
   changes over the saved times (the animation would look still).
 - **Video**: **● MP4** (transient) saves every saved time as drawn now, with the colour legend and the time on each picture; on a steady
   result **● Turntable MP4** turns the camera around the model. Choose the **frames per second** and the camera **orbit** (degrees over
-  the video) beside the button; the button counts the pictures while it records.
+  the video) beside the button; the button counts the pictures while it records. **The current window is what is recorded** (its 3D view,
+  picture by picture), so keep it open: a notice at the start says so and asks you **not to minimise it**; while it runs a bar under the 3D
+  view reads "● Recording ... (picture 3 of 40)" with a **Stop recording** button (Esc does the same), and the window title starts with
+  "● Recording". Stop keeps the pictures made so far as the video. If the window is minimised anyway, the recording **pauses** and a warning
+  says so; it goes on from the same picture by itself when you restore the window (nothing is lost, the pictures are made one at a time).
+  Only one video can be recorded at a time.
 - **Distribution** (Display, under the range): how much of the surface has each value, in the colours of the map, with the mean. Drag
   across the bars to set the colour range to that part; double-click to go back to the automatic range. The line under it says how
   much of the surface is below and above the range.
+- **Show in the view** (Display, under Model; external flow results): one tick box per geometry the view can draw, so that with a moving
+  (sliding) mesh the part that moves can be looked at alone. The list has the **Object** (the airframe), every surface that turns with a
+  moving zone (named after the zone, marked "(moving)", e.g. the propeller), any surface with a condition of its own, the **Air box**
+  (the same switch as the Air box button of the 3D view; off by default), and the **outlines** of the **moving zones** and of the
+  **refinement regions** (off by default). Everything that has a surface is ticked at first. **Only what moves** hides all but the
+  moving parts and shows their zone outline in one click; **Show all** ticks every surface again. The ticks work on the time bar and
+  while it plays or records: the mesh moves, the choice stays. They are remembered for each study while the program runs. The control
+  API has `results.visibility`.
 - **Model**: **Opacity** (see-through surfaces, to look behind them), **Hide the air** (cooling studies) and one tick box per part when
   the result has several (untick one to hide it). **Deformation** adds **Outline of the undeformed part** (on by default) and a line
   that says how much the deformation is exaggerated.

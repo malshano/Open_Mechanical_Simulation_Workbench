@@ -12,6 +12,10 @@ The web version (`python -m simwb.server`) stays, for remote machines and for Cl
 | 3D view | `simwb/qt/viewport.py` | VTK: colour maps, deformation, mode shapes, cuts, depth-peeled transparency (contours/glass are drawn in the right order from every side) |
 | Colour legend | `simwb/qt/legend.py` | round ticks, log scale, category swatches |
 | Step panels | `simwb/qt/panels.py` | Geometry, Setup (materials), Mesh (colour by quality / cell size / region, cut), Solve, Results (summary tiles, field, colour map, bands, deformation) |
+| Recording notice, Stop, pause when minimised | `simwb/qt/recording.py` | the MP4 button's `Recording`; `exports.record(gate=...)` asks it before every picture |
+| "Show in the view" list (parts, air box, zone / region outlines of a flow result) | `simwb/qt/visibility.py` | one list for the Results step; the window draws what `selection()` says (`main_window.update_view`) |
+| Vortex-surface smoothing | `simwb/surfsmooth.py` | windowed-sinc display filter on the iso payload (does not shrink); the view shades it smooth (`show_surface(smooth_shading=)`) |
+| Drag handles of the Results step | `simwb/qt/handles.py` (the one behaviour: `plane` and `point` kinds, `HandleSet`), `simwb/qt/resulthandles.py` (binds the controls to it) | a refinement region (#7) or a rotating zone preview (#10) would add specs of the same two kinds: `{key, kind, axis/point, value, box, callback(key, value, final)}` |
 | Engine facade | `simwb/qt/engine.py` | cases and jobs, as Qt signals |
 | Claude assistant | `simwb/qt/assistant.py` | the same `agent.ChatSession` and tools as the web chat (no shell, no file access); log in / out; suggestion chips; chat is kept per study |
 

@@ -546,6 +546,9 @@ class MainWindow(QMainWindow):
         if self.engine.pid:
             self._air_pref[self.engine.pid] = bool(on)
         self.view.set_air_visible(on)
+        self.panels["results"].vis.air_changed(on)
+        if self.step == "results":
+            return               # (the result keeps the camera it has: the box is drawn round it, not fitted to)
         self.view.fit()          # (the box is far bigger than the part: fit the view to what is shown now)
 
     def _step_marks(self, st):
@@ -735,7 +738,12 @@ class MainWindow(QMainWindow):
                 if names and r["field"] not in names:         # (the field of the study opened before this one: draw this study's first;
                     r = {**r, "field": names[0]}               #  the panel's own list follows when it refreshes)
                 if r["field"]:
-                    p = self.engine.result_surface(r["field"], time_index=r.get("time", -1), section=r.get("section"), hide=r.get("hide"))
+                    show = r.get("show") or {}
+                    self.view.air_over_results = bool(show)
+                    if show:
+                        self._air_for_results(st)
+                    p = self.engine.result_surface(r["field"], time_index=r.get("time", -1), section=r.get("section"), hide=r.get("hide"),
+                                                   groups=show.get("groups"))
                     info = next((f for f in self.panels["results"].fields if f["name"] == r["field"]), {})
                     flow = st["study"] in AIR_KINDS
                     if flow and r.get("flow") and (any(r["flow"][k]["on"] for k in ("iso", "volume", "vectors", "streams")) or r["flow"].get("planes")):
@@ -756,6 +764,7 @@ class MainWindow(QMainWindow):
                         self._fit_once((self.engine.pid, "results"), "iso" if flow else None)
                     self.panels["results"].draw_marks()
                     return
+            self.view.air_over_results = False
             self.view.clear_overlay()
             try:                                  # (the geometry is rebuilt in place by a turn, a move or a CAD edit: the file it is drawn from changes)
                 built = (self.engine.project().geo_dir / "faces.json").stat().st_mtime_ns
@@ -780,6 +789,20 @@ class MainWindow(QMainWindow):
         except Exception as e:  # noqa: BLE001
             self.statusBar().showMessage(f"Cannot draw: {e}", 10000)
 
+    def _air_for_results(self, st):
+        """The Air box switch works on the Results step too (it is also a tick box of the list there): make sure the box is built, and show it or not."""
+        v = self.view
+        if not v.air_actors and st["geometry"].get("status") == "ready":
+            on = self._air_pref.get(self.engine.pid, False)
+            v.set_geometry(self.engine.project().faces(), AIR_KINDS.get(st["study"], ()), on)
+            v.show_geometry(False)                     # (only the air box is wanted here: the result is the model)
+            self._geo_key = None                       # (the other steps build their own drawing again)
+            self.chk_air.blockSignals(True)
+            self.chk_air.setChecked(on)
+            self.chk_air.blockSignals(False)
+        for a in v.air_actors:
+            a.SetVisibility(self.chk_air.isChecked())
+
     def _draw_flow_tools(self, r: dict, info: dict):
         """The flow tools that are on (vortex surfaces, cloud, arrows, particle paths) over the object. With vortex surfaces the object takes the
         colour field of the surfaces; otherwise it is grey and the first tool names the colour bar."""
@@ -787,6 +810,7 @@ class MainWindow(QMainWindow):
         from . import flowdraw
         t = r["flow"]
         ti = r.get("time", -1)
+        groups = (r.get("show") or {}).get("groups")
         L = self.engine.flow_layers(t, ti)
         ft = self.panels["results"].flow
         fields = {f["name"]: f for f in self.panels["results"].fields}
@@ -796,17 +820,24 @@ class MainWindow(QMainWindow):
         if "iso" in L:
             cf = t["iso"]["color"] if t["iso"]["color"] in fields else r["field"]
             f = fields.get(cf, {})
-            surf = merge_payloads(L["iso"], self.engine.flow_object(cf, ti))
+            polished, sm = self.engine.smooth_iso(L["iso"], t["iso"].get("surface_smooth", 0))     # (a display filter: the data is not changed)
+            surf = merge_payloads(polished, self.engine.flow_object(cf, ti, groups=groups))
             rng = (f["p01"], f["p99"]) if f.get("p99", 0) > f.get("p01", 0) else None
-            self.view.show_surface(surf, name=f"Vortex surfaces, coloured by {cf}", unit=f.get("unit", ""), cmap=r["cmap"], reverse=r["reverse"],
-                                   bands=r["bands"], vrange=rng)
+            self.view.show_surface(surf, name=f"Vortex surfaces{' (smoothed)' if sm['passes'] else ''}, coloured by {cf}", unit=f.get("unit", ""),
+                                   cmap=r["cmap"], reverse=r["reverse"], bands=r["bands"], vrange=rng, smooth_shading=bool(sm["passes"]))
+            self.view.overlay_info["iso_smoothing"] = sm
+            ft.show_smoothing(sm, L["iso"].get("n_tris", 0))
             legend = True
         else:
             one = L.get("planes", [])
+            mode = t.get("plane_model", "ghost")
             cut = None
-            if len(one) == 1 and not any(k in L for k in ("volume", "vectors", "paths")):
-                cut = ("xyz".index(one[0]["axis"]), one[0]["pos"])   # (one plane alone: the object is cut open there, as a section; its near half would hide the plane)
-            self.view.show_surface(self.engine.flow_object(r["field"], ti, cut=cut), name="Object", unit="", edges=r["edges"], solid=(0.66, 0.70, 0.76))
+            if one and mode == "cut":        # (only on request: a plane never clips the model by itself - Fixes #60)
+                cut = ("xyz".index(one[0]["axis"]), one[0]["pos"])
+            # (the model is whole; with a plane it is drawn see-through, so the part of the plane behind its near half still shows)
+            ghost = 0.35 if one and mode == "ghost" else 1.0
+            self.view.show_surface(self.engine.flow_object(r["field"], ti, cut=cut, groups=groups), name="Object", unit="", edges=r["edges"], solid=(0.66, 0.70, 0.76),
+                                   opacity=ghost)
         if "volume" in L:
             f = fields.get(t["volume"]["field"], {})
             win = t["volume"].get("range") or flowdraw.volume_window(L["volume"], t["volume"]["field"], L["free_stream"])

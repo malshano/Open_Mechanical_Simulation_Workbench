@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import QBuffer, QByteArray, QIODevice, Qt
@@ -18,7 +19,10 @@ from ..charts import FieldHist, HBar, LineChart, SignedBar, SpectrumChart, Stack
 from ..forms import fmt_num
 from ..ids import wid
 from ..probes import surface_histogram
+from ..recording import Recording, RecordingStopped
+from ..resulthandles import ResultHandles
 from ..timebar import TimeBar
+from ..visibility import VisibilityList, zone_outline
 from .common import KPI, ClickLabel, _h, _muted, _Panel, _seg, clear_layout
 from .flowtools import FlowTools
 
@@ -65,6 +69,7 @@ class ResultsPanel(_Panel):
         super().__init__(engine, parent)
         self.fields: list = []
         self.pins: list = []            # [{point(base), value, text}]
+        self.pin_rows: list = []
         self.line_ends: list = []       # base points of the line being picked
         self.line_pick = False
         self.probe_on = False
@@ -75,6 +80,7 @@ class ResultsPanel(_Panel):
         self._study = None
         self._summary_s: dict = {}
         self.video_info = None
+        self.recording = None                  # (the Recording of the video being made, or the last one)
         self.spectrum = None
         tabs, self.tab_grp, self.tab_btns = _seg(self.TABS, "summary", prefix="results.tab")
         self.v.addWidget(tabs)
@@ -255,7 +261,7 @@ class ResultsPanel(_Panel):
         sv.setContentsMargins(0, 0, 0, 0)
         sv.setSpacing(6)
         sv.addWidget(_h("Section"))
-        self.section_hint = _muted("Cut the part to see the inside: the field on the cut faces, for the side below the plane.")
+        self.section_hint = _muted("Cut the part to see the inside: the field on the cut faces, for the side below the plane. Move the plane with the slider, the number or its handle in the 3D view.")
         sv.addWidget(self.section_hint)
         w, self.section_grp, self.section_btns = _seg([("", "Off"), ("x", "X"), ("y", "Y"), ("z", "Z")], "", prefix="results.section")
         for k, b in self.section_btns.items():
@@ -267,8 +273,20 @@ class ResultsPanel(_Panel):
         self.section_pos.setValue(500)
         self.section_pos.setEnabled(False)
         self.section_pos.setToolTip("Where the plane cuts the part (from one end to the other)")
-        self.section_pos.valueChanged.connect(lambda _=0: self._display_changed())
+        self.section_pos.valueChanged.connect(lambda _=0: (self._section_mm_show(), self._display_changed()))
         sv.addWidget(self.section_pos)
+        self.section_mm = wid(QDoubleSpinBox(), "results.section.mm")
+        self.section_mm.setDecimals(1)
+        self.section_mm.setRange(-1e7, 1e7)
+        self.section_mm.setSuffix(" mm")
+        self.section_mm.setKeyboardTracking(False)
+        self.section_mm.setEnabled(False)
+        self.section_mm.setToolTip("Where the plane cuts, in mm along its axis. Type a value, or drag the section plane's handle in the 3D view")
+        self.section_mm.valueChanged.connect(self._section_mm_typed)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Position (mm)"))
+        row.addWidget(self.section_mm, 1)
+        sv.addLayout(row)
         v.addWidget(self.section_box)
         v.addWidget(_h("Model"))
         row = QHBoxLayout()
@@ -302,7 +320,12 @@ class ResultsPanel(_Panel):
         self.part_checks: dict = {}
         self.parts_box.setVisible(False)
         v.addWidget(self.parts_box)
-        self.edges = wid(QCheckBox("Show the mesh edges"), "results.edges")
+        self.handles = ResultHandles(self)          # the drag handles of the positioning controls (resulthandles.py)
+        self.vis = VisibilityList()                 # (a flow with an object: what is drawn, parts and moving zones; see visibility.py)
+        self.vis.changed.connect(self._display_changed)
+        self.vis.airToggled.connect(self._air_ticked)
+        v.addWidget(self.vis)
+        self.edges =wid(QCheckBox("Show the mesh edges"), "results.edges")
         self.edges.setToolTip("Draw the edges of the mesh cells on the surface")
         self.edges.toggled.connect(lambda _=False: self._display_changed())
         v.addWidget(self.edges)
@@ -342,7 +365,49 @@ class ResultsPanel(_Panel):
 
     def _section_changed(self):
         self.section_pos.setEnabled(any(k and b.isChecked() for k, b in self.section_btns.items()))
+        self._section_mm_show()
         self._display_changed()
+
+    # ---- the section plane's position as a number and as a handle in the 3D view
+    def section_axis(self) -> str:
+        return next((k for k, b in self.section_btns.items() if k and b.isChecked()), "")
+
+    def section_extent(self):
+        """(low, high) of the result along the section's axis in m, or None."""
+        ax = self.section_axis()
+        if not ax or self.win is None:
+            return None
+        try:
+            return self.win.shell._extent("results", ax)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _section_mm_show(self):
+        ext = self.section_extent()
+        self.section_mm.blockSignals(True)
+        if ext:
+            self.section_mm.setRange(ext[0] * 1000, ext[1] * 1000)
+            self.section_mm.setValue((ext[0] + self.section_pos.value() / 1000.0 * (ext[1] - ext[0])) * 1000)
+        self.section_mm.setEnabled(bool(ext))
+        self.section_mm.blockSignals(False)
+
+    def _section_mm_typed(self, mm: float):
+        ext = self.section_extent()
+        if ext and ext[1] > ext[0]:
+            self.section_pos.setValue(int(round(min(max((mm / 1000.0 - ext[0]) / (ext[1] - ext[0]), 0.0), 1.0) * 1000)))      # (redraws)
+
+    def set_section_position(self, pos_m: float, final: bool = True):
+        """The section plane moved (its handle): the slider and the number follow; the cut is drawn again only when final."""
+        ext = self.section_extent()
+        if not ext or ext[1] <= ext[0]:
+            return
+        frac = min(max((pos_m - ext[0]) / (ext[1] - ext[0]), 0.0), 1.0)
+        self.section_pos.blockSignals(True)
+        self.section_pos.setValue(int(round(frac * 1000)))
+        self.section_pos.blockSignals(False)
+        self._section_mm_show()
+        if final:
+            self.section_pos.valueChanged.emit(self.section_pos.value())            # (the cut is made again, and the 3D view's own section bar follows)
 
     def request(self):
         scale = None
@@ -359,7 +424,7 @@ class ResultsPanel(_Panel):
                 rng = None
         on = self.deform.isChecked()
         return {"time": self.timebar.time_index(), "opacity": self.opacity.value() / 100.0, "outline": self.outline.isChecked(),
-                "hide": self.hidden_regions(), "field": self.field.currentText(), "cmap": self.cmap.currentText(), "reverse": self.rev.isChecked(),
+                "hide": self.hidden_regions(), "show": self.vis.selection(), "field": self.field.currentText(), "cmap": self.cmap.currentText(), "reverse": self.rev.isChecked(),
                 "bands": self.bands.value(), "deform": (scale if on else 0), "animate": on and self.deform_mode.currentText() == "Animated",
                 "edges": self.edges.isChecked(), "range": rng, "minmax": self.minmax.isChecked(),
                 "contours": {"on": self.cont_on.isChecked(), "n": self.cont_n.value(), "levels": self.contour_levels(), "labels": self.cont_labels.isChecked()},
@@ -405,6 +470,39 @@ class ResultsPanel(_Panel):
             raise ValueError((f"{name!r} is not a part of this result: " + ", ".join(self.part_checks)) if self.part_checks
                              else "This result has only one part")
         self.part_checks[name].setChecked(bool(on))
+
+    # ------------------------------------------------------------------ "Show in the view": the surfaces, the air box, the zone and region outlines
+    def _vis_items(self, st):
+        groups, zones, regions = [], [], []
+        if st["study"] == "external_aero" and st["solve"].get("status") in ("done", "stale"):
+            try:
+                rs = self.engine.project().results()
+                groups = [g for g in (self._summary_s.get("default_groups") or []) if g in rs.groups] or [g for g in rs.groups if g != "farfield"]
+            except Exception:  # noqa: BLE001
+                groups = []
+            zones, regions = st.get("moving_zones") or [], (st.get("mesh") or {}).get("regions") or []
+        self.vis.set_items(self.engine.pid, groups, zones, regions, self.win.chk_air.isChecked() if self.win is not None else False)
+
+    def _air_ticked(self, on: bool):
+        """The air box tick was clicked: the 3D view's Air box button is the same switch."""
+        if self.win is not None and self.win.chk_air.isChecked() != bool(on):
+            self.win.chk_air.setChecked(bool(on))
+
+    def draw_outlines(self):
+        """The outlines of the moving zones and the refinement regions, when the list asks for them (translucent, over the result)."""
+        sel = self.vis.selection() or {}
+        regs = []
+        if sel.get("zones") or sel.get("regions"):
+            st = self.engine.state()
+            if sel.get("zones"):
+                regs += [zone_outline(z) for z in st.get("moving_zones") or []]
+            if sel.get("regions"):
+                regs += list((st.get("mesh") or {}).get("regions") or [])
+        self.view.region_view.set(regs, None) if regs else self.view.region_view.clear()
+
+    def left(self):
+        self.view.region_view.clear()
+        self.handles.clear()
 
     def set_range(self, lo: float, hi: float):
         """A colour range of its own (what a drag over the distribution does)."""
@@ -491,7 +589,7 @@ class ResultsPanel(_Panel):
 
     # ------------------------------------------------------------------ videos
     def _video_dialog(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Save the video", f"{self.engine.pid}-{self.field.currentText().replace(' ', '_')}.mp4",
+        path, _ = QFileDialog.getSaveFileName(self, "Save the video (this window's 3D view is recorded: keep the window open)", f"{self.engine.pid}-{self.field.currentText().replace(' ', '_')}.mp4",
                                               "MP4 video (*.mp4)")
         if path:
             try:
@@ -507,37 +605,50 @@ class ResultsPanel(_Panel):
         fps = float(fps or vs["fps"])
         orbit = float(vs["orbit"] if orbit is None else orbit)
         name = (self.engine.state() or {}).get("name", "")
+        if self.recording is not None and self.recording.active:
+            raise ValueError("A recording is already running: stop it first (the Stop recording button under the 3D view, or Esc)")
         btn, old = tb.rec, tb.rec.text()
+        n_pictures = len(tb.times) if tb.transient else exports.turntable_frames(fps, seconds)
+        rec = self.recording = Recording(self.win)
         tb.stop()
 
         def progress(i, n, what=""):
+            if what:
+                rec.encoding()
             btn.setText("encoding…" if what else f"{i}/{n}")
-            self.win.statusBar().showMessage("Video: encoding" if what else f"Video: picture {i} of {n}", 4000)
+            self.win.statusBar().showMessage("Video: encoding" if what else f"● Recording: picture {i} of {n} (keep the window open)", 4000)
             QApplication.processEvents()
         btn.setEnabled(False)
+        rec.start(n_pictures)
         try:
             if tb.transient:
                 keep, ts = tb.index, tb.times
                 try:
                     out = exports.record(self.view, path, fps, len(ts), tb.set_index, orbit,
-                                         text=lambda i: (f"t = {exports.fmt_time(ts[i])}", name), progress=progress)
+                                         text=lambda i: (f"t = {exports.fmt_time(ts[i])}", name), progress=progress, gate=rec.gate)
                 finally:
                     tb.set_index(keep)
             else:
-                out = exports.record(self.view, path, fps, exports.turntable_frames(fps, seconds), lambda i: None, orbit or 360.0,
-                                     text=lambda i: (name,), progress=progress)
+                out = exports.record(self.view, path, fps, n_pictures, lambda i: None, orbit or 360.0,
+                                     text=lambda i: (name,), progress=progress, gate=rec.gate)
+        except RecordingStopped as e:
+            self.win.toasts.warn(str(e))
+            raise
         finally:
+            rec.finish()
             btn.setEnabled(True)
             btn.setText(old)
         self.video_info = out
         self.win.statusBar().showMessage(f"Video saved: {out['frames']} pictures at {fps:g} fps, {path}", 9000)
+        self.win.toasts.ok((f"Recording stopped: the video has the {out['frames']} pictures made so far" if out.get("stopped") else "Recording finished")
+                           + f" ({out['frames']} pictures at {fps:g} fps, {Path(path).name}).")
         return out
 
     # ------------------------------------------------------------------ the Probe tab
     def _build_probe(self):
         v = self.pages["probe"]
         v.addWidget(_h("Probe"))
-        v.addWidget(_muted("Click points on the result to read their value and keep it in the list. Click the model with Probe on."))
+        v.addWidget(_muted("Click points on the result to read their value and keep it in the list. Click the model with Probe on. Drag a point's ball in the 3D view (it slides over the model) or type its position to move it."))
         self.probe_btn = wid(QPushButton("⌖  Probe: off. Click to start probing"), "results.probe")
         self.probe_btn.setCheckable(True)
         self.probe_btn.setObjectName("toggle")
@@ -548,7 +659,7 @@ class ResultsPanel(_Panel):
         self.pin_box.setSpacing(4)
         v.addLayout(self.pin_box)
         v.addWidget(_h("Line plot"))
-        v.addWidget(_muted("The field along a straight line between two points."))
+        v.addWidget(_muted("The field along a straight line between two points. Move an end with its ball in the 3D view or by typing it: the plot follows."))
         row = QHBoxLayout()
         self.pick2 = wid(QPushButton("Pick two points"), "results.line.pick")
         self.pick2.setObjectName("ghostBorder")
@@ -566,6 +677,30 @@ class ResultsPanel(_Panel):
         v.addWidget(self.chart)
         self.line_info = wid(_muted(""), "results.line.info")
         v.addWidget(self.line_info)
+        self.line_ends_box = QWidget()                       # (the two ends as numbers, once there is a line: they follow the handles and move them)
+        lb = QVBoxLayout(self.line_ends_box)
+        lb.setContentsMargins(0, 0, 0, 0)
+        lb.setSpacing(2)
+        self.line_edits: list = []
+        for k, nm in enumerate("AB"):
+            r = QHBoxLayout()
+            r.addWidget(QLabel(f"<b>{nm}</b>"))
+            es = []
+            for a in "xyz":
+                e = wid(QLineEdit(), f"results.line.{nm.lower()}.{a}")
+                e.setValidator(QDoubleValidator(e))
+                e.setMaximumWidth(86)
+                e.setToolTip(f"End {nm} of the line, {a.upper()} in mm. Type a value (the end moves to the nearest place on the model), or drag its handle in the 3D view")
+                e.editingFinished.connect(lambda k=k: self._line_typed(k))
+                r.addWidget(QLabel(a.upper()))
+                r.addWidget(e)
+                es.append(e)
+            r.addWidget(QLabel("mm"))
+            r.addStretch(1)
+            lb.addLayout(r)
+            self.line_edits.append(es)
+        self.line_ends_box.setVisible(False)
+        v.addWidget(self.line_ends_box)
         row = QHBoxLayout()
         cp = self.copy_btn = wid(QPushButton("Copy data"), "results.line.copy")
         cp.setObjectName("ghostBorder")
@@ -637,10 +772,11 @@ class ResultsPanel(_Panel):
     def _pins(self):
         self._probe_enable()
         clear_layout(self.pin_box)
+        self.pin_rows = []
         for i, p in enumerate(self.pins):
+            col = QVBoxLayout()
             row = QHBoxLayout()
-            lab = QLabel(f"<b>{chr(65 + i % 26)}</b>  {p['name']}: {fmt_num(p['value'])} {p['unit']}  <span style='color:{theme.tokens()['muted']}'>"
-                         f"at {', '.join(fmt_num(c * 1000) for c in p['point'])} mm</span>")
+            lab = QLabel("")
             lab.setWordWrap(True)
             row.addWidget(lab, 1)
             d = wid(QPushButton("✕"), f"results.pin.{i}.delete")
@@ -648,15 +784,97 @@ class ResultsPanel(_Panel):
             d.setToolTip("Remove this pinned value")
             d.clicked.connect(lambda _=False, i=i: self._del_pin(i))
             row.addWidget(d)
+            col.addLayout(row)
+            xyz = QHBoxLayout()
+            edits = []
+            for a in "xyz":
+                e = wid(QLineEdit(), f"results.pin.{i}.{a}")
+                e.setValidator(QDoubleValidator(e))
+                e.setMaximumWidth(86)
+                e.setToolTip(f"The point's {a.upper()} in mm. Type a value (the point moves to the nearest place on the model), or drag the point's handle in the 3D view")
+                e.editingFinished.connect(lambda i=i: self._pin_typed(i))
+                xyz.addWidget(QLabel(a.upper()))
+                xyz.addWidget(e)
+                edits.append(e)
+            xyz.addWidget(QLabel("mm"))
+            xyz.addStretch(1)
+            col.addLayout(xyz)
             w = QWidget()
-            w.setLayout(row)
+            w.setLayout(col)
             self.pin_box.addWidget(w)
+            self.pin_rows.append({"label": lab, "edits": edits})
+            self._pin_texts(i)
+
+    def _pin_texts(self, i: int):
+        """The text and the number boxes of pin i, from the pin (no signals: the pin was moved by a handle or by typing)."""
+        p, r = self.pins[i], self.pin_rows[i]
+        r["label"].setText(f"<b>{chr(65 + i % 26)}</b>  {p['name']}: {fmt_num(p['value'])} {p['unit']}")
+        for e, c in zip(r["edits"], p["point"]):
+            if not e.hasFocus():
+                e.blockSignals(True)
+                e.setText(f"{c * 1000:.2f}")
+                e.blockSignals(False)
+
+    def _pin_typed(self, i: int):
+        try:
+            pt = [float(e.text()) / 1000.0 for e in self.pin_rows[i]["edits"]]
+        except (ValueError, IndexError):
+            return
+        self.move_pin(i, pt)
+
+    def move_pin(self, i: int, point, final: bool = True):
+        """Pin i goes to the place on the drawn result nearest to `point` (m); its value is read there. final=False while a handle is dragged (cheap)."""
+        h = self.view.closest_surface_point(point)
+        if h is None:
+            raise ValueError("Nothing is drawn to put a point on")
+        self.set_pin_hit(i, h[0], h[1], final)
+
+    def set_pin_hit(self, i: int, cell: int, point, final: bool = True):
+        p = self.pins[i]
+        p["point"] = [float(c) for c in point]
+        val = self.view.value_at(cell, point)
+        if val is not None:
+            p["value"] = val
+        self._pin_texts(i)
+        if final:
+            self._pins()
+            self.draw_marks()
+        else:
+            self._mark_labels()                                  # (while a handle is dragged: only the label follows)
 
     def _del_pin(self, i):
         if 0 <= i < len(self.pins):
             del self.pins[i]
             self._pins()
             self.draw_marks()
+
+    def _line_texts(self):
+        """The numbers of the line's two ends, from the ends (no signals)."""
+        self.line_ends_box.setVisible(len(self.line_ends) >= 2)
+        for es, pt in zip(self.line_edits, self.line_ends):
+            for e, c in zip(es, pt):
+                if not e.hasFocus():
+                    e.blockSignals(True)
+                    e.setText(f"{c * 1000:.2f}")
+                    e.blockSignals(False)
+
+    def _line_typed(self, k: int):
+        try:
+            pt = [float(e.text()) / 1000.0 for e in self.line_edits[k]]
+        except ValueError:
+            return
+        h = self.view.closest_surface_point(pt)
+        if h is not None and len(self.line_ends) >= 2:
+            self.set_line_end(k, self.view.base_point(h[0], h[1]))
+
+    def set_line_end(self, k: int, base_point, final: bool = True):
+        """An end of the line plot (A = 0, B = 1) was moved (its handle, or typed): the plot is made again when final."""
+        self.line_ends[k] = [float(c) for c in base_point]
+        self._line_texts()
+        if final:
+            self.fetch_line()
+        else:
+            self._mark_labels()
 
     def line_min_max(self):
         ex = self.view.extrema()
@@ -675,6 +893,7 @@ class ResultsPanel(_Panel):
             self.line_data = None
             return None
         self.line_data = d
+        self._line_texts()
         self._probe_enable()
         self.chart.set_data(d["s"], d["values"], "distance along the line [m]", d.get("unit", ""))
         if "min" in d:
@@ -696,6 +915,7 @@ class ResultsPanel(_Panel):
 
     def clear_probes(self):
         self.pins, self.line_ends, self.line_data, self.line_pick = [], [], None, False
+        self.line_ends_box.setVisible(False)
         self.chart.clear()
         self.line_info.setText("")
         self._probe_enable()
@@ -707,6 +927,13 @@ class ResultsPanel(_Panel):
         """The highest/lowest values, the pinned values and the ends of the line, hung on the drawn result."""
         if self.win is None or self.win.step != "results" or not self.engine.pid:
             return
+        self._mark_labels()
+        self.draw_outlines()
+        self.handles.sync()
+        self.after_draw()
+
+    def _mark_labels(self):
+        """The labels on the model (the cheap part of draw_marks: also what follows a handle while it is dragged)."""
         items = []
         t = theme.tokens()
         if self.minmax.isChecked() and self.view.overlay_info.get("name") != "Object":      # (a grey object under flow tools has no values to label)
@@ -721,7 +948,6 @@ class ResultsPanel(_Panel):
         for k, e in enumerate(self.line_ends[:2]):
             items.append({"point": e, "text": "AB"[k], "color": t["ink"]})
         self.view.set_labels(items)
-        self.after_draw()
 
     # ------------------------------------------------------------------ the Summary and Checks tabs
     def refresh(self, st):
@@ -752,6 +978,7 @@ class ResultsPanel(_Panel):
         self._time_note()
         self.hide_air.setVisible(st["study"] == "cht_enclosure" and bool(infos))
         self._parts(st)
+        self._vis_items(st)
         flow = st["study"] in ("external_aero", "cht_enclosure")
         self.tab_btns["flow"].setVisible(flow and bool(infos))
         if flow and infos:
