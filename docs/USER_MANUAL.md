@@ -635,7 +635,12 @@ The tabs are the ones of section 8, with these differences and additions.
   changes over the saved times (the animation would look still).
 - **Video**: **● MP4** (transient) saves every saved time as drawn now, with the colour legend and the time on each picture; on a steady
   result **● Turntable MP4** turns the camera around the model. Choose the **frames per second** and the camera **orbit** (degrees over
-  the video) beside the button; the button counts the pictures while it records.
+  the video) beside the button; the button counts the pictures while it records. **The current window is what is recorded** (its 3D view,
+  picture by picture), so keep it open: a notice at the start says so and asks you **not to minimise it**; while it runs a bar under the 3D
+  view reads "● Recording ... (picture 3 of 40)" with a **Stop recording** button (Esc does the same), and the window title starts with
+  "● Recording". Stop keeps the pictures made so far as the video. If the window is minimised anyway, the recording **pauses** and a warning
+  says so; it goes on from the same picture by itself when you restore the window (nothing is lost, the pictures are made one at a time).
+  Only one video can be recorded at a time.
 - **Distribution** (Display, under the range): how much of the surface has each value, in the colours of the map, with the mean. Drag
   across the bars to set the colour range to that part; double-click to go back to the automatic range. The line under it says how
   much of the surface is below and above the range.

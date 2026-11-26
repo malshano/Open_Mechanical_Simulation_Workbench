@@ -102,7 +102,7 @@ plus the toolbar and application bar. Status: ✅ done in the Qt app · 🟡 par
 | Tabs Summary / Display / Probe / Checks | ✅ | results |
 | KPI tiles with verdicts, parts bars (stress vs yield, temperatures, allowed temperature), heat balance, force/moment bars | ✅ (tiles; parts bars against yield; temperature bars with an allowed temperature and margins; where the heat goes; force / moment bars from a centre line; force at each support) | results |
 | Modal spectrum plot, flutter plots, sweep plot, residual history | ✅ (spectrum stems pick a mode; flutter frequency and damping with the critical speed; shake-test sweep log-log with peaks; residuals; forces / temperatures over time) | results |
-| Field choice, time bar for transient results, animate, turntable / MP4 | ✅ (time bar: slider, play / pause, note; ● MP4 of the saved times or a turntable, fps and orbit; Animate under the modes) - no 🎬 Promo look, no section-sweep video | results |
+| Field choice, time bar for transient results, animate, turntable / MP4 | ✅ (time bar: slider, play / pause, note; ● MP4 of the saved times or a turntable, fps and orbit, with a notice that this window is recorded and must not be minimised, a Stop recording bar, a pause when it is minimised; Animate under the modes) - no 🎬 Promo look, no section-sweep video | results |
 | Colours: map, reverse, bands | ✅ | - |
 | Contour lines on the result: on / off, number, extra values, value written on each line (new, not in the web version) | ✅ | - |
 | Range: auto / manual, histogram with drag-to-set | ✅ (area-weighted distribution in the map's colours, mean, share outside; drag sets, double-click resets) | results |

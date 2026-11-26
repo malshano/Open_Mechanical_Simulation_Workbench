@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import QBuffer, QByteArray, QIODevice, Qt
@@ -18,6 +19,7 @@ from ..charts import FieldHist, HBar, LineChart, SignedBar, SpectrumChart, Stack
 from ..forms import fmt_num
 from ..ids import wid
 from ..probes import surface_histogram
+from ..recording import Recording, RecordingStopped
 from ..timebar import TimeBar
 from .common import KPI, ClickLabel, _h, _muted, _Panel, _seg, clear_layout
 from .flowtools import FlowTools
@@ -75,6 +77,7 @@ class ResultsPanel(_Panel):
         self._study = None
         self._summary_s: dict = {}
         self.video_info = None
+        self.recording = None                  # (the Recording of the video being made, or the last one)
         self.spectrum = None
         tabs, self.tab_grp, self.tab_btns = _seg(self.TABS, "summary", prefix="results.tab")
         self.v.addWidget(tabs)
@@ -491,7 +494,7 @@ class ResultsPanel(_Panel):
 
     # ------------------------------------------------------------------ videos
     def _video_dialog(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Save the video", f"{self.engine.pid}-{self.field.currentText().replace(' ', '_')}.mp4",
+        path, _ = QFileDialog.getSaveFileName(self, "Save the video (this window's 3D view is recorded: keep the window open)", f"{self.engine.pid}-{self.field.currentText().replace(' ', '_')}.mp4",
                                               "MP4 video (*.mp4)")
         if path:
             try:
@@ -507,30 +510,43 @@ class ResultsPanel(_Panel):
         fps = float(fps or vs["fps"])
         orbit = float(vs["orbit"] if orbit is None else orbit)
         name = (self.engine.state() or {}).get("name", "")
+        if self.recording is not None and self.recording.active:
+            raise ValueError("A recording is already running: stop it first (the Stop recording button under the 3D view, or Esc)")
         btn, old = tb.rec, tb.rec.text()
+        n_pictures = len(tb.times) if tb.transient else exports.turntable_frames(fps, seconds)
+        rec = self.recording = Recording(self.win)
         tb.stop()
 
         def progress(i, n, what=""):
+            if what:
+                rec.encoding()
             btn.setText("encoding…" if what else f"{i}/{n}")
-            self.win.statusBar().showMessage("Video: encoding" if what else f"Video: picture {i} of {n}", 4000)
+            self.win.statusBar().showMessage("Video: encoding" if what else f"● Recording: picture {i} of {n} (keep the window open)", 4000)
             QApplication.processEvents()
         btn.setEnabled(False)
+        rec.start(n_pictures)
         try:
             if tb.transient:
                 keep, ts = tb.index, tb.times
                 try:
                     out = exports.record(self.view, path, fps, len(ts), tb.set_index, orbit,
-                                         text=lambda i: (f"t = {exports.fmt_time(ts[i])}", name), progress=progress)
+                                         text=lambda i: (f"t = {exports.fmt_time(ts[i])}", name), progress=progress, gate=rec.gate)
                 finally:
                     tb.set_index(keep)
             else:
-                out = exports.record(self.view, path, fps, exports.turntable_frames(fps, seconds), lambda i: None, orbit or 360.0,
-                                     text=lambda i: (name,), progress=progress)
+                out = exports.record(self.view, path, fps, n_pictures, lambda i: None, orbit or 360.0,
+                                     text=lambda i: (name,), progress=progress, gate=rec.gate)
+        except RecordingStopped as e:
+            self.win.toasts.warn(str(e))
+            raise
         finally:
+            rec.finish()
             btn.setEnabled(True)
             btn.setText(old)
         self.video_info = out
         self.win.statusBar().showMessage(f"Video saved: {out['frames']} pictures at {fps:g} fps, {path}", 9000)
+        self.win.toasts.ok((f"Recording stopped: the video has the {out['frames']} pictures made so far" if out.get("stopped") else "Recording finished")
+                           + f" ({out['frames']} pictures at {fps:g} fps, {Path(path).name}).")
         return out
 
     # ------------------------------------------------------------------ the Probe tab
