@@ -15,7 +15,7 @@ from PySide6.QtWidgets import QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabe
 from .forms import fmt_num
 from .ids import wid
 
-SOLID_STUDIES = ("heat_conduction", "vibration_modal", "static_structural", "aeroelastic_flutter")
+SOLID_STUDIES = ("heat_conduction", "vibration_modal", "static_structural", "topology_optimization", "aeroelastic_flutter")
 ZONE_CELLS = {"quick": 36, "coarse": 48, "medium": 64, "fine": 96, "very_fine": 128}   # (= gmsh_worker.ZONE_CELLS: cells round a zone)
 RUN_COST = {"cht_enclosure": (5.1e-6, 1700), "external_aero": (6.2e-6, 500)}          # s per cell per iteration, iterations to auto-stop
 
@@ -129,7 +129,7 @@ def mesh_notes(st: dict) -> tuple:
             warn.append("Thin parts have fewer than 2 cells across: use a finer preset.")
         if study == "heat_conduction" and across < 1.5:
             warn.append("Thin parts are about 1 cell thick: Medium or Fine is more accurate.")
-        if study in ("vibration_modal", "static_structural", "aeroelastic_flutter") and across < 1.5:
+        if study in ("vibration_modal", "static_structural", "topology_optimization", "aeroelastic_flutter") and across < 1.5:
             warn.append("Thin walls are about 1 element thick: check with Fine.")
     if sz.get("min_gap"):
         info.append(f"Narrowest air gap {_f(sz['min_gap'] * 1000)} mm ≈ {_f(sz.get('cells_across_gap'), 2)} cells across.")

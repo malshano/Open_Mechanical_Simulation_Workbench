@@ -56,11 +56,11 @@ def run_ccx(workdir: Path, deck_text: str, log=print, on_proc=None, threads: int
     return text
 
 
-def solve_static(mesh: dict, body_props: dict, bcs: list, gravity=None, log=print, workdir=None, on_proc=None) -> dict:
+def solve_static(mesh: dict, body_props: dict, bcs: list, gravity=None, log=print, workdir=None, on_proc=None, threads: int | None = None) -> dict:
     t0 = time.time()
     deck = inputdeck.build(mesh, body_props, bcs, "static", gravity=gravity, log=log)
     log(f"CalculiX deck: {deck.n_elements:,} quadratic tetrahedra, {deck.n_nodes:,} nodes")
-    run_ccx(workdir, deck.text(), log, on_proc)
+    run_ccx(workdir, deck.text(), log, on_proc, threads)
     wd = Path(workdir)
     blocks = results.read_frd(wd / f"{JOB}.frd")
     n1 = deck.n_corner

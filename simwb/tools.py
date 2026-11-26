@@ -47,7 +47,7 @@ def get_project_state(pr, a):
 
 def list_options(pr, a):
     st = pr.spec if pr else (studies.study(a["study"]) if a.get("study") else None)
-    mech = st is not None and (st is studies.STUDIES["vibration_modal"] or st is studies.STUDIES["static_structural"]
+    mech = st is not None and (st is studies.STUDIES["vibration_modal"] or st is studies.STUDIES["static_structural"] or st is studies.STUDIES["topology_optimization"]
                                or st is studies.STUDIES["aeroelastic_flutter"])
     out = {
         "solid_materials": {k: (f"{v['label']} (E={v['E'] / 1e9:g} GPa, density={v['rho']:g} kg/m3"
@@ -877,10 +877,10 @@ MCP_EXTRA = [
                 "change anything the other ui_ tools cannot reach; it is logged.",
      {"type": "object", "properties": {"code": STR, "token": STR}, "required": ["code"]}, ui_eval),
     ("list_projects", "List workbench projects.", {"type": "object", "properties": {}}, list_projects),
-    ("create_project", "Create a project. study: heat_conduction | static_structural | vibration_modal | aeroelastic_flutter | cht_enclosure | "
+    ("create_project", "Create a project. study: heat_conduction | static_structural | topology_optimization | vibration_modal | aeroelastic_flutter | cht_enclosure | "
                        "external_aero. "
                        "Optional step_path imports a STEP file (absolute path); or example = a bundled example name "
-                       "(heated_plate.step, camera_mount.step, heatsink_duct.step, quadcopter.step). "
+                       "(heated_plate.step, camera_mount.step, heatsink_duct.step, quadcopter.step, topology_bracket.step). "
                        "location = the folder the user chose to save the study in (full path; a sub-folder named "
                        "after the study is made there): ASK the user first, never choose it yourself.",
      {"type": "object", "properties": {"name": STR, "study": STR, "step_path": STR, "example": STR, "location": STR},
