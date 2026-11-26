@@ -803,10 +803,14 @@ class MainWindow(QMainWindow):
             legend = True
         else:
             one = L.get("planes", [])
+            mode = t.get("plane_model", "ghost")
             cut = None
-            if len(one) == 1 and not any(k in L for k in ("volume", "vectors", "paths")):
-                cut = ("xyz".index(one[0]["axis"]), one[0]["pos"])   # (one plane alone: the object is cut open there, as a section; its near half would hide the plane)
-            self.view.show_surface(self.engine.flow_object(r["field"], ti, cut=cut), name="Object", unit="", edges=r["edges"], solid=(0.66, 0.70, 0.76))
+            if one and mode == "cut":        # (only on request: a plane never clips the model by itself - Fixes #60)
+                cut = ("xyz".index(one[0]["axis"]), one[0]["pos"])
+            # (the model is whole; with a plane it is drawn see-through, so the part of the plane behind its near half still shows)
+            ghost = 0.35 if one and mode == "ghost" else 1.0
+            self.view.show_surface(self.engine.flow_object(r["field"], ti, cut=cut), name="Object", unit="", edges=r["edges"], solid=(0.66, 0.70, 0.76),
+                                   opacity=ghost)
         if "volume" in L:
             f = fields.get(t["volume"]["field"], {})
             win = t["volume"].get("range") or flowdraw.volume_window(L["volume"], t["volume"]["field"], L["free_stream"])

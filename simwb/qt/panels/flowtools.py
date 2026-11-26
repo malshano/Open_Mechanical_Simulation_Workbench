@@ -52,6 +52,15 @@ class FlowTools(QWidget):
         self.plane_add.setToolTip("Another cut through the flow (a new plane starts across Y, in the middle)")
         self.plane_add.clicked.connect(lambda _=False: self.add_plane())
         v.addWidget(self.plane_add)
+        self.plane_model = self._combo("results.flow.planes.model", [("ghost", "Whole model, see-through"), ("solid", "Whole model, solid"),
+                                                                     ("cut", "Cut open at plane 1 (section view)")],
+                                       "How the model is drawn with the planes. A plane never cuts the model by itself: choose the section view here if you want the model opened at plane 1")
+        self.plane_model_row = QWidget()
+        mr = QVBoxLayout(self.plane_model_row)
+        mr.setContentsMargins(0, 0, 0, 0)
+        mr.addLayout(self._row("Model", self.plane_model))
+        v.addWidget(self.plane_model_row)
+        self.plane_model_row.setVisible(False)
         # ---- vortex surfaces
         self.iso_box = QWidget()
         iv = QVBoxLayout(self.iso_box)
@@ -220,6 +229,7 @@ class FlowTools(QWidget):
                 it.widget().deleteLater()
         self._plane_rows = []
         names = self._names_now()
+        self.plane_model_row.setVisible(bool(self.planes))       # (the choice only means something with a plane)
         for i, p in enumerate(self.planes):
             n = i + 1
             card = QFrame()
@@ -441,7 +451,7 @@ class FlowTools(QWidget):
                             "range": self._scale_value(self.vec_scale)},
                 "streams": {"on": self.par_on.isChecked(), "n": self.par_n.value(), "seed": self.par_seed.currentData(), "steps": self.par_steps.value(),
                             "animate": self.par_anim.isChecked(), "speed": self.par_speed.value() / 10.0, "range": self._scale_value(self.par_scale)},
-                "planes": [dict(p) for p in self.planes]}
+                "planes": [dict(p) for p in self.planes], "plane_model": self.plane_model.currentData()}
 
     def any_on(self) -> bool:
         r = self.request()

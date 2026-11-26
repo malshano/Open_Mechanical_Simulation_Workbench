@@ -340,6 +340,9 @@ Cuts through the flow, coloured by a field, several at once, each with its own o
 3. Set **Opacity** (10-100 %). Use a low value to see vortex surfaces behind the plane.
 4. **Remove** deletes a plane.
 
+A plane does not clip the model: the whole model stays visible (see-through by default). To open the model at a plane, choose
+**Model: Cut open at plane 1 (section view)** under the planes.
+
 Contour planes are clean rectangles over the shared **Region** (below), with a hole where a body is, and they follow the time slider. Their colours run over the range that holds nearly all of the flow (1st to 99th percentile), so the extremes on the blade tips do not wash the picture out.
 
 ### 8.4 Volume rendering, vector arrows, animated particles
@@ -611,9 +614,10 @@ The tabs are the ones of section 8, with these differences and additions.
   - **Contour planes**: cuts through the flow coloured by a field, as many as you like. A flow result opens with one (Velocity, across Y,
     in the middle). **+ Add contour plane** adds another; each has its **Field**, **Plane across** X, Y or Z, a **Position** slider that
     moves it along that axis (its place is written under it in mm; the plane is cut again when you let go), an **Opacity** slider (lower
-    it to see the object and the other tools behind) and **Remove**. With one plane alone the object is cut open at it and seen straight
-    on, as a section; with several planes, or other tools on, the object is drawn whole. The colours run over the range that holds nearly
-    all of the flow (1st to 99th percentile).
+    it to see the object and the other tools behind) and **Remove**. A plane never cuts the object by itself: the object stays whole.
+    **Model** (under the planes) chooses how it is drawn: **Whole model, see-through** (the default, so the part of a plane behind the
+    object still shows), **Whole model, solid**, or **Cut open at plane 1 (section view)**, which opens the object at the first plane and
+    shows it straight on. The colours run over the range that holds nearly all of the flow (1st to 99th percentile).
   - **Vortex surfaces** (turbulence): surfaces of equal Q-criterion (rotation beats strain). The slider **Weaker vortices shown** works
     towards the right (the Q value under it falls): at the strong end the surfaces only wrap the wall layer on the object; towards the
     weak end the tip vortices, the leading-edge vortex and the wake appear, and also more noise. **Coloured by** picks the field painted on

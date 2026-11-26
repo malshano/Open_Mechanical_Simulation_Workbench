@@ -664,6 +664,7 @@ class Control(QObject):
                           "Omitted arguments stay.",
           {"region": (S, "object|all", False), "grid": (N, "48|64|96|128", False),
            "planes": ("array", "contour planes, replacing the list: [{field, axis x|y|z, position 0..1 across the region, opacity 0.1..1, range [lo, hi] (omit: automatic)}]; [] for none", False),
+           "plane_model": (S, "how the model is drawn with the planes: ghost (whole, see-through, the default) | solid (whole) | cut (opened at plane 1: the section view)", False),
            "volume_range": ("array", "[lo, hi] colour range of the cloud; [] automatic", False),
            "vectors_range": ("array", "[lo, hi] colour range of the arrows; [] automatic", False),
            "streams_range": ("array", "[lo, hi] colour range of the paths; [] automatic", False),
@@ -1095,6 +1096,8 @@ class Control(QObject):
                     if not isinstance(v, list):
                         raise ValueError("planes must be a list of {field, axis, position, opacity}")
                     f.set_planes(v, emit=False)
+                elif k == "plane_model":
+                    data(f.plane_model, v)
                 elif k == "region":
                     data(f.region, v)
                 elif k == "grid":
