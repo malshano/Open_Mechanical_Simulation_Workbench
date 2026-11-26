@@ -271,6 +271,17 @@ def test_vortex_surfaces_are_smoothed_by_default_and_the_view_says_so(ctl):
     assert "Smoothed for display" in note and "data is unchanged" in note and "Area " in note, note
 
 
+def test_the_data_averaging_warns_about_thin_vortices_on_screen_only_while_it_is_on(ctl):
+    f = _iso_study(ctl)
+    assert f.iso_smooth.value() == 0 and f.iso_smooth_hint.isHidden()                  # off: nothing to warn about
+    f.iso_smooth.setValue(1)
+    assert not f.iso_smooth_hint.isHidden()                                            # on: the warning is a visible line, not only a tooltip
+    t = f.iso_smooth_hint.text()
+    assert "thin vortices" in t and "Smooth the surfaces" in t and "0" in t, t
+    f.iso_smooth.setValue(0)
+    assert f.iso_smooth_hint.isHidden()
+
+
 def test_the_unsmoothed_surface_is_one_click_away_and_is_exactly_the_mesh_surface(ctl):
     import numpy as np
     f = _iso_study(ctl)

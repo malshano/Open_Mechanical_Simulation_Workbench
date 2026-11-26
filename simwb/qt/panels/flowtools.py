@@ -115,6 +115,14 @@ class FlowTools(QWidget):
                                    "weakens thin vortices: one pass can take away a third of a thin vortex. Use Smooth the surfaces first")
         self.iso_smooth.valueChanged.connect(lambda *_: self._emit())
         iv.addLayout(self._row("Smooth the data first", self.iso_smooth))
+        # (a hint you can see without hovering: averaging the data weakens thin vortices, so say so as soon as it is on)
+        self.iso_smooth_hint = _muted("Averaging the data weakens thin vortices (one pass can remove a third of one). "
+                                      "To make the surfaces look smoother, use Smooth the surfaces above and set this back to 0.")
+        wid(self.iso_smooth_hint, "results.flow.iso.smooth_hint")
+        self.iso_smooth_hint.setObjectName("warnText")             # (the theme's warning text colour, light and dark)
+        self.iso_smooth_hint.setVisible(False)
+        self.iso_smooth.valueChanged.connect(lambda n: self.iso_smooth_hint.setVisible(n > 0))
+        iv.addWidget(self.iso_smooth_hint)
         v.addWidget(self.iso_box)
         # ---- volume rendering
         v.addWidget(_h("Volume rendering"))

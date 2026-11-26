@@ -181,7 +181,8 @@ QCheckBox::indicator:disabled {{ border-color: {t['line']}; background: {t['pane
 QCheckBox:disabled {{ color: {t['disabled']}; }}
 
 QLabel#muted {{ color: {t['muted']}; }}
-QLabel#h {{ font-weight: 600; font-size: 12px; color: {t['muted']}; }}
+QLabel#warnText {{ color: {t['warn_text']}; }}
+QLabel#h{{ font-weight: 600; font-size: 12px; color: {t['muted']}; }}
 QLabel#kpiv {{ font-size: 22px; font-weight: 600; }}
 QLabel#kpil {{ color: {t['muted']}; font-size: 11px; }}
 QFrame#kpi {{ background: {t['panel2']}; border: 1px solid {t['line']}; border-radius: {t['radius']}; }}
