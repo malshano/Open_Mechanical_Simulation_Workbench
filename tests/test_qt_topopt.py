@@ -89,7 +89,10 @@ def test_the_shape_is_found_drawn_and_explained(topo):
     for wid_ in ("results.topopt.threshold", "results.topopt.chart", "results.topopt.next"):
         assert c.widget_do(wid_)["visible"] is True
     nxt = _text(c, "results.topopt.next")
-    assert "concept" in nxt and "stress" in nxt                                            # (honest: not a finished part, stress not checked)
+    assert "finished part" in nxt                                                          # (honest: not a finished part)
+    assert "stress" in _text(c, "results.topopt.headline") and "concept" in _text(c, "results.topopt.headline")
+    assert c.widget_do("results.topopt.check")["visible"] and c.widget_do("results.topopt.stl")["visible"]   # (the way on is under the headline)
+    assert "Read before you rely" in _text(c, "results.topopt.cautions")
     shown = _text(c, "results.topopt.threshold.text")
     assert "% of the part's volume" in shown
     ov = c.state()["view"]["overlay"]
@@ -125,3 +128,21 @@ def test_stop_keeps_the_shape_so_far(topo, monkeypatch):
     t = c.engine.state()["solve"]["summary"]["topopt"]
     assert c.engine.state()["solve"]["status"] == "done" and t["stopped"] and t["iterations"] == 4
     assert t["mass_fraction"] == pytest.approx(0.3, abs=1e-6)
+
+
+def test_the_shape_can_be_checked_and_saved_from_the_results(topo, tmp_path):
+    c = topo
+    _mesh(c)
+    c.do("step.go", {"step": "solve"})
+    c.do("solve.run")
+    wait(c)
+    c.widget_do("solve.results", "click")
+    c.widget_do("results.topopt.check", "click")
+    wait(c)
+    c._settle()
+    res = _text(c, "results.topopt.check.result")
+    assert "von Mises" in res and "Stiffness kept" in res and "quadratic" in res
+    c.widget_do("results.topopt.threshold", "set", 80)                                      # (moved on: the old check no longer describes the picture, and says so)
+    assert "Press the button to check this one" in _text(c, "results.topopt.check.result")
+    out = c.engine.topopt_export_stl(str(tmp_path / "shape.stl"))
+    assert out["triangles"] > 100 and (tmp_path / "shape.stl").stat().st_size == 84 + 50 * out["triangles"]

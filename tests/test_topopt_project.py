@@ -89,3 +89,23 @@ def test_the_bracket_is_optimised_on_a_real_mesh_and_the_density_is_saved(bracke
     pr.save()
     again = P.open_project(pr.id)
     assert again.data["settings"]["mass_percent"] == 40
+
+
+def test_the_shape_is_checked_with_the_quadratic_solver_and_the_answer_is_kept(bracket):
+    pr, holes, front = bracket
+    pr.add_bc("Bolts", "fixed_support", holes)
+    pr.add_bc("Camera", "force", front, {"fx_N": -20.0, "fy_N": 0, "fz_N": 0})
+    pr.set_mesh(preset="coarse")
+    _wait(pr.generate_mesh())
+    rep = _wait(pr.solve())
+    t = rep["topopt"]
+    assert t["kept_solid"] and {k["name"] for k in t["kept_solid"]} == {"Bolts", "Camera"}            # (what was kept solid, and how much of the mass)
+    assert t["connectivity"]["loads_joined"] and "pieces" in t["connectivity"]
+    ck = _wait(pr.topopt_check(0.5))
+    assert ck["threshold"] == 0.5 and ck["max_von_mises_MPa"] > 0 and ck["min_safety_factor"] > 0
+    assert 0.2 < ck["stiffness_kept_quadratic"] < 1.2 and ck["stiffness_kept_optimiser"] == t["stiffness_kept"]
+    assert 0 <= ck["left_out_share"] < 0.5
+    assert pr.data["solve"]["summary"]["topopt"]["check"]["threshold"] == 0.5                          # (kept with the results, saved with the study)
+    job = pr.topopt_check(0.999999)
+    job.wait(300)
+    assert job.status == "failed" and ("Nothing is above" in job.error or "joined" in job.error)

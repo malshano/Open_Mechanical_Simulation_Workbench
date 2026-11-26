@@ -183,6 +183,15 @@ class Engine(QObject):
         kg = ((self._flow_summary().get("topopt") or {}).get("mass_kg_solid") or 0.0) * share
         return {"share": share, "kg": kg, "threshold": self.topopt_threshold()}
 
+    def topopt_export_stl(self, path: str, smooth: bool = True) -> dict:
+        """Write the shape at the threshold as a binary STL (in millimetres); the faces the optimiser made are smoothed, the part's own faces are left exactly as they are."""
+        from ..topopt import view as tview
+        rs = self.project().results()
+        sub = self._shape(rs)
+        v, t = tview.shape_surface(sub, rs, smooth=smooth)
+        n = tview.write_stl(path, v, t, name=self.project().data.get("name") or "shape")
+        return {"path": str(path), "triangles": int(n), "threshold": self.topopt_threshold(), "smoothed": bool(smooth)}
+
     def topopt_live_payload(self):
         """The shape the running (or last) optimisation has now, as a surface payload; None when there is none."""
         from ..topopt import view as tview

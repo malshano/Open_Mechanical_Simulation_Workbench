@@ -92,6 +92,9 @@ def preflight(pb: Problem, s: Settings) -> dict:
     elif r < GOOD_CELLS * pb.h:
         notes.append(f"The smallest feature size is {r / pb.h:.1f} element sizes. It works, but the stiffness figure can still change by several per cent with the mesh; "
                      f"{GOOD_CELLS:g} or more element sizes ({GOOD_CELLS * pb.h * 1e3:.2g} mm) makes it mesh-independent.")
+    if pb.thickness > 0 and r > 0.9 * pb.thickness:
+        notes.append(f"The walls are about {pb.thickness * 1e3:.1f} mm thick and the smallest feature is {r * 1e3:.1f} mm, so the optimiser cannot thin them. "
+                     "To thin walls use a finer mesh and a smaller smallest feature size.")
     est = estimate(pb, r)
     if est["unknowns"] > est["dof_limit"]:
         raise ProblemError(f"The mesh gives {est['unknowns']:,} unknowns (limit {est['dof_limit']:,}"

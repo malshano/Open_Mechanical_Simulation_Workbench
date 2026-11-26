@@ -42,6 +42,8 @@ class Problem:
     notes: list = field(default_factory=list)
     bc_report: dict = field(default_factory=dict)
     body_id: np.ndarray | None = None
+    thickness: float = 0.0                              # a typical wall thickness (m): twice the volume over the surface area
+    owners: dict = field(default_factory=dict)         # {condition name: the elements it keeps solid}
     mirror_planes: list = field(default_factory=list)   # [(axis, position)] flat symmetry planes of a half model: the filter sees the mirrored part
 
     @property
@@ -122,6 +124,7 @@ def build(mesh: dict, body_props: dict, bcs: list, design_bodies=None, keep_laye
     fixed: dict = {}
     pen = []
     planes = []
+    owners = {}
     passive = np.zeros(N, bool)
     applied = np.zeros(3)
     rep = {}
@@ -148,6 +151,7 @@ def build(mesh: dict, body_props: dict, bcs: list, design_bodies=None, keep_laye
         prm = bc.get("params") or {}
         if kind != "symmetry":                                    # (material is kept where the part is held or loaded; a mirror plane is neither)
             passive[own[sel]] = True
+            owners[bc.get("name", kind)] = np.unique(own[sel])
         rep[bc.get("name", kind)] = {"type": kind, "area_m2": float(A.sum())}
         if kind == "fixed_support":
             n_support += 1
@@ -207,4 +211,7 @@ def build(mesh: dict, body_props: dict, bcs: list, design_bodies=None, keep_laye
     fd = np.array(sorted(fixed), np.int64)
     c = p[t].mean(axis=1)
     h = float(np.median((6 * np.sqrt(2) * V) ** (1.0 / 3.0)))
-    return Problem(p, t, V, rho * V, E, Ke, asm, f, fd, np.array([fixed[int(d)] for d in fd]), pen, passive, design, c, h, applied, notes, rep, tv, planes)
+    a_, b_, c_ = p[tris[:, 0]], p[tris[:, 1]], p[tris[:, 2]]
+    area = float(0.5 * np.linalg.norm(np.cross(b_ - a_, c_ - a_), axis=1).sum()) or 1e-30
+    return Problem(p, t, V, rho * V, E, Ke, asm, f, fd, np.array([fixed[int(d)] for d in fd]), pen, passive, design, c, h, applied, notes, rep, tv,
+                   thickness=2.0 * float(V.sum()) / area, owners=owners, mirror_planes=planes)

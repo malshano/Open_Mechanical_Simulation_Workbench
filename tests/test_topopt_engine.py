@@ -205,3 +205,74 @@ def test_a_part_marked_keep_solid_stays_solid_and_counts_in_the_mass():
     assert res["mass_fraction"] == pytest.approx(0.5, abs=1e-6)                                   # (the pad's mass is part of the 50 %)
     with pytest.raises(ProblemError, match="kept solid"):
         Optimiser(build(mesh, props, bcs, design_bodies=[1]), Settings(volume_fraction=0.1, radius=0.3), log=QUIET)
+
+
+def test_floating_pieces_and_supports_that_are_not_joined_are_named():
+    from simwb.topopt import check
+    mesh, props, bcs = benchmarks.cantilever(L=2.0, W=0.4, H=1.0, h=0.2, load="patch")
+    pb = build(mesh, props, bcs)
+    c = pb.centroid
+    d = np.ones(pb.n)
+    d[c[:, 0] > 0.9] = 0.0                                                          # a gap right across the beam: the load end is cut from the support
+    sup = {"Fixed": [check.face_nodes(mesh["tris"], mesh["tri_surf"], [1])]}
+    load = {"Load": [check.face_nodes(mesh["tris"], mesh["tri_surf"], [2])]}
+    d[c[:, 0] > 1.3] = 1.0                                                           # (the load end is back, with a gap between it and the support side)
+    r = check.connectivity(pb.nodes, pb.tets, d, 0.5, pb.weight, sup, load)
+    assert r["pieces"] == 2 and r["loads_joined"] and 0.3 < r["floating_share"] < 0.7     # (the support side now floats against the loaded part)
+    assert r["unattached"] == {"Fixed": {"faces": 1, "unattached": 1}}
+    d[:] = 1.0
+    r = check.connectivity(pb.nodes, pb.tets, d, 0.5, pb.weight, sup, load)
+    assert r["pieces"] == 1 and r["floating_share"] == 0.0 and r["unattached"] == {} and r["largest_floating_share"] == 0.0
+
+
+def test_a_feature_size_thicker_than_the_walls_is_said_and_the_thickness_is_estimated():
+    L, W, H = 2.0, 0.1, 1.0                                                          # a thin plate: 0.1 thick
+    mesh = benchmarks.box_mesh(L, W, H, 20, 1, 10, lambda c, n: np.where(c[:, 0] < 1e-9, 1, np.where(c[:, 0] > L - 1e-9, 2, 0)))
+    props = {1: {"E": 1.0, "nu": 0.3, "rho": 1.0}}
+    bcs = [{"name": "Fixed", "type": "fixed_support", "faces": [1], "params": {}}, {"name": "Load", "type": "force", "faces": [2], "params": {"fz_N": -1.0}}]
+    pb = build(mesh, props, bcs)
+    assert 0.05 < pb.thickness < 0.2                                                 # (twice the volume over the surface area: about the wall)
+    opt = Optimiser(pb, Settings(volume_fraction=0.5, radius=0.4), log=QUIET)
+    assert any("cannot thin them" in n for n in opt.notes)
+    assert pb.owners.keys() == {"Fixed", "Load"}
+
+
+def test_the_shape_is_smoothed_without_moving_the_parts_own_faces_and_written_as_a_valid_stl(tmp_path):
+    from simwb.results import ResultSet, boundary_from_tets
+    from simwb.topopt import view as tview
+    mesh, props, bcs = benchmarks.cantilever(L=2.0, W=0.4, H=1.0, h=0.2, load="patch")
+    pb = build(mesh, props, bcs)
+    tris, cells = boundary_from_tets(pb.tets)
+    dens = np.where(pb.centroid[:, 2] > 0.4, 1.0, 0.0)                                # (the upper 60 % of the beam)
+    rs = ResultSet(pb.nodes, pb.tets, np.zeros(pb.n, int), ["part"], {"Density": ("cell", dens, "-")}, tris, cells, np.zeros(len(tris), np.int32), ["part"])
+    sub = tview.subset(rs, rs.fields["Density"][1] >= 0.5)
+    v0, t0 = tview.shape_surface(sub, rs, smooth=False)
+    v1, t1 = tview.shape_surface(sub, rs, smooth=True)
+    top = np.abs(v0[:, 2] - 1.0) < 1e-9
+    assert (t0 == t1).all() and np.allclose(v0[top], v1[top])                          # (the top is the part's own face: it did not move)
+    n = tview.write_stl(tmp_path / "s.stl", v1, t1)
+    assert (tmp_path / "s.stl").stat().st_size == 84 + 50 * n and n == len(t1)
+    a, b, c = v1[t1[:, 0]], v1[t1[:, 1]], v1[t1[:, 2]]
+    vol = float(np.einsum("ij,ij->i", a, np.cross(b, c)).sum() / 6.0)                # (the signed volume of a closed outward surface is the volume)
+    assert vol > 0 and vol == pytest.approx(0.4 * 1.0 * 2.0 * 0.6, rel=0.35)
+
+
+def test_blocks_that_touch_only_along_an_edge_are_two_pieces_and_a_piece_needs_three_support_nodes():
+    from simwb.topopt import check
+    mesh, props, bcs = benchmarks.cantilever(L=2.0, W=0.4, H=1.0, h=0.2, load="patch")
+    pb = build(mesh, props, bcs)
+    c = pb.centroid
+    a = (c[:, 0] < 0.2) & (c[:, 1] < 0.2)                                           # one cube column ...
+    b = (c[:, 0] > 0.2) & (c[:, 0] < 0.4) & (c[:, 1] > 0.2) & (c[:, 1] < 0.4)         # ... and the one that touches it only along a vertical edge
+    tlab = check.tet_components(pb.tets[a | b])
+    assert len(np.unique(tlab)) == 2                                                 # (they could hinge about the edge: not one solid)
+    face = (c[:, 0] < 0.2)
+    assert len(np.unique(check.tet_components(pb.tets[face]))) == 1                    # (a block is one piece)
+    sup = np.zeros(len(pb.nodes), bool)
+    sup[check.face_nodes(mesh["tris"], mesh["tri_surf"], [1])] = True
+    load = np.zeros(len(pb.nodes), bool)
+    load[check.face_nodes(mesh["tris"], mesh["tri_surf"], [2])] = True
+    t = pb.tets[np.ones(pb.n, bool)]
+    lab = check.tet_components(t)
+    assert list(check.held_pieces(t, lab, sup, load)) == [0]                           # the whole beam: touches the support on a face, carries the load
+    assert len(check.held_pieces(t, lab, sup, np.zeros_like(load))) == 0                # no load on it: nothing to carry

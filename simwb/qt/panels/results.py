@@ -19,8 +19,13 @@ from ..forms import fmt_num
 from ..ids import wid
 from ..probes import surface_histogram
 from ..timebar import TimeBar
-from .common import KPI, ClickLabel, _h, _muted, _Panel, _seg, clear_layout
+from .common import KPI, ClickLabel, FlowLayout, _h, _muted, _Panel, _seg, clear_layout
 from .flowtools import FlowTools
+
+
+def P_JOBS():
+    from ... import project as _p
+    return _p.JOBS
 
 SOLID_STUDIES = ("static_structural", "topology_optimization", "vibration_modal", "heat_conduction", "aeroelastic_flutter")
 
@@ -822,6 +827,89 @@ class ResultsPanel(_Panel):
         return v
 
     # ------------------------------------------------------------------ topology optimisation
+    def _topopt_check_card(self, lay, t):
+        """The stress and stiffness of the shape at the threshold, solved again with the Static structural solver; the button starts it."""
+        ck = t.get("check")
+        thr = self.engine.topopt_threshold()
+        if not ck:
+            lay.addWidget(self._wrapped("Not checked yet. The optimiser knows the stiffness but not the stress: a stiff shape can still be overstressed at a sharp corner."))
+            return
+        g = lambda v, nd=1: fmt_num(round(float(v), nd))      # noqa: E731
+        stale = abs((ck.get("threshold") or 0) - thr) > 1e-6
+        sf = ck.get("min_safety_factor")
+        lines = [f"Max von Mises stress {g(ck['max_von_mises_MPa'])} MPa" + (f", lowest safety factor {g(sf, 2)}" if sf else "") + f"; largest movement {g(ck['max_displacement_mm'], 4)} mm "
+                 f"(the solid part: {g(ck['solid_max_von_mises_MPa'])} MPa, {g(ck['solid_max_displacement_mm'], 4)} mm)."]
+        cx = ck.get("calculix")
+        if cx and cx.get("error"):
+            lines.append("CalculiX check: " + cx["error"])
+        elif cx:
+            lines.append(f"CalculiX (a separate program) gives a largest movement of {g(cx['max_displacement_mm'], 4)} mm and {g(cx['max_von_mises_MPa'])} MPa for the shape "
+                         f"(the static solver here: {g(ck['max_displacement_mm'], 4)} mm, {g(ck['max_von_mises_MPa'])} MPa); the shape moves {g(cx['movement_ratio_shape_over_solid'], 1)} times as much "
+                         f"as the solid part (the static solver: {g(cx['movement_ratio_static'], 1)} times).")
+        kq, ko = ck.get("stiffness_kept_quadratic"), ck.get("stiffness_kept_optimiser")
+        if kq and ko:
+            lines.append(f"Stiffness kept: {100 * kq:.0f} % with quadratic elements, {100 * ko:.0f} % as the optimiser predicted.")
+        sm, so = ck.get("max_displacement_mm") or 0.0, ck.get("solid_max_displacement_mm") or 0.0
+        if so > 0 and sm / so > 3.0:
+            lines.append(f"The largest movement anywhere is {sm / so:.0f} times the solid part's, much more than the loss of stiffness: 'stiffness kept' measures the work the load does, an average, "
+                         "while a slender region can move a lot. Look at the Deformation field.")
+        if ck.get("left_out_share", 0) > 0.001:
+            lines.append(f"{100 * ck['left_out_share']:.1f} % of the shape is in pieces not joined to a support; they carry nothing and were left out of the check.")
+        for w in ck.get("warnings") or []:
+            lines.append(w)
+        tone = "warn" if (sf is not None and sf < 1.5) or stale else "ok"
+        if sf is not None and sf < 1.0:
+            lines.insert(0, "⚠ The stress is above the yield strength somewhere: this shape would yield under the load.")
+        if stale:
+            lines.insert(0, f"Checked at a threshold of {100 * ck['threshold']:.0f} %; the slider is at {100 * thr:.0f} %. Press the button to check this one.")
+        lay.addWidget(wid(_note("<br>".join(lines), tone, True), "results.topopt.check.result"))
+
+    def _topopt_buttons(self, row):
+        """Check stress and stiffness (solves the shape again with the Static structural solver) and Save as STL, side by side under the headline."""
+        t = (self.engine.state().get("solve", {}).get("summary") or {}).get("topopt") or {}
+        btn = wid(QPushButton("Check stress and stiffness"), "results.topopt.check")
+        btn.setObjectName("ghostBorder" if t.get("check") else "primary")
+        btn.setToolTip("Solve the shape shown (at the threshold below) again with the quadratic elements of the Static structural study, with the same supports and loads: "
+                       "the stress, the safety factor, and how stiff it really is. A minute or less.")
+        btn.clicked.connect(self._topopt_check)
+        j = P_JOBS().latest(self.engine.pid, "check") if self.engine.pid else None
+        running = bool(j and j.status == "running" and (j.extra or {}).get("check_kind") == "shape check")
+        btn.setEnabled(not running)
+        if running:
+            btn.setText("Checking…")
+        self.topo_ccx = wid(QCheckBox("also with CalculiX"), "results.topopt.check.ccx")
+        self.topo_ccx.setToolTip("Also solve the shape and the solid part with CalculiX, a separate open-source program, and compare the answers: an independent check of the "
+                                 "analysis. It takes a few minutes more. Shown when CalculiX is installed (Solve step).")
+        try:
+            from ...solvers.calculix import installer as _ccx
+            self.topo_ccx.setVisible(bool(_ccx.detect().get("available")))
+        except Exception:  # noqa: BLE001
+            self.topo_ccx.setVisible(False)
+        stl = wid(QPushButton("Save as STL…"), "results.topopt.stl")
+        stl.setObjectName("ghostBorder")
+        stl.setToolTip("Write the shape at the threshold below as a binary STL file (in millimetres) for CAD or 3D printing. The faces the optimiser made are smoothed; "
+                       "the part's own faces are left exactly as they are.")
+        stl.clicked.connect(self._topopt_stl_dialog)
+        row.addWidget(btn)
+        row.addWidget(self.topo_ccx)
+        row.addWidget(stl)
+
+    def _topopt_check(self):
+        try:
+            self.engine.project().topopt_check(self.engine.topopt_threshold(), cross_check=bool(self.topo_ccx.isVisible() and self.topo_ccx.isChecked()))
+            self.engine.changed.emit()
+        except Exception as e:  # noqa: BLE001
+            self._fail(e)
+
+    def _topopt_stl_dialog(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Save the shape as STL", f"{self.engine.pid}-shape.stl", "STL file (*.stl)")
+        if path:
+            try:
+                out = self.engine.topopt_export_stl(path)
+                self.win.statusBar().showMessage(f"Saved {out['triangles']:,} triangles to {path}", 9000)
+            except Exception as e:  # noqa: BLE001
+                self._fail(e)
+
     @staticmethod
     def _wrapped(text):
         lab = _muted(text)
@@ -842,9 +930,32 @@ class ResultsPanel(_Panel):
                 box.blockSignals(False)
         g = lambda kg: fmt_num(round(kg * 1000, 1)) + " g"          # noqa: E731
         kept, stiff = t.get("mass_fraction") or 0.0, t.get("stiffness_kept") or 0.0
-        lay.addWidget(wid(_note(f"This shape keeps {100 * kept:.0f} % of the mass ({g(t.get('mass_kg_kept') or 0)} of {g(t.get('mass_kg_solid') or 0)}) and "
-                                f"{100 * stiff:.0f} % of the stiffness of the solid part. It is the stiffest shape this mass allows for the loads you set.", "ok"),
+        lay.addWidget(wid(_note(f"A stiff shape for these loads: it keeps {100 * kept:.0f} % of the mass ({g(t.get('mass_kg_kept') or 0)} of {g(t.get('mass_kg_solid') or 0)}) and, "
+                                f"by the optimiser's estimate, {100 * stiff:.0f} % of the stiffness of the solid part. A concept: its stress has not been checked.", "ok"),
                           "results.topopt.headline"))
+        holder = QWidget()                                                       # (wraps: three buttons side by side are wider than the dock)
+        row = FlowLayout(holder, 6, 4)
+        row.setContentsMargins(0, 0, 0, 0)
+        self._topopt_buttons(row)
+        lay.addWidget(holder)
+        self._topo_check_lay = QVBoxLayout()                                   # (rebuilt when the slider moves: the check belongs to one threshold)
+        self._topo_check_lay.setContentsMargins(0, 0, 0, 0)
+        lay.addLayout(self._topo_check_lay)
+        self._topopt_check_card(self._topo_check_lay, t)
+        notes = list(s.get("warnings") or [])
+        if notes:                                                           # (what looks odd, said before the numbers: not at the bottom of the page)
+            box = _item()
+            bv = QVBoxLayout(box)
+            bv.setContentsMargins(10, 8, 10, 8)
+            title = QLabel("⚠  Read before you rely on this shape")
+            title.setStyleSheet(f"font-weight: 600; color: {theme.tokens()['warn_text']};")
+            title.setWordWrap(True)
+            bv.addWidget(title)
+            for w_ in notes:
+                lab = QLabel("• " + w_)
+                lab.setWordWrap(True)
+                bv.addWidget(lab)
+            lay.addWidget(wid(box, "results.topopt.cautions"))
         ratio = (t.get("radius_mm") or 0) / max(t.get("element_size_mm") or 1e-9, 1e-9)
         end = ("settled" if t.get("converged") else "stopped by you: usable" if t.get("stopped") else "limit reached: may still change")
         return [("Mass kept", f"{100 * kept:.0f}", "%", "", f"{g(t.get('mass_kg_kept') or 0)} of {g(t.get('mass_kg_solid') or 0)}", "Density"),
@@ -876,6 +987,11 @@ class ResultsPanel(_Panel):
         def update(v=None):
             if v is not None:
                 self.engine.set_topopt_threshold(v / 100.0)
+                try:
+                    clear_layout(self._topo_check_lay)
+                    self._topopt_check_card(self._topo_check_lay, t)
+                except RuntimeError:
+                    pass
             val.setText(f"{self.engine.topopt_threshold() * 100:.0f} %")
             try:
                 sh = self.engine.topopt_shown()
@@ -904,10 +1020,15 @@ class ResultsPanel(_Panel):
         if gap is not None:
             lay.addWidget(self._wrapped(f"On this mesh the optimiser's linear elements read {abs(gap) * 100:.0f} % {'stiffer' if gap < 0 else 'softer'} than the quadratic ones of the Static structural study. "
                                  "'Stiffness kept' compares the optimised part with the solid part in the same model, so the two errors largely cancel; absolute deflections need the static study."))
+        ks = t.get("kept_solid") or []
+        if ks:
+            lay.addWidget(self._wrapped("Kept solid by design: " + ", ".join(f"{k['name']} ({100 * k['share']:.0f} % of the mass)" for k in ks)
+                                        + ". The optimiser never removes the material a support or a load is attached to."))
         lay.addWidget(_h("What to do next"))
-        lay.addWidget(wid(_note("This is a concept shape, not a finished part. It is the stiffest for the one set of loads you gave, and its stress has not been checked.<br>"
-                                "1. Move the slider to see how sensitive it is. 2. Re-run with a larger smallest feature size for a simpler, sturdier shape, or a different mass to keep. "
-                                "3. Rebuild the shape in CAD (or smooth it), then check stress and safety factor with a Static structural study with the same supports and loads.", "", True),
+        lay.addWidget(wid(_note("This is a concept shape, not a finished part. It is the stiffest for the one set of loads you gave.<br>"
+                                "1. Press <b>Check stress and stiffness</b> above: it solves this shape again with the quadratic elements of the Static structural study. "
+                                "2. Move the slider or re-run with a larger smallest feature size for a simpler, sturdier shape, or a different mass to keep. "
+                                "3. Save the STL and rebuild or smooth the shape in CAD, then run a Static structural study on it.", "", True),
                           "results.topopt.next"))
 
     def _tiles(self, lay, tiles):
@@ -1215,7 +1336,7 @@ class ResultsPanel(_Panel):
         if study == "static_structural":
             self._animate_box(lay, "Animate deformation")
         # cautions
-        warns = list(s.get("warnings") or [])
+        warns = [] if study == "topology_optimization" else list(s.get("warnings") or [])
         if s.get("warning_stale"):
             warns.append(s["warning_stale"])
         if warns:
