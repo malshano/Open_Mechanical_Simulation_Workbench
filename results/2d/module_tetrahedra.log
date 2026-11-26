@@ -1,0 +1,7 @@
+density, radius 3 cells (default limit) 60 20 c=256.95 paper None it 48 5s radius 3.367386144928119
+density, radius 150x50 6 cells 150 50 c=235.38 paper 235.73 it 45 102s radius 6.0
+density, paper radius 2.4 (guard lifted) 60 20 c=229.17 paper 233.71 it 45 6s radius 2.4
+projection to beta 512, 150x50 radius 4.5 150 50 c=186.11 paper 191.49 it 79 137s radius 4.5
+projection to beta 8 (module default), 150x50 radius 4.5 150 50 c=197.76 paper 191.49 it 62 104s radius 4.5
+projection to beta 512, 60x20 radius 1.8 (guard lifted) 60 20 c=181.31 paper 189.14 it 90 10s radius 1.8
+DONE

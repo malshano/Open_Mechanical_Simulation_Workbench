@@ -1,0 +1,2 @@
+mesh 24 elements 20736 unknowns 12675 h 2.2449240966187456 3h 6.734772289856236
+24 density c=21510.2 it 38 conv True 76s grey 0.40 ['The smallest feature size is 3.6 element sizes. It works, but the stiffness figure can still change by several per cent with the mesh; 4 or more element sizes (9e+03 mm) makes it mesh-independent.']
