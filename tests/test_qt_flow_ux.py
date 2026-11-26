@@ -139,3 +139,107 @@ def test_a_second_recording_cannot_start_while_one_runs(ctl, tmp_path):
     p.timebar.timeChanged.connect(again)
     p.record_video(str(out), fps=4)
     assert errs and "already running" in errs[0]
+
+
+# ---------------------------------------------------------------- #59: moving mesh - show and hide each geometry
+def _moving(ctl, **kw):
+    pr, rs = make_flow_study(ctl, moving=5, prop=True, **kw)
+    ctl.do("results.tab", {"name": "display"})
+    return ctl.win.panels["results"], rs
+
+
+def _drawn_points(ctl):
+    """The vertices of the surface the view draws now (the first overlay actor)."""
+    import numpy as np
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+    a = ctl.win.view.overlay_actors[0]
+    return vtk_to_numpy(a.GetMapper().GetInput().GetPoints().GetData()) if a.GetMapper().GetInput().GetNumberOfPoints() else np.zeros((0, 3))
+
+
+def test_the_list_names_every_geometry_and_the_moving_one(ctl):
+    """Fixes #59: a tick box per surface of a moving-mesh result (the object, the propeller of the sliding zone), the air box, and the outlines."""
+    p, rs = _moving(ctl)
+    assert p.vis.isVisibleTo(p)
+    texts = [c.text() for c in p.vis.checks.values()]
+    assert texts == ["Object", "zone1 (moving)", "Air box (outer boundary)", "Moving zones (outline)"], texts
+    assert p.vis.moving_keys == ["g:zone1_walls"] and p.vis.moving_btn.isEnabled()
+    assert [c.isChecked() for c in p.vis.checks.values()] == [True, True, False, False]            # (defaults: every part drawn, the air box and outlines off)
+    assert ctl.state()["shell"]["visibility"]["moving"] == ["zone1 (moving)"]
+
+
+def test_hiding_a_geometry_leaves_only_the_others_drawn_and_it_follows_the_time_bar(ctl):
+    import numpy as np
+    p, rs = _moving(ctl)
+    tb = p.timebar
+    both = ctl.state()["view"]["overlay"]["triangles"]
+    ctl.do("results.visibility", {"show": {"Object": False}})                                       # hide the airframe: the propeller stays
+    only_prop = ctl.state()["view"]["overlay"]["triangles"]
+    assert 0 < only_prop < both
+    tb.set_index(0)
+    pts0 = _drawn_points(ctl)
+    assert pts0[:, 0].min() > 1.1                                                                   # (all that is drawn is the propeller block, x from 1.14)
+    tb.set_index(4)                                                                                 # the time bar: the mesh moves, the choice stays
+    assert ctl.state()["view"]["overlay"]["triangles"] == only_prop
+    pts4 = _drawn_points(ctl)
+    assert pts4[:, 0].min() > 1.1 and abs(pts4[:, 1].mean() - pts0[:, 1].mean()) > 0.1             # (it moved: the propeller is seen moving, alone)
+    ctl.do("results.visibility", {"show": {"Object": True, "zone1 (moving)": False}})
+    assert ctl.state()["view"]["overlay"]["triangles"] == both - only_prop
+    ctl.do("results.visibility", {"all": True})
+    assert ctl.state()["view"]["overlay"]["triangles"] == both
+
+
+def test_only_what_moves_is_one_click_and_shows_the_zone_outline(ctl):
+    p, rs = _moving(ctl)
+    both = ctl.state()["view"]["overlay"]["triangles"]
+    p.vis.moving_btn.click()
+    st = p.vis.state()
+    assert st["items"] == {"Object": False, "zone1 (moving)": True, "Air box (outer boundary)": False, "Moving zones (outline)": True}
+    assert 0 < ctl.state()["view"]["overlay"]["triangles"] < both
+    assert ctl.win.view.region_view.actors                                                          # (the zone outline is drawn)
+    p.vis.all_btn.click()
+    assert ctl.state()["view"]["overlay"]["triangles"] == both and p.vis.selection()["groups"] is None
+
+
+def test_hiding_everything_draws_nothing_and_does_not_fail(ctl):
+    p, rs = _moving(ctl)
+    ctl.do("results.visibility", {"show": {"Object": False, "zone1 (moving)": False}})
+    assert ctl.state()["view"]["overlay"].get("triangles", 0) == 0
+    ctl.do("results.tab", {"name": "flow"})                                                         # (with a contour plane on: the plane is still there)
+    assert ctl.state()["view"]["overlay"]["flow_tools"] == ["planes"]
+
+
+def test_the_choice_is_kept_per_study_and_works_with_the_flow_tools_on(ctl):
+    p, rs = _moving(ctl)
+    first = ctl.engine.pid
+    ctl.do("results.visibility", {"show": {"Object": False}})
+    ctl.do("results.tab", {"name": "flow"})
+    pl = ctl.state()["view"]["overlay"]
+    assert pl["flow_tools"] == ["planes"] and pl["triangles"] < _whole(ctl)                         # (the planes and the hidden object together)
+    make_flow_study(ctl, name="Other flow", moving=5, prop=True)                                    # another study: its own, default list
+    assert [c.isChecked() for c in p.vis.checks.values()][:2] == [True, True]
+    ctl.do("study.open", {"id": first})
+    ctl.do("step.go", {"step": "results"})
+    assert p.vis.checks["g:body"].isChecked() is False and p.vis.checks["g:zone1_walls"].isChecked() is True      # (back as it was left)
+
+
+def _whole(ctl):
+    return ctl.engine.flow_object("Velocity", -1, groups=None)["n_tris"]
+
+
+def test_the_air_box_tick_and_the_view_button_are_one_switch_on_the_results_step(ctl):
+    p, rs = _moving(ctl)
+    assert p.vis.checks["air"].isChecked() is False and not ctl.win.chk_air.isChecked()
+    p.vis.checks["air"].setChecked(True)
+    assert ctl.win.chk_air.isChecked() and ctl.win.view.air_over_results
+    ctl.win.chk_air.setChecked(False)
+    assert not p.vis.checks["air"].isChecked()
+
+
+def test_a_result_without_moving_parts_says_so_in_the_button_tooltip(ctl):
+    pr, rs = make_flow_study(ctl, moving=0, prop=False)
+    ctl.do("results.tab", {"name": "display"})
+    p = ctl.win.panels["results"]
+    assert not p.vis.moving_btn.isEnabled() and "no moving part" in p.vis.moving_btn.toolTip()
+    import pytest
+    with pytest.raises(ValueError, match="no moving part"):
+        p.vis.apply(only_moving=True)

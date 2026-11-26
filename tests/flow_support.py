@@ -3,8 +3,9 @@ flow tools can be driven without running OpenFOAM. Use in a test file:   from fl
 import numpy as np
 
 
-def flow_resultset(n=7, noise=0.0, seed=1, moving=0):
+def flow_resultset(n=7, noise=0.0, seed=1, moving=0, prop=False):
     """Air = the unit-ish box [-1, 2] x [-1, 1] x [-1, 1]; the object is the block [0, 1] x [-0.25, 0.25] x [-0.25, 0.25] cut out of it.
+    prop: a second, small block [1.3, 1.7] x [-0.3, 0.3] x [-0.3, 0.3] (the 'propeller', surface group 'zone1_walls') whose nodes are the ones that move.
     Fields: Velocity (vector, swirling), Pressure, Q-criterion (a smooth blob at the middle plus `noise`). moving: number of extra saved
     times whose nodes move (frames['__nodes'])."""
     from scipy.spatial import Delaunay
@@ -15,6 +16,8 @@ def flow_resultset(n=7, noise=0.0, seed=1, moving=0):
     tets = Delaunay(nodes).simplices
     c = nodes[tets].mean(1)
     in_body = (c[:, 0] > 0) & (c[:, 0] < 1) & (np.abs(c[:, 1]) < 0.3) & (np.abs(c[:, 2]) < 0.3)
+    in_prop = (c[:, 0] > 1.3) & (c[:, 0] < 1.7) & (np.abs(c[:, 1]) < 0.3) & (np.abs(c[:, 2]) < 0.3) if prop else np.zeros(len(c), bool)
+    in_body = in_body | in_prop
     tets = tets[~in_body]
     used = np.unique(tets)
     remap = -np.ones(len(nodes), int)
@@ -22,7 +25,9 @@ def flow_resultset(n=7, noise=0.0, seed=1, moving=0):
     nodes, tets = nodes[used], remap[tets]
     tris, cells = boundary_from_tets(tets)
     tc = nodes[tris].mean(1)
-    body = (tc[:, 0] > -1e-9) & (tc[:, 0] < 1 + 1e-9) & (np.abs(tc[:, 1]) < 0.3 + 1e-9) & (np.abs(tc[:, 2]) < 0.3 + 1e-9)
+    far = (np.abs(tc[:, 1]) > 0.99) | (np.abs(tc[:, 2]) > 0.99) | (tc[:, 0] < -0.99) | (tc[:, 0] > 1.99)          # (the faces of the air box)
+    isprop = ~far & (tc[:, 0] > 1.2) if prop else np.zeros(len(tc), bool)
+    body = ~far & ~isprop
     rng = np.random.default_rng(seed)
     r2 = (nodes[:, 1] ** 2 + nodes[:, 2] ** 2)
     vel = np.stack([10 + 0 * r2, -nodes[:, 2] * 2, nodes[:, 1] * 2], 1)
@@ -31,20 +36,31 @@ def flow_resultset(n=7, noise=0.0, seed=1, moving=0):
     times, frames = None, None
     if moving:
         times = [float(i) for i in range(moving)]
-        frames = {"__nodes": [nodes + np.array([0.1 * i, 0, 0]) for i in range(moving)], "Pressure": [fields["Pressure"][1] + i for i in range(moving)]}
-    return ResultSet(nodes, tets, np.zeros(len(tets)), ["air"], fields, tris, cells, np.where(body, 1, 0), ["farfield", "body"],
-                     times=times, frames=frames)
+        mover = np.zeros(len(nodes), bool)                              # (only the propeller's nodes move; without one, all do)
+        mover[np.unique(tris[isprop])] = True
+        if not prop:
+            mover[:] = True
+        frames = {"__nodes": [nodes + np.outer(mover, [0.0, 0.05 * i, 0.0]) for i in range(moving)], "Pressure": [fields["Pressure"][1] + i for i in range(moving)]}
+    grp = np.where(body, 1, 0)
+    names = ["farfield", "body"]
+    if prop:
+        grp = np.where(isprop, 2, grp)
+        names.append("zone1_walls")
+    return ResultSet(nodes, tets, np.zeros(len(tets)), ["air"], fields, tris, cells, grp, names, times=times, frames=frames)
 
 
 def make_flow_study(ctl, name="Flow test", **kw):
-    """A new external-aero study whose result is the synthetic one; opened in the window at the Results step."""
+    """A new external-aero study whose result is the synthetic one; opened in the window at the Results step. prop=True also gives it a sliding
+    zone 'zone1' round the propeller block."""
     import simwb.project as P
     rs = flow_resultset(**kw)
     pr = P.create_project(name, "external_aero")
+    if kw.get("prop"):
+        pr.set_moving_zones([{"name": "zone1", "center": [1.5, 0, 0], "axis": "+x", "radius": 0.45, "length": 0.6, "rpm": 600, "method": "sliding"}])
     pr.results_dir.mkdir(exist_ok=True)
     rs.save(pr.results_dir / "result.npz")
     pr._results = rs
-    pr.data["solve"].update(status="done", summary={"default_groups": ["body"], "speed_m_s": 10.0, "U_inf": [10.0, 0, 0],
+    pr.data["solve"].update(status="done", summary={"default_groups": [g for g in rs.groups if g != "farfield"], "speed_m_s": 10.0, "U_inf": [10.0, 0, 0],
                                                      "coefficients": {"L_ref_m": 1.0}})
     pr.save()
     ctl.do("study.open", {"id": pr.id})

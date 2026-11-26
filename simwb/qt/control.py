@@ -508,7 +508,7 @@ class Control(QObject):
             "docks": {d.objectName().removeprefix("dock."): d.isVisible() for d in win.findChildren(QDockWidget)},
             "jobs_running": jobs,
             "shell": {"toasts": win.toasts.listing(), "section": win.shell.section_state(), "hover": win.shell.hover_text,
-                      "hint": win.view.banner.text(), "recording": (win.panels["results"].recording.state() if win.panels["results"].recording else None),
+                      "hint": win.view.banner.text(), "visibility": win.panels["results"].vis.state(), "recording": (win.panels["results"].recording.state() if win.panels["results"].recording else None),
                       "status_job": win.shell.job_msg.full if win.shell.current else "",
                       "probe": {"checked": win.view.viewbar.probe.isChecked(), "enabled": win.view.viewbar.probe.isEnabled()}},
             "assistant": {"busy": a.busy, "login": a.who.text(), "status": a.status.text(),
@@ -705,6 +705,13 @@ class Control(QObject):
         R("results.part", "Show or hide one part (result region) of the drawing.",
           {"name": (S, "part name (state: the tick boxes under Model)", True), "visible": (B, "default true", False)},
           lambda name, visible=True: (rp().set_part_visible(name, visible), {"hidden": rp().hidden_regions()})[1])
+        def visibility(show=None, all=False, only_moving=False):
+            rp().vis.apply(show or {}, all=bool(all), only_moving=bool(only_moving))
+            return {"visibility": rp().vis.state()}
+        R("results.visibility", "Flow results with an object (external flow): what the view draws ('Show in the view' list). show: {name: true|false} for a surface "
+                                "(its name, e.g. 'body', or its text in the list), 'air', 'zones' (outline of the moving zones) or 'regions' (refinement regions); "
+                                "all: tick every surface; only_moving: just the parts that move with the mesh and their zone outline. Works while the time bar plays.",
+          {"show": ("object", "{name: bool}", False), "all": (B, "tick every surface", False), "only_moving": (B, "only what moves", False)}, visibility)
         R("results.temperature_limit", "Set the allowed temperature (°C) the parts bars compare against; omit or null to clear it.",
           {"value": (N, "°C", False)}, lambda value=None: {"limit": rp().set_tlimit(value)})
         R("results.mesh_check", "Start the mesh-sensitivity check: levels 1 (one preset finer) or 2 (three levels, grid-convergence index); a job.",

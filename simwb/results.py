@@ -246,7 +246,7 @@ class ResultSet:
     def surface(self, field, groups=None, hide_regions=(), below=None):
         """below: (axis, position) keeps only the faces on the low side of that plane (the half of an object left when a flow is cut open)."""
         m = np.ones(len(self.surf_tris), bool)
-        if groups:
+        if groups is not None:           # ([] is none of them: nothing is drawn)
             m = np.isin(self.surf_group, [self.groups.index(g) for g in groups if g in self.groups])
         if below is not None and len(self.surf_tris):
             m = m & (self.nodes[self.surf_tris].mean(1)[:, int(below[0])] <= float(below[1]))

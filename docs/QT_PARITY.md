@@ -106,7 +106,7 @@ plus the toolbar and application bar. Status: ✅ done in the Qt app · 🟡 par
 | Colours: map, reverse, bands | ✅ | - |
 | Contour lines on the result: on / off, number, extra values, value written on each line (new, not in the web version) | ✅ | - |
 | Range: auto / manual, histogram with drag-to-set | ✅ (area-weighted distribution in the map's colours, mean, share outside; drag sets, double-click resets) | results |
-| Model: surface opacity, edges, hide parts, hide air | ✅ (opacity slider, edges, a tick box per part, Hide the air for cooling studies) - no mirrored half | results |
+| Model: surface opacity, edges, hide parts, hide air | ✅ (opacity slider, edges, a tick box per part, Hide the air for cooling studies; for an external flow with a moving mesh a "Show in the view" list: each surface, the moving ones marked, the air box, zone and region outlines, Only what moves) - no mirrored half | results |
 | Deformation: animated / end state / off, scale, auto, true size ×1, outline of the undeformed part | ✅ (and the outline of the undeformed part, a note with the exaggeration; hidden when nothing deforms) | results |
 | Min / max labels on the model (they can be dragged with the mouse) | ✅ | results |
 | Probe: click points, pinned values list | ✅ (Probe tab: toggle, pinned values, labels) | results (+ viewtools) |

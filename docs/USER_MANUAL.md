@@ -644,6 +644,14 @@ The tabs are the ones of section 8, with these differences and additions.
 - **Distribution** (Display, under the range): how much of the surface has each value, in the colours of the map, with the mean. Drag
   across the bars to set the colour range to that part; double-click to go back to the automatic range. The line under it says how
   much of the surface is below and above the range.
+- **Show in the view** (Display, under Model; external flow results): one tick box per geometry the view can draw, so that with a moving
+  (sliding) mesh the part that moves can be looked at alone. The list has the **Object** (the airframe), every surface that turns with a
+  moving zone (named after the zone, marked "(moving)", e.g. the propeller), any surface with a condition of its own, the **Air box**
+  (the same switch as the Air box button of the 3D view; off by default), and the **outlines** of the **moving zones** and of the
+  **refinement regions** (off by default). Everything that has a surface is ticked at first. **Only what moves** hides all but the
+  moving parts and shows their zone outline in one click; **Show all** ticks every surface again. The ticks work on the time bar and
+  while it plays or records: the mesh moves, the choice stays. They are remembered for each study while the program runs. The control
+  API has `results.visibility`.
 - **Model**: **Opacity** (see-through surfaces, to look behind them), **Hide the air** (cooling studies) and one tick box per part when
   the result has several (untick one to hide it). **Deformation** adds **Outline of the undeformed part** (on by default) and a line
   that says how much the deformation is exaggerated.

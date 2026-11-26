@@ -127,6 +127,7 @@ class Viewport(QWidget):
         cam.SetViewUp(0, 0, 1)
         self.geo_actors: list = []
         self.air_actors: list = []          # the air box of a flow study: translucent, shown or hidden on request
+        self.air_over_results = False       # (the Results step draws the air box over the result too when it is switched on)
         self.air_on = False
         self.choose_air = False             # a real click on the air volume where its walls overlap asks which wall (set while a plane is picked)
         self._geo_shown = True
@@ -713,14 +714,14 @@ class Viewport(QWidget):
         for a in self.label_actors:
             a.SetVisibility(self._labels_visible())
         for a in self.air_actors:
-            a.SetVisibility(bool(on) and self.air_on)
+            a.SetVisibility((bool(on) or self.air_over_results) and self.air_on)
         self.render()
 
     def set_air_visible(self, on: bool):
         """Show or hide the air box (it never hides the part: it is translucent)."""
         self.air_on = bool(on)
         for a in self.air_actors:
-            a.SetVisibility(self._geo_shown and self.air_on)
+            a.SetVisibility((self._geo_shown or self.air_over_results) and self.air_on)
         if not self.air_on and self.hover_id in {p[0] for p in self._air_parts}:    # (a wall that was under the pointer must not stay lit once the box is hidden:
             self._set_hover(-1)                                                       #  its highlight is as big as the air volume and covers the model)
         self.geometry_info["air_visible"] = self.air_on and bool(self.air_actors)

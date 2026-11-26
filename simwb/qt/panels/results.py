@@ -21,6 +21,7 @@ from ..ids import wid
 from ..probes import surface_histogram
 from ..recording import Recording, RecordingStopped
 from ..timebar import TimeBar
+from ..visibility import VisibilityList, zone_outline
 from .common import KPI, ClickLabel, _h, _muted, _Panel, _seg, clear_layout
 from .flowtools import FlowTools
 
@@ -305,7 +306,11 @@ class ResultsPanel(_Panel):
         self.part_checks: dict = {}
         self.parts_box.setVisible(False)
         v.addWidget(self.parts_box)
-        self.edges = wid(QCheckBox("Show the mesh edges"), "results.edges")
+        self.vis = VisibilityList()                 # (a flow with an object: what is drawn, parts and moving zones; see visibility.py)
+        self.vis.changed.connect(self._display_changed)
+        self.vis.airToggled.connect(self._air_ticked)
+        v.addWidget(self.vis)
+        self.edges =wid(QCheckBox("Show the mesh edges"), "results.edges")
         self.edges.setToolTip("Draw the edges of the mesh cells on the surface")
         self.edges.toggled.connect(lambda _=False: self._display_changed())
         v.addWidget(self.edges)
@@ -362,7 +367,7 @@ class ResultsPanel(_Panel):
                 rng = None
         on = self.deform.isChecked()
         return {"time": self.timebar.time_index(), "opacity": self.opacity.value() / 100.0, "outline": self.outline.isChecked(),
-                "hide": self.hidden_regions(), "field": self.field.currentText(), "cmap": self.cmap.currentText(), "reverse": self.rev.isChecked(),
+                "hide": self.hidden_regions(), "show": self.vis.selection(), "field": self.field.currentText(), "cmap": self.cmap.currentText(), "reverse": self.rev.isChecked(),
                 "bands": self.bands.value(), "deform": (scale if on else 0), "animate": on and self.deform_mode.currentText() == "Animated",
                 "edges": self.edges.isChecked(), "range": rng, "minmax": self.minmax.isChecked(),
                 "contours": {"on": self.cont_on.isChecked(), "n": self.cont_n.value(), "levels": self.contour_levels(), "labels": self.cont_labels.isChecked()},
@@ -408,6 +413,38 @@ class ResultsPanel(_Panel):
             raise ValueError((f"{name!r} is not a part of this result: " + ", ".join(self.part_checks)) if self.part_checks
                              else "This result has only one part")
         self.part_checks[name].setChecked(bool(on))
+
+    # ------------------------------------------------------------------ "Show in the view": the surfaces, the air box, the zone and region outlines
+    def _vis_items(self, st):
+        groups, zones, regions = [], [], []
+        if st["study"] == "external_aero" and st["solve"].get("status") in ("done", "stale"):
+            try:
+                rs = self.engine.project().results()
+                groups = [g for g in (self._summary_s.get("default_groups") or []) if g in rs.groups] or [g for g in rs.groups if g != "farfield"]
+            except Exception:  # noqa: BLE001
+                groups = []
+            zones, regions = st.get("moving_zones") or [], (st.get("mesh") or {}).get("regions") or []
+        self.vis.set_items(self.engine.pid, groups, zones, regions, self.win.chk_air.isChecked() if self.win is not None else False)
+
+    def _air_ticked(self, on: bool):
+        """The air box tick was clicked: the 3D view's Air box button is the same switch."""
+        if self.win is not None and self.win.chk_air.isChecked() != bool(on):
+            self.win.chk_air.setChecked(bool(on))
+
+    def draw_outlines(self):
+        """The outlines of the moving zones and the refinement regions, when the list asks for them (translucent, over the result)."""
+        sel = self.vis.selection() or {}
+        regs = []
+        if sel.get("zones") or sel.get("regions"):
+            st = self.engine.state()
+            if sel.get("zones"):
+                regs += [zone_outline(z) for z in st.get("moving_zones") or []]
+            if sel.get("regions"):
+                regs += list((st.get("mesh") or {}).get("regions") or [])
+        self.view.region_view.set(regs, None) if regs else self.view.region_view.clear()
+
+    def left(self):
+        self.view.region_view.clear()
 
     def set_range(self, lo: float, hi: float):
         """A colour range of its own (what a drag over the distribution does)."""
@@ -737,6 +774,7 @@ class ResultsPanel(_Panel):
         for k, e in enumerate(self.line_ends[:2]):
             items.append({"point": e, "text": "AB"[k], "color": t["ink"]})
         self.view.set_labels(items)
+        self.draw_outlines()
         self.after_draw()
 
     # ------------------------------------------------------------------ the Summary and Checks tabs
@@ -768,6 +806,7 @@ class ResultsPanel(_Panel):
         self._time_note()
         self.hide_air.setVisible(st["study"] == "cht_enclosure" and bool(infos))
         self._parts(st)
+        self._vis_items(st)
         flow = st["study"] in ("external_aero", "cht_enclosure")
         self.tab_btns["flow"].setVisible(flow and bool(infos))
         if flow and infos:
