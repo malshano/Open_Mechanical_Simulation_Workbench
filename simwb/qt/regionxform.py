@@ -9,7 +9,7 @@ import math
 
 import numpy as np
 from PySide6.QtGui import QDoubleValidator
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget
 
 from .. import regions as region_tools
 from .forms import fmt_num
@@ -44,6 +44,8 @@ class RegionTransform:
         self.scaling = False
         self.fields: dict = {}                              # "mx" ... "tz" -> the line edit (updated while a handle is dragged)
         self.readout: QLabel | None = None
+        self.aligning = False                               # waiting for a click on the face to line the region up with
+        self.align_move = False                             # ... and to put the region's middle on that face too
 
     # ------------------------------------------------------------------ the session
     @property
@@ -69,6 +71,7 @@ class RegionTransform:
 
     def stop(self):
         was = self.index is not None
+        self.stop_align(sync=False)
         self.index = None
         self.R, self.shift, self.live = np.eye(3), np.zeros(3), False
         self.grow, self.scaling = np.zeros((3, 2)), False
@@ -235,6 +238,71 @@ class RegionTransform:
         g.shift = self.shift.copy()
         self._preview()
 
+    # ------------------------------------------------------------------ lining the region up with a face of the model
+    def start_align(self):
+        """'Line up with a face…': the next click on a face of the model (or a wall of the air volume) chooses the face."""
+        if self.index is None:
+            return
+        p = self.adv.panel
+        p.set_picking_part(False)
+        p.set_picking_faces(False)
+        self.aligning = True
+        self.view.set_pick_mode("face")
+        self.view.set_selection([])
+        self._sync_align_button()
+        if p.win is not None:
+            p.win.shell.sync()
+
+    def stop_align(self, sync: bool = True):
+        if not self.aligning:
+            return
+        self.aligning = False
+        self.view.set_pick_mode(None)
+        self.view.set_selection([])
+        self._sync_align_button()
+        if sync and self.adv.panel.win is not None:
+            self.adv.panel.win.shell.sync()
+
+    def _sync_align_button(self):
+        b = getattr(self, "align_btn", None)
+        try:
+            if b is not None and b.isChecked() != self.aligning:
+                b.blockSignals(True)
+                b.setChecked(self.aligning)
+                b.blockSignals(False)
+        except RuntimeError:
+            self.align_btn = None
+
+    def face_picked(self, fid: int):
+        """A face was clicked while lining up: turn the region (about its middle) so its nearest side lies parallel to that face, and with
+        'also move it there' put its middle on the face. Shown as a preview; Apply stores it."""
+        if not self.aligning or self.index is None:
+            return
+        try:
+            pr = self.adv.engine.project()
+            h = self.view.last_hit
+            point = h["point"] if h and h.get("kind") == "face" and h.get("face") == fid else None
+            info = pr.ref_info(int(fid), point=point)
+            n = np.asarray(info.get("point_normal") if (point is not None and info.get("curved") and info.get("point_normal")) else info["normal"], float)
+            cur = self.preview()
+            R, side, ang = region_tools.align_with_direction(cur, n)
+            self.R = R @ self.R
+            if self.align_move:
+                self.shift = np.asarray(info["point"], float) - region_tools.centre(region_tools.grown(self.region(), self.grow))
+            self.live = False
+        except Exception as e:  # noqa: BLE001
+            self.adv.panel._fail(e)
+            return
+        self.stop_align()
+        self._preview()
+        cyl = (self.region() or {}).get("shape") == "cylinder"
+        what = "its axis" if cyl else f"its {'xyz'[side]} side"
+        text = (f"Face {int(fid)} points {info['nearest']}: {what} is now parallel to it (turned {ang:.1f}°)"
+                + ("; the middle of the region is on the face" if self.align_move else "") + ". Press Apply to keep it.")
+        if self.readout is not None:
+            self.readout.setText(text)
+        self.adv.panel.win.statusBar().showMessage(text, 9000)
+
     def reset(self):
         self.R, self.shift, self.live = np.eye(3), np.zeros(3), False
         self.grow, self.scaling = np.zeros((3, 2)), False
@@ -269,6 +337,21 @@ class RegionTransform:
                 row.addWidget(e, 1)
                 self.fields[k] = e
             v.addLayout(row)
+        row = QHBoxLayout()
+        self.align_btn = wid(QPushButton("Line up with a face…"), f"mesh.region.{i}.xf.align")
+        self.align_btn.setCheckable(True)
+        self.align_btn.setChecked(self.aligning)
+        self.align_btn.setObjectName("toggle")
+        self.align_btn.setToolTip("Click a face of the model or a wall of the air volume: the side of the region that points closest to it is turned parallel to it "
+                                  "(a cylinder: its axis). The turn is previewed; Apply stores it")
+        self.align_btn.toggled.connect(lambda on: self.start_align() if on else self.stop_align())
+        row.addWidget(self.align_btn)
+        mv = wid(QCheckBox("and put its middle on the face"), f"mesh.region.{i}.xf.align_move")
+        mv.setChecked(self.align_move)
+        mv.setToolTip("Also move the region so that its middle is on the face you click")
+        mv.toggled.connect(lambda on: setattr(self, "align_move", bool(on)))
+        row.addWidget(mv, 1)
+        v.addLayout(row)
         self.readout = wid(QLabel(""), f"mesh.region.{i}.xf.readout")
         self.readout.setObjectName("muted")
         v.addWidget(self.readout)

@@ -60,7 +60,7 @@ plus the toolbar and application bar. Status: ✅ done in the Qt app · 🟡 par
 | Solver choice for the study (built-in, CalculiX ...) | ✅ (Solver line in About; the choice in Advanced settings, open in Expert mode, as the web shows it in Expert mode) | setup |
 | **Symmetry planes**: plane ⟂ x/y/z, from a face, flip, remove | ✅ (draft with axis/position/flip/Set, from a face, position, flip, remove, cut parts (aero), linked condition greyed; no mouse drag of the plane) | setup |
 | Rotors: detect on motor tops, thrusts, reset to automatic, edit | ✅ (detect, add, radius, thrust/auto, centre on a cylinder or edge, delete, reset, weight/thrust note) | setup |
-| Moving (rotating) zones: add, edit, delete | ✅ (add, every field, fit around part, centre on a cylinder or edge, turn the model for a tilted axis, delete) | setup |
+| Moving (rotating) zones: add, edit, delete | ✅ (add, every field, fit around part, centre on a cylinder or edge, turn the model for a tilted axis, delete; new in the Qt app: the zone drawn in the 3D view in Setup and Mesh, which parts are inside / partly inside / outside, a turn preview, the Mesh colour **Rotating zones**; dragging a zone with the mouse is not built) | setup |
 | Flow condition: fluid (air/water), speed, direction, turbulence model, steady/transient, flow & solver settings | ✅ (headed as in the web; expert settings open in Expert mode; suggested end time with Use it) | setup |
 | Readiness checklist (errors/warnings that jump to the control) | ✅ (items jump to their control) | setup |
 | Auto-detect inlet & outlet (cooling studies) | ✅ | setup |

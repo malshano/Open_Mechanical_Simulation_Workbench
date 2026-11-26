@@ -33,6 +33,7 @@ from .banner import Banner
 from .planehandle import PlaneHandle
 from .layerview import LayerView
 from .regionview import RegionView
+from .zoneview import ZoneView
 from .scalehandles import ScaleHandles
 from .gizmo import RotateGizmo
 from .legend import Legend
@@ -141,6 +142,7 @@ class Viewport(QWidget):
         self.mark_actors: list = []         # selection, hover and tint highlights
         self.layer_view = LayerView(self)           # the wall layers as a shell round the object (layerview.py)
         self.region_view = RegionView(self)         # the refinement regions of the Mesh step (regionview.py)
+        self.zone_view = ZoneView(self)             # the rotating zones of the Setup and Mesh steps (zoneview.py)
         self.plane_handle = PlaneHandle(self)      # the preview of a symmetry plane and its handle (planehandle.py)
         self.scale_handles = ScaleHandles(self)  # the resize handles of a refinement region (scalehandles.py)
         self.region_gizmo = RotateGizmo(self)    # moves and turns a refinement region (its own: the model is not previewed with it)
