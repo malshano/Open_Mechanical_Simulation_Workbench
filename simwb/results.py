@@ -2,11 +2,73 @@
 from __future__ import annotations
 
 import base64
+import json
+import pickle
+import zipfile
 from pathlib import Path
 
 import numpy as np
 
 LOC = ("node", "cell")
+
+# Result files are never unpickled. Files written before this change hold their text arrays (region names ...) as pickled object arrays;
+# they are read with an unpickler that accepts nothing but the numpy types such an array is made of, so a file from someone else (an imported
+# study) cannot run code when it is opened.
+_ALLOWED = {("numpy", "ndarray"), ("numpy", "dtype"), ("numpy.core.multiarray", "_reconstruct"), ("numpy._core.multiarray", "_reconstruct")}
+
+
+class UnsafeResultFile(ValueError):
+    """The results file is not a plain data file (it asks for something other than arrays of numbers and text)."""
+
+
+class _StrictUnpickler(pickle.Unpickler):
+    def find_class(self, module, name):
+        if (module, name) in _ALLOWED:
+            return super().find_class(module, name)
+        raise UnsafeResultFile(f"The results file is refused: it asks for {module}.{name}, which a results file never needs")
+
+    def persistent_load(self, pid):  # noqa: ARG002
+        raise UnsafeResultFile("The results file is refused: it uses persistent objects")
+
+
+def _read_object_array(fp) -> np.ndarray:
+    """An object array of a legacy .npy member (positioned at its start): header, then a pickle - read with the strict unpickler."""
+    version = np.lib.format.read_magic(fp)
+    if version == (1, 0):
+        np.lib.format.read_array_header_1_0(fp)
+    elif version == (2, 0):
+        np.lib.format.read_array_header_2_0(fp)
+    else:
+        raise UnsafeResultFile(f"Unsupported results file version {version}")
+    try:
+        arr = _StrictUnpickler(fp).load()
+    except UnsafeResultFile:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise UnsafeResultFile(f"The results file could not be read safely: {e}") from e
+    if not isinstance(arr, np.ndarray) or arr.dtype != object or not all(isinstance(x, str) for x in arr.ravel().tolist()):
+        raise UnsafeResultFile("The results file is refused: its text arrays hold something other than text")
+    return arr.astype(str)
+
+
+def read_npz(path) -> dict:
+    """All arrays of an .npz file as {name: array}, without ever unpickling arbitrary objects."""
+    out = {}
+    with zipfile.ZipFile(path) as zf:
+        for name in zf.namelist():
+            if not name.endswith(".npy"):
+                continue
+            key = name[:-4]
+            with zf.open(name) as fp:
+                try:
+                    out[key] = np.lib.format.read_array(fp, allow_pickle=False)
+                    continue
+                except ValueError as e:
+                    if "object arrays" not in str(e).lower() and "pickle" not in str(e).lower():
+                        raise
+            with zf.open(name) as fp:           # a legacy text array: pickled
+                out[key] = _read_object_array(fp)
+    return out
 
 
 class ResultSet:
@@ -56,7 +118,7 @@ class ResultSet:
     def save(self, path: Path):
         d = dict(nodes=self.nodes, tets=self.tets, tet_region=self.tet_region, surf_tris=self.surf_tris,
                  surf_cell=self.surf_cell, surf_group=self.surf_group,
-                 regions=np.array(self.regions, dtype=object), groups=np.array(self.groups, dtype=object))
+                 regions=np.array(self.regions, dtype=str), groups=np.array(self.groups, dtype=str))
         meta = {}
         for k, (loc, arr, unit) in self.fields.items():
             d["f_" + k] = arr
@@ -65,29 +127,32 @@ class ResultSet:
             d["s_" + k] = arr
         if self.times:
             d["times"] = np.asarray(self.times, float)
-            d["frame_names"] = np.array(list(self.frames), dtype=object)
+            d["frame_names"] = np.array(list(self.frames), dtype=str)
             if self.frame_map is not None:
                 d["frame_map"] = self.frame_map.astype(np.int32)
             for j, (k, arrs) in enumerate(self.frames.items()):
                 d[f"t{j}"] = np.stack(arrs).astype(np.float32)
-        d["meta"] = np.array([repr(meta)], dtype=object)
+        d["meta"] = np.array([json.dumps(meta)], dtype=str)
         np.savez_compressed(path, **d)
 
     @classmethod
     def load(cls, path: Path):
-        z = np.load(path, allow_pickle=True)
-        import ast
-
-        meta = ast.literal_eval(str(z["meta"][0]))
+        z = read_npz(path)
+        text = str(z["meta"][0])
+        try:
+            meta = json.loads(text)
+        except ValueError:                       # (the older files: a Python literal)
+            import ast
+            meta = ast.literal_eval(text)
         fields = {k: (loc, z["f_" + k], unit) for k, (loc, unit) in meta.items()}
-        sv = {k[2:]: z[k] for k in z.files if k.startswith("s_")}
+        sv = {k[2:]: v for k, v in z.items() if k.startswith("s_")}
         times, frames = None, None
-        if "times" in z.files:
+        if "times" in z:
             times = z["times"].tolist()
             frames = {str(k): list(z[f"t{j}"]) for j, k in enumerate(z["frame_names"])}
-        return cls(z["nodes"], z["tets"], z["tet_region"], list(z["regions"]), fields, z["surf_tris"],
-                   z["surf_cell"], z["surf_group"], list(z["groups"]), sv, times, frames,
-                   z["frame_map"] if "frame_map" in z.files else None)
+        return cls(z["nodes"], z["tets"], z["tet_region"], [str(x) for x in z["regions"]], fields, z["surf_tris"],
+                   z["surf_cell"], z["surf_group"], [str(x) for x in z["groups"]], sv, times, frames,
+                   z["frame_map"] if "frame_map" in z else None)
 
     # --- extraction ----------------------------------------------------------
     def field_info(self):
