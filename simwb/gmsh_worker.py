@@ -690,19 +690,70 @@ def _toward_face(gmsh, s, p, e, d):
     return d if d @ c >= 0 else -d
 
 
+EDGE_CELLS_CALIBRATION = 0.52  # real extra cells / the estimate of edge_cells_union (regular tetrahedra): 0.44 to 0.61 on 9 meshes (3 example geometries, factors 3, 6, 12,
+                               # smart sizing, quick preset; docs/MESHING_GUIDE.md): the mesher's cells are about 1.5 times the edge of a regular tetrahedron of the field size
+EDGE_ESTIMATE_SPREAD = 0.25    # the estimate is within this share of the real extra cells in those measurements (largest miss 17 %, kept with a margin)
+
+
+def _tube_density(h_edge, h_wall, growth, r):
+    """Extra tetrahedra per m3 at distance r from an edge: those of the edge size field (h_edge + (growth - 1) r) less those of the wall size."""
+    s = h_edge + (growth - 1.0) * np.asarray(r, float)
+    vol = 1.0 / (6.0 * math.sqrt(2.0))                         # (a regular tetrahedron of edge s has the volume s^3 / (6 sqrt 2))
+    return np.maximum(1.0 / (vol * s ** 3) - 1.0 / (vol * h_wall ** 3), 0.0)
+
+
 def edge_cells_estimate(length: float, h_edge: float, h_wall: float, growth: float) -> float:
-    """Cells that a refinement of cell size h_edge along `length` of edges adds, beyond the h_wall cells that would be
-    there anyway. The size grows linearly from h_edge at the edge to h_wall at r_max = (h_wall - h_edge) / (growth - 1)
-    (the field of the mesher); a tetrahedron of edge s has the volume s^3 / (6 sqrt 2); the zone is the full tube round
-    the edge (an upper bound: part of it is inside the body)."""
+    """Cells that a refinement of cell size h_edge along `length` of ONE isolated edge adds, beyond the h_wall cells that would be there anyway, counting the
+    full tube round it (an upper bound for one edge; real meshes come to a fraction of it, see edge_cells_union). The size grows linearly from h_edge at the
+    edge to h_wall at r_max = (h_wall - h_edge) / (growth - 1) (the field of the mesher)."""
     if length <= 0 or h_edge >= h_wall:
         return 0.0
-    r_max = (h_wall - h_edge) / (growth - 1.0)                    # the size h_edge + (growth - 1) r reaches h_wall
+    r_max = (h_wall - h_edge) / (growth - 1.0)
     r = np.linspace(0.0, r_max, 400)
-    s = h_edge + (growth - 1.0) * r
-    vol = 1.0 / (6.0 * math.sqrt(2.0))
-    dens = 2.0 * math.pi * r * (1.0 / (vol * s ** 3) - 1.0 / (vol * h_wall ** 3))
-    return float(length * np.trapezoid(dens, r))
+    return float(length * np.trapezoid(2.0 * math.pi * r * _tube_density(h_edge, h_wall, growth, r), r))
+
+
+def edge_cells_union(polylines, angles, h_edge: float, h_wall: float, growth: float, samples: int = 24000, seed: int = 7) -> float:
+    """Estimated extra cells of the edge size field over ALL the edges together: the integral over space of the cells of the field size
+    s(x) = h_edge + (growth - 1) d(x), d = the distance to the nearest edge, less those of the wall size, within r_max of an edge. Edges that lie close
+    together (the two rims of a thin plate, the sides of a small box) share their tube, which a sum over the edges counts twice; the integral does not.
+    Each edge counts for the share of the tube that is air: (360 - face angle) / 360. Monte Carlo over the union of the tubes (fixed seed: the same
+    answer every time), about 1 % noise. Times EDGE_CELLS_CALIBRATION."""
+    from scipy.spatial import cKDTree
+
+    if h_edge >= h_wall or not len(polylines):
+        return 0.0
+    r_max = (h_wall - h_edge) / (growth - 1.0)
+    pts, wgt = [], []
+    total = sum(float(np.linalg.norm(np.diff(np.asarray(p, float), axis=0), axis=1).sum()) for p in polylines)
+    step = max(h_edge * 0.5, total / 150_000.0)                  # (spacing of the points of the edges: fine enough for the near field)
+    for p, a in zip(polylines, angles):
+        p = np.asarray(p, float)
+        seg = np.linalg.norm(np.diff(p, axis=0), axis=1)
+        t = np.concatenate([[0.0], np.cumsum(seg)])
+        if t[-1] <= 0:
+            continue
+        n = max(int(math.ceil(t[-1] / step)) + 1, 2)
+        u = np.linspace(0.0, t[-1], n)
+        pts.append(np.stack([np.interp(u, t, p[:, k]) for k in range(3)], axis=1))
+        wgt.append(np.full(n, 1.0 - float(a) / 360.0))
+    P, W = np.vstack(pts), np.concatenate(wgt)
+    tree = cKDTree(P)
+    rng = np.random.default_rng(seed)
+    # x drawn from the mixture of balls of radius r_max round the points (spaced coarsely: the mixture only has to cover the tube), weighted back to the volume
+    m = min(len(P), 40_000)
+    cen = P[np.linspace(0, len(P) - 1, m).astype(int)]
+    cen_tree = cKDTree(cen)
+    k = rng.integers(0, m, samples)
+    v = rng.normal(size=(samples, 3))
+    v /= np.linalg.norm(v, axis=1)[:, None]
+    x = cen[k] + v * (r_max * rng.random(samples) ** (1.0 / 3.0))[:, None]
+    cover = np.asarray(cen_tree.query_ball_point(x, r_max, return_length=True), float)      # how many of the balls hold the point: the mixture density is cover / (m V_ball)
+    d, i = tree.query(x, distance_upper_bound=r_max)
+    ok = np.isfinite(d)
+    f = np.where(ok, _tube_density(h_edge, h_wall, growth, np.where(ok, d, 0.0)) * W[np.where(ok, i, 0)], 0.0)
+    v_ball = 4.0 / 3.0 * math.pi * r_max ** 3
+    return float(EDGE_CELLS_CALIBRATION * np.mean(f * m * v_ball / np.maximum(cover, 1.0)))
 
 
 def sharp_edges(gmsh, face_ids, min_length: float, max_face_angle: float = 140.0, limit: int = 200,
@@ -803,11 +854,18 @@ def edge_refine_plan(edges, h_wall: float, L: float, growth: float, factor: floa
         out["reason"] = "no_edges"
         return out
     total = float(sum(e[2] for e in sel))
-    est = edge_cells_estimate(total, h_edge, h_wall, growth)
+    lines = [e[3] for e in sel] if all(len(e) > 3 for e in sel) else None
+    angles = [e[1] for e in sel]
+
+    def extra(h):
+        """The estimate of the extra cells at edge cell size h: over all the edges together when their polylines are known, else summed edge by edge."""
+        return edge_cells_union(lines, angles, h, h_wall, growth) if lines else EDGE_CELLS_CALIBRATION * edge_cells_estimate(total, h, h_wall, growth)
+
+    est = extra(h_edge)
     h0 = h_edge
     while est > cap and h_edge < 0.9 * h_wall:
-        h_edge *= 1.15
-        est = edge_cells_estimate(total, h_edge, h_wall, growth)
+        h_edge *= 1.08
+        est = extra(h_edge)
     out.update(edges=sel, total_length=total, h_edge=h_edge, factor_used=h_wall / h_edge, estimated_extra_cells=est, capped=h_edge > h0 * 1.0001)
     if h_edge >= 0.9 * h_wall:
         out["reason"] = "cap_too_low"               # even the coarsest edge cells would add more than the cap: nothing is refined
@@ -1351,6 +1409,7 @@ def task_mesh(job: dict) -> dict:
         angle = float(er.get("max_angle", EDGE_ANGLE))
         flow_axis = ((info.get("domain") or {}).get("spec") or {}).get("flow_axis")
         found = sharp_edges(gmsh, wall_faces, 0.03 * L, max_face_angle=angle, limit=10 ** 6, flow_axis=flow_axis)
+        found = [(t, a, ln, curve_points(gmsh, t)) for t, a, ln in found]               # (with their polylines: the estimate counts the cells over all the edges together)
         plan = edge_refine_plan(found, h_wall, L, growth, factor, cap, angle)
         edges, h_edge, est, total_len = plan["edges"], plan["h_edge"], plan["estimated_extra_cells"], plan["total_length"]
         if plan["applied"]:
@@ -1364,6 +1423,13 @@ def task_mesh(job: dict) -> dict:
             fields.setString(fte, "F", f"{h_edge!r} + {growth - 1.0!r} * F{fe}")
             dist_max = (h_wall - h_edge) / (growth - 1.0)             # where it reaches the wall size
             use.append(fte)
+            # (the global smallest size was set from the wall size and the thin parts above: an edge cell finer than that was cut back to it, so a factor of 6 or
+            # 12 gave the same cells as a factor of 3 - the edge cells are allowed their own size)
+            gmsh.option.setNumber("Mesh.MeshSizeMin", min(gmsh.option.getNumber("Mesh.MeshSizeMin"), 0.5 * h_edge))
+            # (and the fine size at the edge curves is not spread over the whole faces: with the size extended from the boundary the fine triangles - and the
+            # tetrahedra under them - covered whole faces, several times the cells of the edge zone and different from face to face; the size field alone grows the
+            # size back to the wall size, which is what the estimate counts. The smart sizing recipe does the same.)
+            gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
             edge_info = {"edges": len(edges), "size": h_edge, "factor": factor, "size_far_of_edge_field": h_wall,
                          "factor_used": plan["factor_used"], "growth": growth, "dist_max": dist_max,
                          "estimated_extra_cells": est, "cap_cells": cap, "angle_limit": angle, "capped": plan["capped"],
@@ -1693,6 +1759,13 @@ def _tet_quality(p, t):
     return np.clip(6 * math.sqrt(2) * vol / np.maximum(l2, 1e-300) ** 1.5, 0, 1)
 
 
+def curve_points(gmsh, tag: int, n: int = 49) -> list:
+    """n points along a gmsh curve (rounded to 0.1 micrometre): the edge as a polyline, for the estimate and for the 3D view."""
+    lo, hi = gmsh.model.getParametrizationBounds(1, tag)
+    ts = np.linspace(lo[0], hi[0], n)
+    return np.round(np.asarray(gmsh.model.getValue(1, tag, ts.tolist()), float).reshape(-1, 3), 7).tolist()
+
+
 def task_edges(job: dict) -> dict:
     """The sharp edges across the flow of the geometry, for the Mesh step's estimate and its 3D marking (no meshing): {edges: [{angle, length, points}], count}
     - every edge where two wall faces meet at less than 175 degrees and that is at least 3 % of the body length, longest first (at most 600), each with a
@@ -1714,9 +1787,8 @@ def task_edges(job: dict) -> dict:
     out = []
     for tag, angle, length in found:
         lo, hi = gmsh.model.getParametrizationBounds(1, tag)
-        ts = np.linspace(lo[0], hi[0], 25)
-        pts = np.asarray(gmsh.model.getValue(1, tag, ts.tolist()), float).reshape(-1, 3)
-        out.append({"tag": int(tag), "angle": float(angle), "length": float(length), "points": np.round(pts, 7).tolist()})
+        pts = curve_points(gmsh, tag)
+        out.append({"tag": int(tag), "angle": float(angle), "length": float(length), "points": pts})
     return {"edges": out, "count": len(out), "ref_length": L, "flow_axis": flow_axis}
 
 

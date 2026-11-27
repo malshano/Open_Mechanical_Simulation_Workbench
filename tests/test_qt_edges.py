@@ -8,6 +8,7 @@ from qt_support import EXAMPLES, ctl, from_thread  # noqa: F401
 
 import simwb.project as P
 from simwb import edgepreview
+from simwb.qt.panels.mesh_edges import ROUGH
 from test_qt_layers_mesh import fake_layers, wait  # noqa: F401
 
 
@@ -95,7 +96,7 @@ def test_the_settings_api_changes_the_panel(flow):
     assert val(c, "mesh.edges.on")["checked"]
     assert c.widget_do("mesh.edges.factor")["value"] == "10"
     assert c.widget_do("mesh.edges.angle")["value"] == "120"
-    assert c.widget_do("mesh.edges.cap")["value"] == "50000"
+    assert c.widget_do("mesh.edges.cap")["value"] == "50,000"
     assert val(c, "mesh.layers.tolerant")["checked"]
     assert c.widget_do("mesh.edges.toggle")["value"]["checked"]                           # (a group with a setting is open)
     c.engine.project().set_mesh(edge_refinement=False)
@@ -148,7 +149,7 @@ def test_values_survive_saving_and_opening_the_study(flow, tmp_path):
     c.do("step.go", {"step": "mesh"})
     c._settle()
     assert val(c, "mesh.edges.on")["checked"] and c.widget_do("mesh.edges.factor")["value"] == "7"
-    assert c.widget_do("mesh.edges.cap")["value"] == "60000"
+    assert c.widget_do("mesh.edges.cap")["value"] == "60,000"
     assert val(c, "mesh.layers.tolerant")["checked"]
     # and a copy made with Save as keeps them too
     c.do("study.save_as", {"location": str(tmp_path / "copy")})
@@ -164,18 +165,18 @@ def test_the_estimate_line_follows_the_settings_and_the_mesher_plan(flow):
     pv = edgepreview.preview(pr)
     assert pv["scan"] == "ready" and pv["plan"]["applied"]
     off = c.widget_do("mesh.edges.estimate")["text"]
-    assert off.startswith("Off. Switched on it would:") and f"{pv['plan']['estimated_extra_cells']:,.0f}" in off
+    assert off.startswith("Off. Switched on it would:") and ROUGH(pv['plan']['estimated_extra_cells']) in off
     c.widget_do("mesh.edges.on", "set", True)
     scanned(c)
     on = c.widget_do("mesh.edges.estimate")["text"]
     assert on.startswith("About ") and "extra cells" in on and "edge cells" in on and "wall cells" in on
     pv = edgepreview.preview(pr)
     n1 = pv["plan"]["estimated_extra_cells"]
-    assert f"{n1:,.0f}" in on
+    assert ROUGH(n1) in on
     c.widget_do("mesh.edges.factor", "set", "12")                                           # finer edge cells: more cells
     scanned(c)
     n2 = edgepreview.preview(pr)["plan"]["estimated_extra_cells"]
-    assert n2 > n1 and f"{n2:,.0f}" in c.widget_do("mesh.edges.estimate")["text"]
+    assert n2 > n1 and ROUGH(n2) in c.widget_do("mesh.edges.estimate")["text"]
     c.widget_do("mesh.edges.cap", "set", "1000")                                            # a cap that bites
     scanned(c)
     t = c.widget_do("mesh.edges.estimate")["text"]
@@ -248,18 +249,17 @@ def test_the_sharp_edges_can_be_shown_in_the_3d_view(flow):
 
 
 # ---------------------------------------------------------------------------------------------------------------------------------- not available
-def test_not_available_in_other_studies_with_the_reason(ctl, tmp_path, box_step):
+def test_the_group_is_not_shown_in_other_studies(ctl, tmp_path, box_step):
+    """Like the wall layers: the options of a flow study are not shown (dead) in the others."""
     ctl.do("study.new", {"name": "Heat", "study": "heat_conduction"})
     ctl.do("geometry.import", {"path": str(box_step)})
     wait(ctl)
     ctl.do("step.go", {"step": "mesh"})
     ctl.do("app.mode", {"mode": "expert"})
     ctl._settle()
-    on = ctl.widget_do("mesh.edges.on")
-    assert not on["enabled"] and not on["value"]["checked"]
-    assert ctl.widget_do("mesh.edges.note")["text"].startswith("Not for this type of study")
-    assert "external aerodynamics" in ctl.widget_do("mesh.edges.note")["text"]
-    assert "mesh.edges.factor" not in ids(ctl) and "mesh.layers.tolerant" not in ids(ctl)
+    have = ids(ctl)
+    assert not [i for i in have if i.startswith("mesh.edges.") or i == "mesh.layers.tolerant"]
+    assert "mesh.sizes.toggle" in have                                                      # (the other advanced groups are there)
     with pytest.raises(ValueError):
         ctl.engine.project().set_mesh(layers={"n": 2, "tolerant": True})                    # (the engine says the same for layers)
 
@@ -312,7 +312,7 @@ def test_after_meshing_the_panel_shows_what_the_mesher_did_and_the_layers_kept(f
     s = mesh(c)["stats"]
     assert s["edge_refine"] and s["edge_refine"]["edges"] > 0 and s["edge_refine_skipped"] is None
     t = c.widget_do("mesh.edges.made")["text"]
-    assert t.startswith("Last mesh:") and f"{s['edge_refine']['estimated_extra_cells']:,.0f}" in t
+    assert "Last mesh:" in t and ROUGH(s['edge_refine']['estimated_extra_cells']) in t
     edgepreview.measure(c.engine.project(), wait=True)
     c.engine.changed.emit()
     c._settle()
@@ -342,7 +342,7 @@ def test_a_real_mesh_of_the_wing_made_from_the_panel_uses_the_settings(ctl):
     pr = ctl.engine.project()
     pv = edgepreview.preview(pr)
     shown = ctl.widget_do("mesh.edges.estimate")["text"]
-    assert f"{pv['plan']['estimated_extra_cells']:,.0f}" in shown
+    assert ROUGH(pv['plan']['estimated_extra_cells']) in shown
     ctl.do("mesh.generate")
     wait(ctl, 600)
     s = mesh(ctl)["stats"]
@@ -351,4 +351,4 @@ def test_a_real_mesh_of_the_wing_made_from_the_panel_uses_the_settings(ctl):
     assert er["estimated_extra_cells"] == pytest.approx(pv["plan"]["estimated_extra_cells"])      # (the preview is the mesher's own plan)
     assert er["size"] == pytest.approx(pv["plan"]["h_edge"]) and s["sizes"]["near_wall"] == pytest.approx(pv["h_wall"])
     assert s["edge_refine_skipped"] is None
-    assert f"{er['estimated_extra_cells']:,.0f}" in ctl.widget_do("mesh.edges.made")["text"]
+    assert ROUGH(er['estimated_extra_cells']) in ctl.widget_do("mesh.edges.made")["text"]

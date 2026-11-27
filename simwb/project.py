@@ -3009,15 +3009,12 @@ class Project:
             # edges by itself otherwise - see edgepreview.settings)
             if edge_refinement in (False, 0, "off") or (isinstance(edge_refinement, dict) and edge_refinement.get("enabled") is False):
                 m.pop("edge_refine", None)
-                if m.get("smart"):
-                    m["no_edge_refine"] = True
+                m["no_edge_refine"] = True                         # (stays off until switched on: smart sizing, now or later, does not turn it on)
             else:
                 from . import edgepreview
 
-                new = edgepreview.check_options(edge_refinement)
-                if not isinstance(edge_refinement, dict):          # (a bare factor changes the factor only: the cap and the angle stay)
-                    new = {**{k: v for k, v in (m.get("edge_refine") or {}).items() if k != "factor"}, **new}
-                m["edge_refine"] = new
+                m["edge_refine"] = edgepreview.check_options(edge_refinement, base=m.get("edge_refine"),
+                                                             default_factor=edgepreview.SMART_FACTOR if m.get("smart") else 6.0)
                 m.pop("no_edge_refine", None)
         if defeature_mm is not False:  # small-face groups merged into the face they sit on: None / 0 = off
             d = studies.finite(defeature_mm or 0, "Defeature size")

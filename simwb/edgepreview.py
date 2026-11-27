@@ -4,10 +4,12 @@ estimate shown before meshing is what the mesher then does. Only the finding of 
 (task "edges", a second or two) on its own thread, once per geometry, and the answer is kept."""
 from __future__ import annotations
 
+import atexit
 import json
 import subprocess
 import sys
 import threading
+import uuid
 
 from . import gmsh_worker
 
@@ -18,27 +20,28 @@ CAP_RANGE = (1_000.0, 5_000_000.0)
 _LOCK = threading.Lock()
 
 
-def check_options(er) -> dict:
-    """The stored form of an edge refinement setting: {factor, [max_cells], [max_angle]} from True, a factor or a dictionary; ValueError says what is wrong."""
+def check_options(er, base: dict | None = None, default_factor: float = 6.0) -> dict:
+    """The stored form of an edge refinement setting: {factor, [max_cells], [max_angle]} from True, a factor or a dictionary; ValueError says what is wrong.
+    What the call does not name keeps its value in `base` (the stored setting): a call that only gives the cap must not reset the factor."""
     from . import studies
 
-    if er is True:
-        return {"factor": 6.0}
-    if not isinstance(er, dict):
-        er = {"factor": er}
-    out = {"factor": 6.0 if er.get("factor") in (None, "") else studies.finite(er["factor"], "Edge refinement factor")}
+    out = dict(base or {})
+    if er is not True:
+        if not isinstance(er, dict):
+            er = {"factor": er}
+        if er.get("factor") not in (None, ""):
+            out["factor"] = studies.finite(er["factor"], "Edge refinement factor")
+        if er.get("max_cells") not in (None, ""):
+            out["max_cells"] = studies.finite(er["max_cells"], "Edge refinement cell cap")
+        if er.get("max_angle") not in (None, ""):
+            out["max_angle"] = studies.finite(er["max_angle"], "Edge refinement angle")
+    out.setdefault("factor", default_factor)
     if not FACTOR_RANGE[0] <= out["factor"] <= FACTOR_RANGE[1]:
         raise ValueError("Edge refinement factor must be 2..20 (cells at the edge are the wall size / factor)")
-    if er.get("max_cells") not in (None, ""):
-        cap = studies.finite(er["max_cells"], "Edge refinement cell cap")
-        if not CAP_RANGE[0] <= cap <= CAP_RANGE[1]:
-            raise ValueError("The cap on the extra cells of the edge refinement must be 1,000 to 5,000,000")
-        out["max_cells"] = cap
-    if er.get("max_angle") not in (None, ""):
-        ang = studies.finite(er["max_angle"], "Edge refinement angle")
-        if not ANGLE_RANGE[0] <= ang <= ANGLE_RANGE[1]:
-            raise ValueError("The edge angle must be 20 to 175 degrees (edges where the faces meet at less than this are refined)")
-        out["max_angle"] = ang
+    if "max_cells" in out and not CAP_RANGE[0] <= out["max_cells"] <= CAP_RANGE[1]:
+        raise ValueError("The cap on the extra cells of the edge refinement must be 1,000 to 5,000,000")
+    if "max_angle" in out and not ANGLE_RANGE[0] <= out["max_angle"] <= ANGLE_RANGE[1]:
+        raise ValueError("The edge angle must be 20 to 175 degrees (edges where the faces meet at less than this are refined)")
     return out
 
 
@@ -79,16 +82,38 @@ def scan_state(pr) -> dict:
     return {k: sc.get(k) for k in ("state", "result", "error")}
 
 
+_PROCS: dict = {}            # project id -> the running edge search (LimitedPopen), so that a new geometry or the end of the program can stop it
+
+
+def cancel_scan(pr_id: str) -> bool:
+    """Stop the edge search of this project that is still running (the geometry changed, or the program is closing); True when there was one."""
+    lp = _PROCS.pop(pr_id, None)
+    if lp is None or lp.proc.poll() is not None:
+        return False
+    lp.close()                                          # (the worker and what it started end with the job object)
+    return True
+
+
+def cancel_all_scans():
+    for k in list(_PROCS):
+        cancel_scan(k)
+
+
+atexit.register(cancel_all_scans)
+
+
 def run_scan(pr) -> dict:
-    """Find the sharp edges now (a subprocess of the mesher's worker); the edges {edges, count, ref_length, flow_axis}."""
+    """Find the sharp edges now (a subprocess of the mesher's worker); the edges {edges, count, ref_length, flow_axis}. Each search has a job file of its
+    own: two searches (an old one finishing, a new one starting) never share or delete each other's."""
     from .jobs import ROOT
     from .memlimit import LimitedPopen
 
     job = {"brep": str(pr.geo_dir / "domain.brep"), "faces_json": str(pr.geo_dir / "faces.json"), "domain_info": str(pr.geo_dir / "domain_info.json")}
-    jp = pr.mesh_dir / "_edges_job.json"
     pr.mesh_dir.mkdir(parents=True, exist_ok=True)
+    jp = pr.mesh_dir / f"_edges_job_{uuid.uuid4().hex[:10]}.json"
     jp.write_text(json.dumps(job))
     lp = LimitedPopen([sys.executable, "-u", "-m", "simwb.gmsh_worker", "edges", str(jp)], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    _PROCS[pr.id] = lp
     result, error = None, None
     try:
         for line in lp.proc.stdout:
@@ -98,10 +123,12 @@ def run_scan(pr) -> dict:
                 error = line[6:].strip()
         lp.proc.wait()
     finally:
+        if _PROCS.get(pr.id) is lp:
+            _PROCS.pop(pr.id, None)
         lp.close()
         jp.unlink(missing_ok=True)
     if result is None:
-        raise RuntimeError(error or "The search for sharp edges failed")
+        raise RuntimeError(error or "The search for sharp edges was stopped or failed")
     return result
 
 
@@ -111,6 +138,8 @@ def _background(pr, attr: str, key, fn, wait: bool = False) -> dict:
     with _LOCK:
         sc = getattr(pr, attr, None)
         if not sc or sc["key"] != key:
+            if sc and attr == "_edge_scan" and sc["state"] == "running":
+                cancel_scan(pr.id)                       # (the geometry changed under a search that is still running: it is of no use any more)
             sc = {"key": key, "state": "running", "result": None, "error": None}
             setattr(pr, attr, sc)
 
@@ -159,7 +188,7 @@ def _measure(pr, er: dict, scan: dict) -> dict:
         raise ValueError("a hex-dominant mesh")
     nodes, tets = np.asarray(m["nodes"], float), np.asarray(m["tets"])
     h_wall = float(er["size_far_of_edge_field"])
-    dist = float(er["dist_max"])
+    reach = float(er["dist_max"])
     # the refined edges again, as the plan chooses them from the same search
     edges = [(e["tag"], e["angle"], e["length"], e["points"]) for e in scan["edges"]]
     L = float(scan["ref_length"])
@@ -173,15 +202,19 @@ def _measure(pr, er: dict, scan: dict) -> dict:
         s = np.linspace(0, t[-1], min(n, 200_000))
         pts.append(np.stack([np.interp(s, t, p[:, k]) for k in range(3)], axis=1))
     if not pts:
-        return {"zone_cells": 0, "zone_share": 0.0, "extra_cells": 0.0, "distance": dist}
+        return {"zone_cells": 0, "zone_share": 0.0, "extra_cells": 0.0, "distance": reach}
     tree = cKDTree(np.vstack(pts))
     a, b, c, d = (nodes[tets[:, k]] for k in range(4))
     cen = (a + b + c + d) / 4.0
-    near = tree.query(cen, distance_upper_bound=dist)[0] < dist
+    dist = tree.query(cen)[0]
     vol = np.abs(np.einsum("ij,ij->i", np.cross(b - a, c - a), d - a)) / 6.0
-    wall_cell = h_wall ** 3 / (6.0 * np.sqrt(2.0))
+    near = dist < reach
+    # what the same volume would hold at the wall size: the mesh's own cells just outside the reach of the edge field (a shell as wide as half the reach), where the
+    # field has come back to the wall size; a regular tetrahedron's volume would count the mesher's larger cells as extra
+    shell = (dist >= reach) & (dist < 1.5 * reach)
+    v_wall = float(vol[shell].mean()) if int(shell.sum()) >= 50 else 1.5 ** 3 * h_wall ** 3 / (6.0 * np.sqrt(2.0))
     zone = int(near.sum())
-    return {"zone_cells": zone, "zone_share": zone / max(len(tets), 1), "extra_cells": max(zone - float(vol[near].sum()) / wall_cell, 0.0), "distance": dist}
+    return {"zone_cells": zone, "zone_share": zone / max(len(tets), 1), "extra_cells": max(zone - float(vol[near].sum()) / v_wall, 0.0), "distance": reach}
 
 
 # ---------------------------------------------------------------------------------------------------------------------------------- the preview
