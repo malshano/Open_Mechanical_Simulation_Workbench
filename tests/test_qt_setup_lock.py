@@ -51,18 +51,60 @@ def test_the_solve_step_names_what_changed_and_the_way_back(ctl):
     assert ctl.widget_do("solve.resume")["visible"] is True and "The setup changed" not in note
 
 
-def test_an_old_study_gets_a_note_and_a_way_out(ctl):
+def test_an_old_study_gets_a_note_and_a_way_out(ctl, monkeypatch):
     pr = _study(ctl, snapshot=False)
     note = _show(ctl)
     assert "cannot tell what" in note and "older version" in note and "run the simulation again" in note
     assert ctl.widget_do("solve.resume")["visible"] is False
     assert ctl.widget_do("solve.adopt_setup")["visible"] is True
     assert "cannot check" in ctl._index()["solve.adopt_setup"].toolTip()          # the risk is said where the button is
-    ctl.do("solve.adopt_setup")                                                      # the control command clicks it
+    asked = []
+
+    def ask(parent, title, text, buttons, default):
+        asked.append((title, text, default))
+        return answer["a"]
+    from PySide6.QtWidgets import QMessageBox
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(ask))
+    answer = {"a": QMessageBox.No}
+    ctl.win.panels["solve"].adopt.click()                                            # asks first; the default answer is No
+    assert asked and asked[0][2] == QMessageBox.No and "worked out with today's settings" in asked[0][1]
+    assert "only a warning" in asked[0][1] and "case_setup" not in pr.data           # said in plain words; No changes nothing
+    answer["a"] = QMessageBox.Yes
+    ctl.win.panels["solve"].adopt.click()
     ctl._settle()
-    assert pr.data["case_setup"] and not pr.data["solve"].get("setup_changed")
+    assert pr.data["case_setup"] and pr.data["case_setup_adopted"] and not pr.data["solve"].get("setup_changed")
     _show(ctl)
     assert ctl.widget_do("solve.resume")["visible"] is True and ctl.widget_do("solve.adopt_setup")["visible"] is False
+
+
+def test_the_adopt_command_needs_an_explicit_confirmation(ctl):
+    pr = _study(ctl, snapshot=False)
+    _show(ctl)
+    import pytest
+    with pytest.raises(Exception, match="confirm=true"):
+        ctl.do("solve.adopt_setup", {})
+    assert "case_setup" not in pr.data
+    with pytest.raises(Exception, match="solve.adopt_setup"):                          # (the button itself asks a person)
+        ctl.widget_do("solve.adopt_setup", "click")
+    assert ctl.do("solve.adopt_setup", {"confirm": True})["result"]["adopted"]
+    assert pr.data["case_setup_adopted"]
+
+
+def test_a_setup_that_differs_from_the_case_is_refused_without_asking(ctl, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    pr = _study(ctl, snapshot=False)
+    meta = json.loads((pr.case_dir / "simwb_case.json").read_text())
+    meta.update(U_inf=[-30.0, 0.0, 0.0], speed=30.0)
+    (pr.case_dir / "simwb_case.json").write_text(json.dumps(meta))
+    pr.data["settings"]["speed"] = 60
+    asked = []
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a: asked.append(a) or QMessageBox.Yes))
+    _show(ctl)
+    ctl.win.panels["solve"].adopt.click()
+    ctl._settle()
+    assert not asked and "case_setup" not in pr.data
+    assert any("flow speed of 30 m/s but the setup says 60 m/s" in h["text"] for h in ctl.win.toasts.history)
 
 
 def test_a_wrong_confirmation_in_the_window_says_why_and_changes_nothing(ctl):
@@ -71,10 +113,10 @@ def test_a_wrong_confirmation_in_the_window_says_why_and_changes_nothing(ctl):
     meta.pop("transient")
     (pr.case_dir / "simwb_case.json").write_text(json.dumps(meta))
     _show(ctl)
-    ctl.widget_do("solve.adopt_setup", "click")
+    ctl.win.panels["solve"].adopt.click()
     ctl._settle()
     assert "case_setup" not in pr.data and pr.data["solve"].get("setup_changed")
-    assert any("do not match" in h["text"] for h in ctl.win.toasts.history)
+    assert any("does not match the case folder" in h["text"] for h in ctl.win.toasts.history)
 
 
 def test_load_results_needs_openfoam_only_when_times_are_still_split(ctl):

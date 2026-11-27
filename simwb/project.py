@@ -232,7 +232,7 @@ def duplicate_project(pid: str, name: str | None = None) -> "Project":
     shutil.copytree(src.dir, d, ignore=shutil.ignore_patterns("case", "results", "videos", "*.tmp", "checks", "_*_job.json"))
     data = json.loads((d / "project.json").read_text())
     data.update(name=name, created=_now(), updated=_now(), solve={"status": "none"})
-    for k in ("mesh_check", "model_check", "hidden", "edited_during_run", "case_setup", "case_run"):
+    for k in ("mesh_check", "model_check", "hidden", "edited_during_run", "case_setup", "case_run", "case_setup_adopted"):
         data.pop(k, None)
     (d / "project.json").write_text(json.dumps(data, indent=1))
     if folder.resolve() != WORKSPACE.resolve():
@@ -273,6 +273,7 @@ def save_project_as(pid: str, location: str, name: str | None = None, keep_resul
         data["solve"] = {"status": "none"}
         data.pop("case_setup", None)
         data.pop("case_run", None)
+        data.pop("case_setup_adopted", None)
     for k in ("hidden", "edited_during_run"):
         data.pop(k, None)
     (d / "project.json").write_text(json.dumps(data, indent=1))
@@ -691,6 +692,70 @@ class Project:
         known = self.data.get("case_setup") is not None
         return {"message": self._locked_message(), "known": known, "can_adopt": not known}
 
+    def case_mismatches(self, meta: dict) -> list:
+        """What the case folder records (simwb_case.json) that the current setup disagrees with, as plain sentences: the kind of
+        study, steady or transient, the flow (speed and direction), the fluid, the number of cells, rotors, moving zones and
+        symmetry planes. Empty: nothing the case records is different."""
+        from .solvers.openfoam import cases
+
+        s = self.data["settings"]
+        out = []
+        if meta.get("study") and meta["study"] != self.study:
+            out.append("the case folder was made for another kind of study")
+        if bool(meta.get("transient")) != (s.get("analysis") == "transient"):
+            out.append(f"the case folder holds a {'transient' if meta.get('transient') else 'steady'} run but the setup says "
+                       f"{s.get('analysis', 'steady')}")
+        try:
+            fl = materials.get_fluid(s.get("fluid", "air"))
+        except Exception:  # noqa: BLE001
+            fl = None
+        if self.study == "external_aero":
+            try:
+                u = cases.freestream_velocity(s)
+            except Exception:  # noqa: BLE001
+                u = None
+            if u is not None and meta.get("U_inf") is not None:
+                v0 = float(np.linalg.norm(meta["U_inf"]))
+                v1 = float(np.linalg.norm(u))
+                if abs(v1 - v0) > 1e-6 * max(1.0, v0):
+                    out.append(f"the case was made for a flow speed of {v0:g} m/s but the setup says {v1:g} m/s")
+                elif float(np.linalg.norm(np.asarray(meta["U_inf"], float) - u)) > 1e-6 * max(1.0, v0):
+                    out.append("the case was made for another flow direction (pitch, yaw, forward or up axis)")
+            if fl and meta.get("rho") and abs(fl["rho"] - float(meta["rho"])) > 1e-6 * float(meta["rho"]):
+                out.append(f"the case was made for a fluid of density {float(meta['rho']):g} kg/m3 but the setup's fluid has "
+                           f"{fl['rho']:g}")
+        elif fl and isinstance(meta.get("fluid"), dict) and meta["fluid"].get("rho")                 and abs(fl["rho"] - float(meta["fluid"]["rho"])) > 1e-6 * float(meta["fluid"]["rho"]):
+            out.append(f"the case was made for a fluid of density {float(meta['fluid']['rho']):g} kg/m3 but the setup's fluid has "
+                       f"{fl['rho']:g}")
+        cells = ((self.data.get("mesh") or {}).get("stats") or {}).get("cells")
+        if cells and meta.get("n_cells") and int(cells) != int(meta["n_cells"]):
+            out.append(f"the case was made for a mesh of {int(meta['n_cells']):,} cells but the study's mesh has {int(cells):,}")
+        if "rotors" in meta and len(meta["rotors"] or []) != len(self.data.get("rotors") or []):
+            out.append(f"the case has {len(meta['rotors'] or [])} rotor(s) but the setup has {len(self.data.get('rotors') or [])}")
+        if "moving_zones" in meta:
+            mz, dz = meta["moving_zones"] or [], self.data.get("moving_zones") or []
+            if len(mz) != len(dz):
+                out.append(f"the case has {len(mz)} moving zone(s) but the setup has {len(dz)}")
+            else:
+                r0 = sorted(round(float(z["rpm"]), 6) for z in mz if z.get("rpm") is not None)
+                r1 = sorted(round(float(z.get("rpm") or 0), 6) for z in dz)
+                if r0 and r0 != r1:
+                    out.append("the case was made with other rotation speeds of the moving zones")
+        if "symmetry" in meta and len(meta["symmetry"] or []) != len(self.data.get("symmetry") or []):
+            out.append("the case has a different number of symmetry planes")
+        return out
+
+    ADOPTED_WARNING = ("You confirmed that the setup matches this case (the study was run by an older version of the workbench, "
+                       "which kept no record of it). If the setup was changed since the run, these numbers are worked out with "
+                       "today's settings, not the ones the run used.")
+
+    def _adopted_warning(self, summary) -> None:
+        """Keep the confirmation visible with the results of a study whose setup was adopted (never silent)."""
+        if self.data.get("case_setup_adopted") and isinstance(summary, dict):
+            w = summary.setdefault("warnings", [])
+            if self.ADOPTED_WARNING not in w:
+                w.append(self.ADOPTED_WARNING)
+
     def adopt_current_setup(self) -> dict:
         """The user confirms that the current setup is what the case folder was made with (for a study run by a version that
         kept no record of it): the record is made from the current setup and the old run can be carried on again. The case on
@@ -705,14 +770,15 @@ class Project:
                              "the simulation again")
         meta = json.loads((self.case_dir / "simwb_case.json").read_text())
         s = self.data["settings"]
-        if meta.get("study") and meta["study"] != self.study:
-            raise ValueError("The case folder was made for another kind of study: it cannot be used. Run the simulation again")
-        if bool(meta.get("transient")) != (s.get("analysis") == "transient"):
-            raise ValueError(f"The case folder holds a {'transient' if meta.get('transient') else 'steady'} run but the setup says "
-                             f"{s.get('analysis', 'steady')}: they do not match. Run the simulation again")
+        bad = self.case_mismatches(meta)
+        if bad:
+            raise ValueError("The setup does not match the case folder, so it cannot be used for it: " + "; ".join(bad)
+                             + ". Change the setup back, or run the simulation again")
         self.data["case_setup"] = setup_snapshot(self.data)
         self.data["case_run"] = {k: s.get(k) for k in ("n_frames", "frame_deg")}
+        self.data["case_setup_adopted"] = {"at": _now()}
         sv = self.data["solve"]
+        self._adopted_warning(sv.get("summary"))
         sv.pop("setup_changed", None)
         if sv.get("status") == "stale":
             sv["status"] = sv.pop("stale_from", None) or ("done" if sv.get("summary") else "interrupted")
@@ -4527,6 +4593,7 @@ class Project:
             meta = cases.write_case(self.case_dir, data, m, self.faces(), info, self.bodies())
             self.data["case_setup"] = setup_snapshot(self.data)  # what this case is made from (see setup_changes)
             self.data["case_run"] = {k: self.data["settings"].get(k) for k in ("n_frames", "frame_deg")}  # (how it saves)
+            self.data.pop("case_setup_adopted", None)      # (a case made by this version: nothing was taken on trust)
             from .solvers.openfoam import advanced
 
             advanced.apply(self.case_dir, data.get("foam_advanced"), data.get("foam_overrides"),
@@ -4704,6 +4771,7 @@ class Project:
             raise RuntimeError("OpenFOAM run failed" + (f": {hint}" if hint else " - see the log for details"))
         JOBS.update(job, 0.97, "Loading results")
         rs, summary = results_loader.load(self.case_dir, self.data)
+        self._adopted_warning(summary)
         jw = self._join_warnings()
         if jw:
             summary.setdefault("warnings", []).extend(jw)
@@ -4801,6 +4869,7 @@ class Project:
                 "The setup may have changed since this run" + (f" ({'; '.join(ch[:3])})" if ch else "")
                 + ": the numbers are computed with today's settings, so check them before relying on them.")
         summary["loaded_from_case"] = True
+        self._adopted_warning(summary)
         old = (self.data["solve"].get("summary") or {})
         if "solve_seconds" in old:
             summary.setdefault("solve_seconds", old["solve_seconds"])
@@ -4825,6 +4894,7 @@ class Project:
             raise ValueError("No finished OpenFOAM run to reload")
         meta = json.loads((self.case_dir / "simwb_case.json").read_text())
         rs, summary = results_loader.load(self.case_dir, self.data)
+        self._adopted_warning(summary)
         app_log = self.case_dir / f"log.{meta['app']}"
         old = self.data["solve"].get("summary") or {}
         oc = old.get("convergence") or {}

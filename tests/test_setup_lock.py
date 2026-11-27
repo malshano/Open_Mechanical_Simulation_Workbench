@@ -3,6 +3,7 @@ what the case on disk was made from. Changing a setting and changing it back lea
 what changed and what to do."""
 import importlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -156,7 +157,7 @@ def test_a_wrong_confirmation_is_refused_when_the_case_folder_can_tell(P, tmp_pa
     meta = json.loads((pr.case_dir / "simwb_case.json").read_text())
     meta.pop("transient")                                      # the case folder holds a steady run, the setup says transient
     (pr.case_dir / "simwb_case.json").write_text(json.dumps(meta))
-    with pytest.raises(ValueError, match="do not match"):
+    with pytest.raises(ValueError, match="does not match the case folder"):
         pr.adopt_current_setup()
     assert pr.data["solve"].get("setup_changed") and "case_setup" not in pr.data     # nothing changed
     meta["study"] = "cht_enclosure"
@@ -315,3 +316,95 @@ def test_a_resume_does_not_overwrite_the_end_time_setting(P, tmp_path, monkeypat
     with pytest.raises(Exception):
         pr._solve_openfoam_inner(job2, resume_transient=True, extend=(0.31, 0.01))
     assert pr.data["settings"]["end_time"] == 0.31
+
+
+# ------------------------------------------------------------------------------ adopting is checked against what the case records
+def _recorded(pr, **over):
+    """What write_external_aero records in simwb_case.json about the setup (the 30 m/s case of _study)."""
+    meta = json.loads((pr.case_dir / "simwb_case.json").read_text())
+    meta.update({"study": "external_aero", "U_inf": [-30.0, 0.0, 0.0], "speed": 30.0, "rho": 1.204, "nu": 1.5e-5,
+                 "n_cells": 1000, "rotors": [], "moving_zones": [], "symmetry": []})
+    meta.update(over)
+    (pr.case_dir / "simwb_case.json").write_text(json.dumps(meta))
+    return meta
+
+
+def test_adopting_refuses_every_disagreement_and_says_which(P, tmp_path):
+    """The exact scenario: the case was made for 30 m/s, 1000 cells, no rotor; the setup says 60 m/s, another fluid, a rotor and a
+    different mesh."""
+    pr = _old_study(P, tmp_path)
+    _recorded(pr)
+    pr.data["settings"]["speed"] = 60
+    pr.data["settings"]["fluid"] = "nitrogen"
+    pr.data["rotors"] = [{"center": [0, 0, 0], "axis": [0, 0, 1], "radius": 0.1}]
+    pr.data["mesh"]["stats"] = {"cells": 2000}
+    with pytest.raises(ValueError) as e:
+        pr.adopt_current_setup()
+    m = str(e.value)
+    assert "flow speed of 30 m/s but the setup says 60 m/s" in m and "fluid of density 1.204" in m
+    assert "1,000 cells but the study's mesh has 2,000" in m and "0 rotor(s) but the setup has 1" in m
+    assert "Change the setup back, or run the simulation again" in m
+    assert "case_setup" not in pr.data and "case_setup_adopted" not in pr.data and pr.data["solve"].get("setup_changed")
+    assert pr.state()["solve_lock"] is not None
+
+
+@pytest.mark.parametrize("what,edit,words", [
+    ("speed", lambda d: d["settings"].update(speed=31), "flow speed of 30 m/s but the setup says 31 m/s"),
+    ("direction", lambda d: d["settings"].update(pitch_deg=5), "another flow direction"),
+    ("fluid", lambda d: d["settings"].update(fluid="nitrogen"), "fluid of density 1.204"),
+    ("cells", lambda d: d["mesh"].update(stats={"cells": 999}), "1,000 cells but the study's mesh has 999"),
+    ("rotor", lambda d: d.update(rotors=[{"center": [0, 0, 0], "axis": [0, 0, 1], "radius": 0.1}]), "0 rotor(s) but the setup has 1"),
+    ("zone", lambda d: d.update(moving_zones=[{"name": "z"}]), "0 moving zone(s) but the setup has 1"),
+    ("symmetry", lambda d: d.update(symmetry=[{"id": "p"}]), "different number of symmetry planes"),
+    ("kind", lambda d: d["settings"].update(analysis="steady"), "holds a transient run but the setup says steady"),
+])
+def test_each_recorded_difference_alone_is_refused(P, tmp_path, what, edit, words):
+    pr = _old_study(P, tmp_path)
+    _recorded(pr)
+    pr.data["mesh"]["stats"] = {"cells": 1000}
+    edit(pr.data)
+    with pytest.raises(ValueError, match="does not match the case folder") as e:
+        pr.adopt_current_setup()
+    assert words in str(e.value)
+
+
+def test_a_setup_that_matches_what_the_case_records_is_adopted_and_stays_flagged(P, tmp_path):
+    pr = _old_study(P, tmp_path, "stale")
+    _recorded(pr)
+    pr.data["mesh"]["stats"] = {"cells": 1000}
+    pr.data["solve"]["summary"] = {"time": 0.1, "warnings": ["an old one"]}
+    pr.adopt_current_setup()
+    assert pr.data["case_setup_adopted"]["at"]
+    ws = pr.data["solve"]["summary"]["warnings"]
+    assert ws[0] == "an old one" and ws[-1] == pr.ADOPTED_WARNING and "older version" in ws[-1]
+    pr.adopt_current_setup if False else None
+    # the flag survives saving and reopening, and is added to results made later (reload, load from case, resume)
+    again = P.Project(pr.dir)
+    assert again.data["case_setup_adopted"]
+    s = {"time": 0.2}
+    again._adopted_warning(s)
+    again._adopted_warning(s)
+    assert s["warnings"] == [pr.ADOPTED_WARNING]                      # (once)
+    # a fresh run of this version writes a case it knows: the flag goes
+    cp = P.duplicate_project(pr.id)
+    assert "case_setup_adopted" not in cp.data
+
+
+def test_the_load_adds_the_adopted_warning(P, tmp_path, monkeypatch):
+    from simwb.solvers.openfoam import results_loader, runner
+
+    pr = _old_study(P, tmp_path, "failed")
+    _recorded(pr)
+    pr.data["mesh"]["stats"] = {"cells": 1000}
+    pr.adopt_current_setup()
+    (pr.case_dir / "0.1").mkdir()
+    (pr.case_dir / "0.1" / "U").write_text("x")
+    (pr.case_dir / "log.pimpleFoam").write_text("Time = 0.1\nEnd\n")
+
+    class Rs:
+        def save(self, path):
+            Path(path).write_bytes(b"x")
+    monkeypatch.setattr(results_loader, "load", lambda case, data: (Rs(), {"time": 0.1}))
+    job = pr.load_case_results()
+    assert job.wait(30) and job.status == "done", (job.error, job.log[-3:])
+    assert pr.ADOPTED_WARNING in pr.data["solve"]["summary"]["warnings"]

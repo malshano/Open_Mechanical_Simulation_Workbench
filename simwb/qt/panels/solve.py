@@ -4,12 +4,13 @@ cancel, carrying a run on (resume, continue, extend a transient run), the OpenFO
 with the residuals, the advanced OpenFOAM numerics and case files, the solver's own messages, and the way on to the results."""
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QDoubleValidator, QIntValidator
-from PySide6.QtWidgets import (QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QProgressBar, QPushButton,
+from PySide6.QtWidgets import (QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
                                QVBoxLayout, QWidget)
 
 from ... import project as P
@@ -276,11 +277,26 @@ class SolvePanel(_Panel):
 
     def _adopt(self):
         try:
-            self.engine.project().adopt_current_setup()
+            pr = self.engine.project()
+            bad = pr.case_mismatches(json.loads((pr.case_dir / "simwb_case.json").read_text()))
+            if not bad and not self._confirm_adopt():
+                return
+            pr.adopt_current_setup()
             self.win.toasts.ok("The setup is taken as the one the case folder was made with: the old run can be carried on")
             self.engine.changed.emit()
         except Exception as e:  # noqa: BLE001
             self._fail(e)
+
+    def _confirm_adopt(self) -> bool:
+        r = QMessageBox.question(
+            self.win or self, "Use the setup for the old run?",
+            "This study was run by an older version of the workbench, which did not keep what the run was made with, so the "
+            "workbench cannot tell if the setup was changed since.\n\nIf you go on, the old run can be resumed and its results are "
+            "worked out with today's settings (speed, fluid, areas). If the setup was changed, those numbers are wrong, and only a "
+            "warning with the results says so. The workbench has checked what the case folder records (speed, fluid, mesh size, "
+            "rotors, zones) and found no difference.\n\nUse the setup anyway?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        return r == QMessageBox.Yes
 
     def _load_case(self):
         try:
