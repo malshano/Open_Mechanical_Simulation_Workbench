@@ -93,14 +93,14 @@ def test_move_and_turn_session_previews_applies_and_cancels(aero):
     c.do("mesh.region_add", {"kind": "box"})
     before = c.engine.state()["mesh"]["regions"][0]
     c.widget_do("mesh.region.0.xform", "set", True)
-    assert c.win.view.region_gizmo.on and c.win.panels["mesh"].adv.xform.active
+    assert c.win.view.handles.on and c.win.panels["mesh"].adv.xform.active
     c.widget_do("mesh.region.0.xf.mx", "set", "25")
     c.widget_do("mesh.region.0.xf.tz", "set", "40")
     x = c.win.panels["mesh"].adv.xform
     assert x.shift[0] == pytest.approx(0.025) and euler_deg(x.R)[2] == pytest.approx(40.0)
     assert c.engine.state()["mesh"]["regions"][0]["min"] == before["min"]                         # (nothing stored yet)
     c.widget_do("mesh.region.0.xf.cancel", "click")
-    assert not x.active and not c.win.view.region_gizmo.on
+    assert not x.active and not c.win.view.handles.on
     assert c.engine.state()["mesh"]["regions"][0] == before
     c.widget_do("mesh.region.0.xform", "set", True)
     c.widget_do("mesh.region.0.xf.mx", "set", "25")
@@ -110,17 +110,23 @@ def test_move_and_turn_session_previews_applies_and_cancels(aero):
     assert got["min"][0] == pytest.approx(before["min"][0] + 0.025) and euler_deg(np.array(got["rotation"]))[2] == pytest.approx(40.0)
 
 
-def test_a_dragged_gizmo_changes_the_preview(aero):
+def test_the_handles_of_a_region_are_the_shared_ones_and_a_drag_of_each_kind_changes_the_preview(aero):
     c = aero
     c.do("mesh.region_add", {"kind": "cylinder"})
     c.widget_do("mesh.region.0.xform", "set", True)
-    g, x = c.win.view.region_gizmo, c.win.panels["mesh"].adv.xform
-    a, b = np.array(g.project(g.c)[:2]), np.array(g.project(g.arrow_tip(0))[:2])
-    start = (a + b) / 2
-    assert g.press(*start)
-    g.drag_to(*(start + (b - a) * 0.3))
-    g.release(*(start + (b - a) * 0.3))
-    assert abs(x.shift[0]) > 1e-6 and abs(x.shift[1]) < 1e-9
+    hs, x = c.win.view.handles, c.win.panels["mesh"].adv.xform
+    kinds = {k: s["kind"] for k, s in hs.specs.items()}
+    assert kinds == {"move": "point", "turn.x": "ring", "turn.y": "ring", "turn.z": "ring", "face.len.0": "face", "face.len.1": "face", "face.rad.0": "face"}
+    p0 = np.array(hs.specs["move"]["point"])
+    hs.simulate_move("move", p0 + [0.01, 0, 0], part="axis0")                       # (the arrow along x: only x changes)
+    assert x.shift[0] == pytest.approx(0.01, abs=1e-6) and abs(x.shift[1]) < 1e-9 and abs(x.shift[2]) < 1e-9
+    assert np.allclose(hs.specs["move"]["point"], p0 + [0.01, 0, 0])               # (the handle went with the region)
+    got = hs.simulate_move("turn.z", 30.0)                                            # (a ring: 30 degrees about z)
+    assert got == pytest.approx(30.0, abs=0.05) and euler_deg(x.R)[2] == pytest.approx(30.0, abs=0.05)
+    before = regions.size_of(x.preview())
+    hs.simulate_move("face.len.1", 0.02)                                              # (the face at the end of the axis: 20 mm longer)
+    assert regions.size_of(x.preview())[0] == pytest.approx(before[0] + 0.02, abs=1e-6)
+    assert x.shift[0] == pytest.approx(0.01, abs=1e-6)                                # (the move is kept)
 
 
 # ------------------------------------------------------------------------------------------------------------ resizing a region
@@ -160,15 +166,10 @@ def test_resizing_in_the_session_by_handle_by_size_and_by_percentage(aero):
     c.do("mesh.region_add", {"kind": "box"})
     before = c.engine.state()["mesh"]["regions"][0]
     c.widget_do("mesh.region.0.xform", "set", True)
-    x, sh = c.win.panels["mesh"].adv.xform, c.win.view.scale_handles
-    assert sh.on and len(sh.handles) == 6
-    h = next(h for h in sh.handles if h["key"] == (0, 1))
-    a, b = np.array(sh._px(h["pos"])), np.array(sh._px(h["pos"] + h["dir"] * sh.length))
-    start = (a + b) / 2
-    assert sh.press(*start)
-    sh.drag_to(*(start + (b - a) * 0.5))
-    sh.release(*(start + (b - a) * 0.5))
-    assert x.grow[0, 1] > 1e-6 and not x.grow[0, 0] and not x.grow[1].any()                      # (only that face moved)
+    x, hs = c.win.panels["mesh"].adv.xform, c.win.view.handles
+    assert sum(1 for sp in hs.specs.values() if sp["kind"] == "face") == 6
+    hs.simulate_move("face.0.1", 0.05)
+    assert x.grow[0, 1] == pytest.approx(0.05, abs=1e-6) and not x.grow[0, 0] and not x.grow[1].any()          # (only that face moved)
     assert c.engine.state()["mesh"]["regions"][0] == before                                       # (nothing stored yet)
     old = regions.size_of(before)
     c.widget_do("mesh.region.0.xf.sy", "set", "500")
@@ -178,13 +179,171 @@ def test_resizing_in_the_session_by_handle_by_size_and_by_percentage(aero):
     assert regions.size_of(x.preview()) == pytest.approx([2 * s for s in old])
     c.widget_do("mesh.region.0.xf.apply", "click")
     assert regions.size_of(c.engine.state()["mesh"]["regions"][0]) == pytest.approx([2 * s for s in old])
-    assert not sh.on
+    assert not hs.on
 
 
 def test_the_resize_handles_go_when_the_session_ends(aero):
     c = aero
     c.do("mesh.region_add", {"kind": "cylinder"})
     c.widget_do("mesh.region.0.xform", "set", True)
-    assert [h["key"] for h in c.win.view.scale_handles.handles] == [("len", 0), ("len", 1), ("rad", 0)]
+    assert [k for k in c.win.view.handles.specs if k.startswith("face")] == ["face.len.0", "face.len.1", "face.rad.0"]
     c.widget_do("mesh.region.0.xf.cancel", "click")
-    assert not c.win.view.scale_handles.on
+    assert not c.win.view.handles.on
+
+
+def test_gmsh_makes_small_cells_in_the_turned_box_and_not_in_the_box_round_it():
+    """The size field of a turned box, in a real (tiny) gmsh mesh: cells inside the turned box are fine, cells in the corners of the axis-aligned box round it are not."""
+    import gmsh
+    turned = regions.moved_and_turned({"name": "t", "min": [0.3, 0.45, 0.45], "max": [0.7, 0.55, 0.55], "size": 0.02}, rz(45), [0, 0, 0])
+    expr = box_size_expr(turned["min"], turned["max"], turned["rotation"], 0.02, 0.2, 0.1)
+    gmsh.initialize(["-nopopup"])
+    try:
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.model.add("t")
+        gmsh.model.occ.addBox(0, 0, 0, 1, 1, 1)
+        gmsh.model.occ.synchronize()
+        f = gmsh.model.mesh.field.add("MathEval")
+        gmsh.model.mesh.field.setString(f, "F", expr)
+        gmsh.model.mesh.field.setAsBackgroundMesh(f)
+        for k in ("Mesh.MeshSizeFromPoints", "Mesh.MeshSizeExtendFromBoundary", "Mesh.MeshSizeFromCurvature"):
+            gmsh.option.setNumber(k, 0)
+        gmsh.option.setNumber("Mesh.MeshSizeMax", 0.2)
+        gmsh.model.mesh.generate(3)
+        _t, coords, _p = gmsh.model.mesh.getNodes()
+    finally:
+        gmsh.finalize()
+    P = np.asarray(coords).reshape(-1, 3)
+    R = np.asarray(turned["rotation"])
+    local = (P - 0.5) @ R                                              # (R^T (x - c): the points in the box's own axes)
+    inside = (np.abs(local) <= np.array([0.2, 0.05, 0.05]) + 0.02).all(axis=1)
+    corner = (np.abs(P[:, 0] - 0.5) > 0.15) & (np.abs(P[:, 1] - 0.5) > 0.15) & (np.abs(P[:, 0] - 0.5) < 0.25) & (np.abs(P[:, 1] - 0.5) < 0.25) \
+        & (np.abs(P[:, 2] - 0.5) < 0.05)                              # (inside the box round the turned one, far from the turned box)
+    assert inside.sum() > 100                                          # (many nodes: the turned box is meshed finely)
+    assert inside.sum() > 5 * max(int(corner.sum()), 1) or corner.sum() == 0
+
+
+def test_a_turned_region_is_the_same_after_the_study_is_closed_and_opened_again(aero, tmp_path):
+    """Save, close and reopen the study: the turned, moved and resized region comes back unchanged (project.json keeps min, max and the rotation)."""
+    c = aero
+    c.do("mesh.region_add", {"kind": "box"})
+    c.widget_do("mesh.region.0.xform", "set", True)
+    c.widget_do("mesh.region.0.xf.mx", "set", "12")
+    c.widget_do("mesh.region.0.xf.tz", "set", "35")
+    c.widget_do("mesh.region.0.xf.sx", "set", "300")
+    c.widget_do("mesh.region.0.xf.apply", "click")
+    saved = c.engine.state()["mesh"]["regions"][0]
+    assert saved["rotation"] is not None
+    folder = str(c.engine.project().dir)
+    c.do("study.new", {"name": "Other", "study": "external_aero"})                      # (the first study is closed: it was saved on the way)
+    c.do("study.open_folder", {"path": folder})
+    again = c.engine.state()["mesh"]["regions"][0]
+    assert again == saved
+    assert np.allclose(again["rotation"], rz(35)) or euler_deg(np.array(again["rotation"]))[2] == pytest.approx(35.0)
+    c.widget_do("mesh.region.0.xform", "set", True)                                     # (and the session starts from it: no change pending, the handles are on it)
+    assert not c.win.panels["mesh"].adv.xform.pending() and c.win.view.handles.on
+    assert regions.size_of(c.win.panels["mesh"].adv.xform.preview())[0] == pytest.approx(0.3)
+
+
+def test_the_cell_estimate_of_a_turned_box_is_that_of_the_box():
+    from simwb.qt.meshtools import region_cells
+    turned = regions.moved_and_turned(BOX, rz(37), [0, 0, 0])
+    assert region_cells(turned)[0] == pytest.approx(region_cells(BOX)[0])               # (turning does not change the volume: the estimate is of the box in its own axes, not the box round it)
+    lo, hi = regions.bounds(turned)
+    assert np.prod(np.subtract(hi, lo)) > 1.2 * np.prod(np.subtract(BOX["max"], BOX["min"]))     # (the box round it is larger: using it would over-count)
+
+
+def test_a_region_turns_and_moves_with_the_model_it_was_placed_on(aero):
+    """'Relative to the model': turn or move the whole model in the Geometry step and the regions go with it (as the rotating zones and rotors do)."""
+    pr = aero.engine.project()
+    pr.set_mesh(regions=[{**BOX, "name": "tilted", "min": [0.02, 0.0, 0.0], "max": [0.06, 0.01, 0.01], "rotation": rz(30).tolist()},
+                         {"name": "cyl", "shape": "cylinder", "start": [0.0, 0.0, 0.0], "end": [0.05, 0.0, 0.0], "radius": 0.01, "size": 0.005}])
+    before = [dict(r) for r in aero.engine.state()["mesh"]["regions"]]
+    c = np.asarray(pr._parts_center(), float)
+    D = rz(90)
+    j = pr.transform_geometry(matrix=D.tolist())                                           # (the Geometry step's turn: about the middle of the parts)
+    assert j.wait(300) and j.status == "done", j.error
+    after = aero.engine.state()["mesh"]["regions"]
+    box0, box1 = before[0], after[0]
+    mid0 = (np.asarray(box0["min"]) + np.asarray(box0["max"])) / 2
+    mid1 = (np.asarray(box1["min"]) + np.asarray(box1["max"])) / 2
+    assert mid1 == pytest.approx(D @ (mid0 - c) + c, abs=1e-9)                              # (the middle went with the model: turned about the middle of the parts)
+    assert np.asarray(box1["max"]) - np.asarray(box1["min"]) == pytest.approx(np.asarray(box0["max"]) - np.asarray(box0["min"]))
+    assert np.asarray(box1["rotation"]) == pytest.approx(D @ rz(30))                         # (and it kept its place against the model: turned by the same 90 degrees)
+    cyl0, cyl1 = before[1], after[1]
+    assert np.asarray(cyl1["start"]) == pytest.approx(D @ (np.asarray(cyl0["start"]) - c) + c, abs=1e-9)
+    assert np.asarray(cyl1["end"]) == pytest.approx(D @ (np.asarray(cyl0["end"]) - c) + c, abs=1e-9)
+    j = pr.transform_geometry(shift=[0.01, 0.0, 0.0])                                           # (a move of the whole model)
+    assert j.wait(300) and j.status == "done", j.error
+    moved = aero.engine.state()["mesh"]["regions"]
+    assert np.asarray(moved[0]["min"]) == pytest.approx(np.asarray(box1["min"]) + [0.01, 0, 0], abs=1e-9)
+    assert np.asarray(moved[1]["end"]) == pytest.approx(np.asarray(cyl1["end"]) + [0.01, 0, 0], abs=1e-9)
+    assert regions.transformed(BOX, np.eye(3), [0, 0, 0])["min"] == BOX["min"] and "rotation" not in regions.transformed(BOX, np.eye(3))
+
+
+def test_the_turn_of_a_region_goes_back_to_none_when_the_model_is_turned_back():
+    t = regions.transformed({**BOX, "rotation": rz(30).tolist()}, rz(-30))
+    assert "rotation" not in t
+
+
+def test_apply_and_cancel_of_a_region_are_in_the_bar_under_the_3d_view_and_at_the_top_of_the_session(aero):
+    c = aero
+    c.do("mesh.region_add", {"kind": "box"})
+    before = c.engine.state()["mesh"]["regions"][0]
+    c.widget_do("mesh.region.0.xform", "set", True)
+    bar = c.win.view.banner
+    text = c.win.shell.hint()[1]
+    assert text.startswith("Drag a ring to turn · drag an arrow to move") and "Esc cancels a drag" in text          # (the Geometry hint's wording)
+    assert bar.button.text() == "Cancel" and bar.button2.text() == "Apply" and bar.button2.isVisibleTo(bar)       # (next to each other, where the 3D view is)
+    x = c.win.panels["mesh"].adv.xform
+    c.win.view.handles.simulate_move("face.0.1", 0.02)
+    assert x.grow[0, 1] == pytest.approx(0.02, abs=1e-6)
+    bar.button2.click()                                                                                          # (Apply in the bar)
+    c._settle()
+    assert regions.size_of(c.engine.state()["mesh"]["regions"][0])[0] == pytest.approx(regions.size_of(before)[0] + 0.02, abs=1e-6)
+    assert not x.active and not bar.button2.isVisibleTo(bar)
+    c.widget_do("mesh.region.0.xform", "set", True)
+    c.win.view.handles.simulate_move("face.0.1", 0.02)
+    bar.button.click()                                                                                           # (Cancel in the bar)
+    c._settle()
+    assert not x.active and regions.size_of(c.engine.state()["mesh"]["regions"][0])[0] == pytest.approx(regions.size_of(before)[0] + 0.02, abs=1e-6)
+    # in the card the buttons come before the numbers: no scrolling past the fields to find them
+    c.widget_do("mesh.region.0.xform", "set", True)
+    c._settle()
+    idx = c._index()
+    adv = c.win.panels["mesh"].adv
+    y = lambda k: idx[k].mapTo(adv, idx[k].rect().topLeft()).y()  # noqa: E731
+    assert y("mesh.region.0.xf.apply") < y("mesh.region.0.xf.cancel") + 1 and y("mesh.region.0.xf.apply") < y("mesh.region.0.xf.mx")
+    assert abs(y("mesh.region.0.xf.apply") - y("mesh.region.0.xf.cancel")) < 5                                   # (side by side)
+
+
+def test_escape_cancels_the_drag_in_progress_before_anything_else(aero):
+    c = aero
+    c.do("mesh.region_add", {"kind": "box"})
+    c.widget_do("mesh.region.0.xform", "set", True)
+    hs, x = c.win.view.handles, c.win.panels["mesh"].adv.xform
+    start = hs.grab_px("face.0.1")
+    assert hs.press(*start, force=("face.0.1", "face"))
+    hs.drag_to(*hs._px(hs._taken(hs.specs["face.0.1"], "face") + hs._dir(hs.specs["face.0.1"]) * 0.03))
+    assert x.grow[0, 1] == pytest.approx(0.03, abs=1e-6)
+    c.win.view._hset_drag = True                                              # (what the viewport sets when its mouse handler took the press)
+    c.win.shell.escape()                                                       # (the window's Esc shortcut)
+    assert hs.drag is None and not x.grow.any() and x.active                  # (the drag is gone, the region is as it was, the session goes on)
+    c.win.shell.escape()                                                       # (a second Esc: the session's Cancel)
+    assert not x.active
+
+
+def test_a_turn_or_move_of_nothing_is_never_shown_as_minus_zero(aero):
+    from simwb.qt.forms import fmt_num
+    assert fmt_num(-0.0) == "0" and fmt_num(0.0) == "0" and fmt_num(-1.5) == "-1.5"
+    c = aero
+    c.do("mesh.region_add", {"kind": "box"})
+    c.widget_do("mesh.region.0.xform", "set", True)
+    c.widget_do("mesh.region.0.xf.tz", "set", "30")
+    c.widget_do("mesh.region.0.xf.tz", "set", "0")                              # (turned back to nothing: the angles of the matrix are -0 and so on)
+    c.widget_do("mesh.region.0.xf.reset", "click")
+    x = c.win.panels["mesh"].adv.xform
+    from simwb.qt.gizmo import rot_about
+    x.R = rot_about(2, -1e-12)                                                   # (a turn of a hair below zero)
+    x._fill_fields()
+    for k in ("tx", "ty", "tz", "mx", "my", "mz"):
+        assert c.widget_do(f"mesh.region.0.xf.{k}")["value"] not in ("-0", "-0.0"), k

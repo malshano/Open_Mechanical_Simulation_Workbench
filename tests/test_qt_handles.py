@@ -266,3 +266,86 @@ def test_the_control_api_lists_the_handles_and_drags_them_by_name(ctl):
         ctl.do("view.handle", {"key": "plane9", "value": 1})
     with pytest.raises(ValueError, match="one number"):
         ctl.do("view.handle", {"key": "plane1", "value": [1, 2, 3]})
+
+
+# ---------------------------------------------------------------- Escape, and which handle is taken where they overlap
+def _bare(ctl, specs):
+    v = ctl.win.view
+    v.iren.setFixedSize(900, 700)                      # (without an OpenGL window the 3D view is 100 x 30 pixels: too small to tell handles apart)
+    cam = v.ren.GetActiveCamera()
+    cam.SetPosition(2.0, 1.5, 1.2)
+    cam.SetFocalPoint(0, 0, 0)
+    cam.SetViewUp(0, 0, 1)
+    v.ren.ResetCameraClippingRange()
+    v.handles.set(specs)
+    return v.handles
+
+
+def test_escape_during_a_drag_puts_every_kind_of_handle_back(ctl):
+    log = []
+    cb = lambda key, v, final: log.append((key, v, final))  # noqa: E731
+    box = [-0.5, -0.5, -0.5, 0.5, 0.5, 0.5]
+    hs = _bare(ctl, [
+        {"key": "plane", "kind": "plane", "axis": 1, "value": 0.1, "box": box, "callback": cb},
+        {"key": "pt", "kind": "point", "point": [0.2, 0.0, 0.0], "size": 0.3, "callback": cb},
+        {"key": "ring", "kind": "ring", "axis": 2, "point": [0, 0, 0], "radius": 0.4, "callback": cb},
+        {"key": "face", "kind": "face", "point": [0.0, 0.0, 0.3], "dir": [0, 0, 1], "length": 0.1, "callback": cb}])
+    for key, part, far in (("plane", "axis", 0.3), ("pt", "axis0", [0.45, 0.0, 0.0]), ("ring", "ring", 40.0), ("face", "face", 0.1)):
+        before = {k: dict(v) for k, v in hs.specs.items()}[key]
+        start = hs.grab_px(key, part)
+        assert hs.press(*start, force=(key, part))
+        # (drag by hand to where the control would end up, then Escape)
+        s = hs.specs[key]
+        if key == "ring":
+            for i in range(1, 5):
+                hs.drag_to(*hs._px(hs._ring_point(s, 20.0 + far * i / 4)))
+            assert s["value"] != 0.0
+        elif key == "plane":
+            hs.drag_to(*hs._px(hs._taken(s, part) + [0, far - 0.1, 0]))
+        elif key == "pt":
+            hs.drag_to(*hs._px(hs._taken(s, part) + np.array(far) - np.array(s["point"])))
+        else:
+            hs.drag_to(*hs._px(hs._taken(s, part) + np.array([0, 0, far])))
+        assert hs.drag is not None and log[-1][2] is False
+        assert hs.cancel() and hs.drag is None
+        s = hs.specs[key]
+        if key == "plane":
+            assert s["value"] == pytest.approx(before["value"])
+        elif key == "pt":
+            assert s["point"] == pytest.approx(before["point"])
+        else:
+            assert s["value"] == 0.0
+        k, v, final = log[-1]
+        assert k == key and final is True                                      # (the control is told it ended where it began)
+        if key == "plane":
+            assert v == pytest.approx(0.1)
+        elif key == "pt":
+            assert v == pytest.approx([0.2, 0.0, 0.0])
+        else:
+            assert v == 0.0
+    assert not hs.cancel()                                                     # (nothing to cancel)
+
+
+def test_handles_that_overlap_are_each_taken_at_their_own_end(ctl):
+    """A zone's move arrow and its length handle lie on one line: the length handle reaches beyond the move arrow and is taken at its square end; a ring that crosses
+    the radius arrow's line is still taken on the ring."""
+    hs = _bare(ctl, [
+        {"key": "move", "kind": "point", "point": [0, 0, 0], "size": 0.5},
+        {"key": "tilt", "kind": "ring", "axis": 0, "point": [0, 0, 0], "radius": 0.9, "value": 0.0},
+        {"key": "len", "kind": "face", "axis": 0, "point": [0.0, 0.0, 0.15], "dir": [0, 0, 1], "length": 0.5, "value": 0.0},
+        {"key": "len2", "kind": "face", "axis": 0, "point": [0.0, 0.0, -0.15], "dir": [0, 0, -1], "length": 0.12, "start": 0.5, "value": 0.0},      # (starts beyond the move arrow, a line leads to it)
+        {"key": "rad", "kind": "face", "axis": 1, "point": [0.0, 0.3, 0.0], "dir": [0, 1, 0], "length": 0.3, "value": 0.0}])
+    tip_len = hs._arrows(hs.specs["len"])[0][2]
+    tip_move = hs._arrows(hs.specs["move"])[2][2]
+    assert hs.pick(*hs._px(tip_len)) == ("len", "face")                          # (its square end, beyond the move arrow)
+    assert hs.pick(*hs._px(tip_move - [0, 0, 0.03])) == ("move", "axis2")      # (the move arrow near its own tip)
+    assert hs.pick(*hs._px(hs._ring_point(hs.specs["tilt"], 20.0))) == ("tilt", "ring")
+    assert hs.pick(*hs._px(hs._ring_point(hs.specs["tilt"], 200.0))) == ("tilt", "ring")
+    assert hs.pick(*hs._px(hs._arrows(hs.specs["rad"])[0][2])) == ("rad", "face")
+    mid_len2 = hs._px(sum(hs._arrows(hs.specs["len2"])[0][1:]) / 2)
+    assert hs.pick(*mid_len2) == ("len2", "face")                                 # (the whole arrow of a handle that starts beyond the move arrow is its own)
+    for k in ("move", "len", "len2", "rad", "tilt"):                           # (and every handle is reachable where it says it is taken)
+        part = {"move": "axis2", "len": "face", "len2": "face", "rad": "face", "tilt": "ring"}[k]
+        assert hs.pick(*hs.grab_px(k, part)) == (k, part), k
+    far = hs._px(hs._ring_point(hs.specs["tilt"], 110.0) * 1.0 + [0.0, 0.0, 0.6])
+    assert hs.pick(*far) is None                                               # (empty space is nothing)

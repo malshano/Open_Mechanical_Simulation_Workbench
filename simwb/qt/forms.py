@@ -19,7 +19,7 @@ def fmt_num(v) -> str:
         f = float(v)
     except (TypeError, ValueError):
         return str(v)
-    return f"{f:.6g}"
+    return f"{0.0 if f == 0 else f:.6g}"                      # (never "-0")
 
 
 def _met(show_if: dict | None, values: dict) -> bool:
@@ -118,6 +118,26 @@ class ParamForm(QWidget):
         self._show_help()
         self._visibility()
         self.changed.emit(key, val)
+
+    def show_value(self, key: str, value, force: bool = False):
+        """Show a value that did not come from typing (a handle in the 3D view is being dragged): nothing is emitted, the typed number and the handle agree."""
+        row = self.rows.get(key)
+        if row is None:
+            return
+        c = row[1]
+        self.vals[key] = value
+        try:
+            if hasattr(c, "setText"):
+                if force or not c.hasFocus():
+                    c.setText(fmt_num(value) if value not in (None, "") else "")
+            else:
+                i = c.findData(value)
+                if i >= 0 and i != c.currentIndex():
+                    c.blockSignals(True)
+                    c.setCurrentIndex(i)
+                    c.blockSignals(False)
+        except RuntimeError:
+            self.rows.pop(key, None)
 
     def _show_help(self):
         for k, (lab, c, expl, col) in self.rows.items():

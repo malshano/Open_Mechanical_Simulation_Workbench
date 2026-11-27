@@ -52,7 +52,9 @@ class MeshPanel(_Panel):
                                       "below about 1.5)"),
               ("volume", "Cell volume", "Colour each cell by its volume (mm³)"),
               ("layers", "Wall layers", "Show the mesh the solver runs, coloured by layer (needs wall layers on a tetrahedral mesh): a cut through "
-                                        "the object shows each layer next to the wall")]
+                                        "the object shows each layer next to the wall"),
+              ("zones", "Rotating zones", "Colour the cells that turn with a rotating zone (MRF or sliding mesh) and the cells round it: a cut through the "
+                                          "zone shows where its boundary (the sliding interface) lies in the mesh")]
     TET_ONLY = ("size", "aspect", "growth", "volume")
 
     def bind(self, win):
@@ -69,6 +71,8 @@ class MeshPanel(_Panel):
         self.adv.xform.stop()
         v = self.view
         v.region_view.clear()
+        v.zone_view.clear()
+        v.legend.set_extra([])
         v.layer_view.clear()
         v.set_labels([])
         v.set_face_tints({})
@@ -118,7 +122,9 @@ class MeshPanel(_Panel):
     def _face_picked(self, fid, add):
         if self.win is None or self.win.step != "mesh":
             return
-        if getattr(self, "picking_part", False):
+        if self.adv.xform.aligning:
+            self.adv.xform.face_picked(int(fid))
+        elif getattr(self, "picking_part", False):
             self.adv.part_from_face(int(fid))
         elif self.picking_faces:
             self.toggle_picked(int(fid))
@@ -159,18 +165,53 @@ class MeshPanel(_Panel):
         faces = [f for f in self.engine.project().faces() if f.get("kind") == "body"] if lay else []
         self.view.layer_view.set(faces, lay["total"] if lay else 0.0, (self.engine.pid, st["geometry"].get("updated")))
         from ..regionview import colour_of
+        from ... import zones as zone_tools
+        from ..zoneview import ZONE_COLOUR
+        zs = st.get("moving_zones") or []
+        self.view.zone_view.set(zs)
+        zlab = [{"point": zone_tools.label_point(z), "color": zone_tools.colour_of(i), "key": f"zone{i}",
+                 "text": f"{z['name']}: {fmt_num(z['rpm'])} rpm ({'sliding mesh' if z.get('method') == 'sliding' else 'MRF'})"
+                         + (f", cells {fmt_num(round(z['cell_size'] * 1000, 3))} mm" if z.get("cell_size") else "")}
+                for i, z in enumerate(zs)]
         self.view.set_labels([{"point": self.view.region_view.label_point(r), "text": f"{r.get('name', '')}: {fmt_num(round(r['size'] * 1000, 3))} mm",
-                               "color": colour_of(i), "key": f"region{i}"} for i, r in enumerate(regs)] if regs else [])
+                               "color": colour_of(i), "key": f"region{i}"} for i, r in enumerate(regs)] + zlab)
         tints = {}
         for r in m.get("refinements") or []:
             for f in r.get("faces") or []:
                 tints[int(f)] = "#14b8a6"
-        self.view.set_face_tints(tints)
+        zt = {}
+        if zs:                                                       # (the parts inside a rotating zone, and the ones its boundary cuts through, as in Setup)
+            try:
+                pr = self.engine.project()
+                zt = zone_tools.part_tints([zone_tools.classify_parts(z, pr.faces()) for z in zs])
+            except Exception:  # noqa: BLE001
+                zt = {}
+        self.view.set_face_tints({**zt, **tints})
+        self._draw_interface(zs)
+
+    def _draw_interface(self, zs):
+        """The meshed boundary of the rotating zones (the sliding interface), in the 3D view and counted under the colour buttons."""
+        items = []
+        if zs and self.zones_ok and self.engine.pid:
+            try:
+                items = self.engine.project().zone_interface()
+            except Exception:  # noqa: BLE001
+                items = []
+        show = bool(items) and self.iface_chk.isChecked()
+        self.view.zone_view.set_interface(items if show else [])
+        from ..zoneview import INTERFACE_COLOUR
+        self.view.legend.set_extra([{"color": INTERFACE_COLOUR, "name": "Zone boundary (sliding interface)"}] if show else [])       # (the legend's colours are the cells'; this is what the pink is)
+        self.iface_chk.setVisible(bool(items))
+        self.iface_note.setVisible(bool(items))
+        self.iface_note.setText("\n".join(
+            f"{it['name']}: {'sliding interface' if it['method'] == 'sliding' else 'zone boundary'}, {it['faces']:,} faces, {fmt_num(round(it['area'] * 1e4, 2))} cm²"
+            for it in items))
 
     def __init__(self, engine, parent=None):
         super().__init__(engine, parent)
         self.picking_part = False
         self.picking_faces = False
+        self.zones_ok = False
         self.picked: list = []                              # (the faces collected for the next part sizing)
         self.color = "quality"
         self.axis = ""
@@ -257,6 +298,14 @@ class MeshPanel(_Panel):
             self.v.addWidget(w)
         self.color_note = wid(_muted(""), "mesh.color.note")
         self.v.addWidget(self.color_note)
+        self.iface_chk = wid(QCheckBox("Show the zone boundaries"), "mesh.zones.interface")
+        self.iface_chk.setChecked(True)
+        self.iface_chk.setToolTip("Draw the boundary of each rotating zone as the mesh has it (pink): for a sliding-mesh zone the sliding interface, where the turning cells "
+                                  "meet the fixed ones. It should be a clean cylinder")
+        self.iface_chk.toggled.connect(lambda _on: self.draw_marks())
+        self.v.addWidget(self.iface_chk)
+        self.iface_note = wid(_muted(""), "mesh.zones.interface_text")
+        self.v.addWidget(self.iface_note)
         self.budget = wid(Budget(), "mesh.budget")
         self.v.addWidget(self.budget)
         row = QHBoxLayout()
@@ -441,6 +490,8 @@ class MeshPanel(_Panel):
             color = "quality"
         if color == "layers" and not self.layers_ok:
             color = "quality"
+        if color == "zones" and not self.zones_ok:
+            color = "quality"
         return self.axis or None, self.frac, color, (self.poor_thr if self.poor_on else None)
 
     def mesh_check(self, levels: int):
@@ -551,6 +602,14 @@ class MeshPanel(_Panel):
         if show_card:
             jm = P.JOBS.latest(self.engine.pid, "mesh") if self.engine.pid else None
             self.layer_card.set_data(st, t, bool(jm and jm.status == "running"))
+        zs = st.get("moving_zones") or []
+        self.zones_ok = bool(have and aero and not self.hex and zs and (self.engine.project().mesh_zone_count() > 0))
+        zb = self.color_btns["zones"]
+        zb.setEnabled(self.zones_ok)
+        zb.setToolTip(next(tip for c, _l, tip in self.COLORS if c == "zones") if self.zones_ok else
+                      ("No rotating zone in Setup yet" if not zs else "The mesh has no rotating zone yet: generate the mesh again after adding or changing a zone"))
+        if self.color == "zones" and not self.zones_ok:
+            self.color = "quality"
         lb = self.color_btns["layers"]
         self.color_rows[2].setVisible(bool(aero and not self.hex))
         lb.setEnabled(self.layers_ok)

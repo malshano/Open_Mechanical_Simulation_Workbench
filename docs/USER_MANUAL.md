@@ -659,7 +659,12 @@ The tabs are the ones of section 8, with these differences and additions.
   | Pinned value (each) | Probe | ball on the model | **X, Y, Z** (mm) under each pin: type a point and it goes to the nearest place on the model |
   | Ends A and B of the line plot | Probe | ball on the model | **X, Y, Z** of each end |
 
-  The refinement regions and the rotating zones of the Mesh and Setup steps have their own handles (they are not in the Results step).
+  The refinement regions of the Mesh step and the rotating zones of the Setup step use the same handles, drawn the same way: **three arrows** (red x, green y,
+  blue z) and a **ball** move something, **rings** turn it (Shift: 5 degree steps), and a **square-ended arrow** on a face resizes it. The pointer becomes a hand over a
+  handle, the handle lights up, and a line in the corner of the view says what the drag does (for example *Turning about z: +30.0°*). In every step the numbers and
+  the handles follow each other, and what is expensive waits until you let go. **Esc during a drag** puts the handle back where it was when you pressed the mouse
+  (in every step: the shared handles, the Geometry step's rings and arrows and a symmetry plane's arrow); a second Esc presses the **Cancel** of the bar under the 3D view. Where two handles lie on one line, a move arrow is taken along its shaft and a
+  resize arrow at its square end; a ring is taken anywhere on it.
 - **Probe**: pin values by clicking the coloured result; line plot between two points or from the minimum to the maximum.
 - **Time bar** (Display, under the field; transient results): the saved time shown, a slider over the saved times and **▶ Play** /
   **❚❚ Pause**. Pinned values are cleared when the time changes; the line plot follows the time. A note says when the field hardly
@@ -764,6 +769,26 @@ gravity too). A line at the top of the panel says what the last action did, or w
 - **Moving zones** (flow studies): **＋ Add rotating zone**; each zone has its name, **Method** (MRF steady, or sliding mesh in a transient external
   flow), speed, axis, centre, radius, length, **Cell size inside** (empty = automatic), **Fit around part** and **⌖ Centre on a cylinder or circular
   edge…**. If the picked axis is not along x, y or z, the panel offers **Turn the model** (or **Leave it**).
+  **Each zone is drawn in the 3D view** (Setup and Mesh) as a translucent cylinder in **its own colour** (purple, pink, green, amber for the first four zones: the card's swatch, the tints and the Mesh colouring by the cells that turn use the same) with its name, speed and method on it; a sliding-mesh zone has a heavier
+  outline, because its boundary is the sliding interface. A tick on the two flat faces shows how far it has turned. Under the zone's numbers a line says which parts
+  are **inside** (they turn with it), which are **outside**, and warns in the warning colour about a part the zone's boundary cuts through (the mesh cannot
+  match there: make the zone larger or smaller). **Preview the turn** (a slider over one revolution, and ▶) turns a purple ghost of what is inside the zone;
+  with a transient analysis it says how many saved frames the angle is (the **Saved frame every** setting). Nothing is stored; leaving the step puts it away.
+  **Parts in the 3D view**: the parts that are inside a zone are tinted in that zone's colour, and a part its boundary cuts through in the warning amber (the same
+  words as the line on the card; a part with less than 1 % of its surface in the zone counts as outside and the card says *less than 1 %*). The tint is in Setup
+  and in Mesh, under the colour of a boundary condition.
+  **Drag a zone in the 3D view**: the zone whose card you used last shows its handles (its **Show handles in the 3D view** box hides them; a new zone shows them at
+  once). The three arrows and the ball move it, a square-ended arrow on each flat face changes its **Length along the axis**, the one on its side its **Radius**, and the
+  two rings turn its **Axis** a quarter turn at a time (a zone has to lie along x, y or z: the ring jumps from one axis to the next, the line in the corner says which
+  axis it shows and when it will jump, and the card's **Axis** follows; for any other direction use **Centre on a round edge** and **Turn the model**). The **Centre**,
+  **Radius**, **Length** and **Axis** in the card follow the handles and the handles follow the numbers. **Like a refinement region, a dragged zone is only previewed**:
+  the card shows **Apply** and **Cancel** side by side (and the bar under the 3D view has them too), a number typed meanwhile changes the preview, and nothing is
+  stored - and the mesh does not become out of date - until you press **Apply**. **Esc** cancels a drag; while the preview overlaps another zone the card, the bar and the line in the corner say which one ("Apply will be refused"), and if you press **Apply** anyway the
+  status line keeps the reason and the preview stays for you to change. The bar under the 3D view is one short line (*Not stored: Apply / Cancel*) while something is pending and does not change
+  height during a drag. **The smallest a zone can be**: a few cells of its **Cell size inside** (4 for the radius, 2 for the length) or, without one, 2 %
+  (radius) and 1 % (length) of the model; a drag stops there, a typed smaller radius or length is raised to it and a line says so in plain words (only the number you typed is changed: a speed, a method or a cell size never changes the size of a zone, and a zone that
+  is already smaller than this in an older study is never made larger). A **Cell size inside** that the zone is too small for is refused with *This cell size needs a zone of at least X mm* and the zone is left
+  as it is. The engine refuses a zone smaller than half of the least. The handles are put away while you are choosing a centre of rotation or the faces of a condition, so that a click reaches the model.
 - The settings are headed (**Flow condition**, **Loads**, **Modes and vibration source** ...). A transient external flow with
   sliding zones shows a **Suggested end time** with **Use it**.
 
@@ -805,13 +830,24 @@ layers** - and **Generate mesh**.
 - **Refinement regions are drawn in the 3D view** before you mesh: each box or cylinder (a ring too) as a translucent body with an outline, in
   the colour of its swatch in the list, with its name and cell size written on it; the region you edit is drawn stronger. **◎** zooms to a
   region, and **Show the regions in the 3D view** switches the drawing off. Edit the numbers and the drawing follows.
-- **Move / turn a region**: press **Move / turn…** on a region's card. Resize it in the same session: **square-ended arrows** on its faces (a box has six, a cylinder one at each end and one for the radius) move that face while the
-  opposite one stays (Shift: round steps), or type the **Size** (mm, in the region's own axes) or **Scale all** (a percentage of the stored region).
-  A gizmo appears at the region's middle, as in the Geometry step: drag an
-  arrow to move it along x, y or z, the ball to move it freely, a ring to turn it about x, y or z (hold Shift for round steps); or type
-  **Move by** (mm) and **Turn about** (degrees). The region is drawn as it would be; **Apply** stores it, **Reset** puts the preview back,
-  **Cancel** leaves the region alone. A box keeps its turn (a note on its card says so; its corner numbers are the box before the turn);
-  a cylinder moves its end points. The tetrahedral mesh follows a turned box exactly; the hex-dominant mesh refines the box round it.
+- **Move, turn and resize a region**: press **Move / turn…** on a region's card. The region gets the handles of the 3D view (the same as in the Results step and for
+  the rotating zones): **three arrows** (red x, green y, blue z) and a white **ball** at its middle move it, three **rings** (about x, y, z) turn it, and a
+  **square-ended arrow** on each face resizes it (a box has six, a cylinder one at each end and one for the radius): the face moves and the opposite one
+  stays. Hold **Shift** for round steps (5 degrees, round millimetres); **Esc** cancels a drag. Or type **Move by** (mm), **Turn about** (degrees), **Size** (mm, in the
+  region's own axes) or **Scale all** (a percentage of the stored region): the numbers and the handles follow each other, and a line in the corner of the view says what
+  the drag does. The region is drawn as it would be; nothing is stored and nothing is meshed until you press **Apply**. **Apply**, **Reset** and **Cancel** are at the top
+  of the session (before the numbers), and **Apply** and **Cancel** are also in the bar under the 3D view, so they can be pressed without scrolling. A box keeps its turn
+  (a note on its card says so; its corner numbers are the box before the turn); a cylinder moves its end points.
+  A turned box is meshed as the turned box. **Tetrahedral mesh**: a size field in the box's own axes, checked on a real (tiny) Gmsh mesh.
+  **Hex-dominant mesh**: the turned box is written to snappyHexMesh as a closed surface of its own, so the fine cells fill the box and not the larger box round it;
+  this has been checked as written files (the surface is closed, faces outward, the volume of the box, and the `snappyHexMeshDict` names it) but **not yet by a real
+  snappyHexMesh run** (OpenFOAM was not available where it was built).
+  **Regions follow the model**: turn or move the whole model in the Geometry step and the refinement regions turn and move with it, as the rotating zones do (moving
+  one body only leaves them where they are).
+  **Line up with a face…** (in the same session) turns the region so that the side of it that already points closest to a face is parallel to that face
+  (a cylinder: its axis): click the button, then click a face of the model or a wall of the air volume (the handles are put away while you click, so that
+  they never take the click). Tick **and put its middle on the face** to move the region there too. It is only previewed: the numbers show the turn, and
+  **Apply** stores it.
 - **Refinement regions**: **＋ Box** and **＋ Cylinder** as before; each region now shows roughly how many cells it alone makes (in the
   warning colour above three million), and a box has **Fit around part…** to put it round a part. In a flow study with rotating zones,
   **＋ Wake behind rotating zones** adds a cylinder of zone-size cells two diameters downstream of each zone, and **＋ Tip-vortex rings**
@@ -822,7 +858,10 @@ layers** - and **Generate mesh**.
   polyhedra, the largest aspect ratio and the share of the wall that got layers; with wall layers also the cells with the layers, the
   layers made, the first and all layers and the non-orthogonality and skewness of the mesh with them; then the time it took.
 - **Colour the mesh by** quality, **Cell size**, **Region**, **Aspect ratio**, **Size jump** (the largest size ratio to a neighbour),
-  **Cell volume** or **Wall layers** (flow studies with layers: the mesh the solver runs, each layer in its own colour and the tetrahedra
+  **Cell volume**, **Rotating zones** (flow studies with a rotating zone in a mesh made after it was added: the cells that turn with each zone in its
+  colour, the others grey; a cut through the zone shows where its boundary, the sliding interface, lies in the mesh). Under the colour buttons, **Show the zone
+  boundaries** draws the meshed boundary of each zone as a pink surface (for a sliding-mesh zone the **sliding interface**, where the turning cells meet the fixed ones;
+  it should be a clean cylinder) and says how many faces it has and its area, for example *prop: sliding interface, 4,120 faces, 28.3 cm²* or **Wall layers** (flow studies with layers: the mesh the solver runs, each layer in its own colour and the tetrahedra
   in grey; choosing it opens a cut through the object if none is open). A hex-dominant mesh is shown by quality and region only (the other buttons are greyed and say why). Under the buttons,
   the **cell budget** shows, for each band of cell sizes, the share of the cells and of the volume, with remarks when a size jump or a
   fine region uses too many cells.
@@ -878,8 +917,8 @@ yourself afterwards.
 
 What is still missing in the window is small:
 
-- **Dragging in the 3D view**: the orange handles of the air volume, and dragging a symmetry plane, a rotor disc or a rotating zone with the
-  mouse. Type the values in the panel instead.
+- **Dragging in the 3D view**: the orange handles of the air volume and a rotor disc cannot be dragged yet. Type the values in the panel instead.
+  (A symmetry plane, a refinement region, a rotating zone and everything in the Results step have handles.)
 - **Symbols on the model**: block, roller and plate symbols for each kind of condition. The desktop window shows each
   condition by its tint, its label and arrows.
 - **A per-part gizmo preview inside a flow study**: the model turns and moves as a whole there (a single part can be moved in heat,

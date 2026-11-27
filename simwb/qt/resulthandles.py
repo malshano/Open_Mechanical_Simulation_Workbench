@@ -70,11 +70,13 @@ class ResultHandles:
             size = SIZE_FRACTION * self._scene_diag()
             for i, pin in enumerate(p.pins):
                 specs.append({"key": f"pin{i + 1}", "kind": "point", "point": pin["point"], "size": size, "resolver": partial(self._resolve, f"pin{i + 1}"),
-                              "color": "#f59e0b", "callback": partial(self._pin, i)})
+                              "color": "#f59e0b", "callback": partial(self._pin, i),
+                              "on_press": partial(self._remember, ("pin", i)), "on_cancel": partial(self._forget, ("pin", i))})
             if len(p.line_ends) >= 2:
                 for k, nm in enumerate("AB"):
                     specs.append({"key": f"line{nm}", "kind": "point", "point": p.line_ends[k], "size": size, "resolver": partial(self._resolve, f"line{nm}"),
-                                  "color": "#e5e7eb", "callback": partial(self._line, k)})
+                                  "color": "#e5e7eb", "callback": partial(self._line, k),
+                                  "on_press": partial(self._remember, ("line", k)), "on_cancel": partial(self._forget, ("line", k))})
         ax = p.section_axis() if not p.tab_btns["flow"].isVisibleTo(p) else ""
         if ax and p.section_box.isVisibleTo(p):
             ext = p.section_extent()
@@ -176,6 +178,26 @@ class ResultHandles:
             return None
         self._hit[key] = h
         return h[1]
+
+    def _remember(self, what, key):
+        """A pinned point or an end of the line is taken: what it was, for Escape."""
+        kind, i = what
+        self._snap = {"what": what, "value": dict(self.p.pins[i]) if kind == "pin" else list(self.p.line_ends[i])}
+
+    def _forget(self, what, key):
+        """Escape during the drag of a pinned point or an end of the line: it goes back to where it was."""
+        snap, self._snap = getattr(self, "_snap", None), None
+        kind, i = what
+        if not snap or snap["what"] != what:
+            return self.sync()
+        if kind == "pin" and i < len(self.p.pins):
+            self.p.pins[i] = snap["value"]
+            self.p._pin_texts(i)
+            self.p._pins()
+            self.p.draw_marks()
+        elif kind == "line" and i < len(self.p.line_ends):
+            self.p.set_line_end(i, snap["value"], True)
+        self.sync()
 
     def _pin(self, i, key, point, final):
         h = self._hit.get(key)

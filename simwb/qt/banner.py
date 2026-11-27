@@ -24,11 +24,16 @@ class Banner(QFrame):
         self.button = wid(QPushButton(""), "view.banner.button")
         self.button.setObjectName("ghostBorder")
         self.button.setToolTip("Finish or stop what this hint is asking for")        # (replaced by the hint's own words while one is shown)
+        self.button2 = wid(QPushButton(""), "view.banner.button2")       # (a second button, next to the first: Apply beside Cancel)
+        self.button2.setObjectName("primary")
         row.addWidget(self.label, 1)
+        row.addWidget(self.button2)
         row.addWidget(self.button)
         self._items: dict = {}          # key -> (priority, text, button text, callback)
         self._cb = None
         self.button.clicked.connect(lambda: self._cb and self._cb())
+        self._cb2 = None
+        self.button2.clicked.connect(lambda: self._cb2 and self._cb2())
         theme.bus.changed.connect(self._theme)
         self._style()
         self._refresh()
@@ -44,9 +49,9 @@ class Banner(QFrame):
         self.setStyleSheet(f"QFrame#viewBanner {{ background: {t['panel2']}; border-top: 1px solid {t['line']}; }}")
         self.label.setStyleSheet(f"background: {t['panel2']};")
 
-    def set(self, key: str, text: str, priority: int = 0, button: str | None = None, on_click=None, tip: str | None = None):
-        """Ask for the bar with this text (and a button, with its tooltip) under the name `key`."""
-        item = (priority, text, button, on_click, tip)
+    def set(self, key: str, text: str, priority: int = 0, button: str | None = None, on_click=None, tip: str | None = None, extra: tuple | None = None):
+        """Ask for the bar with this text (and a button, with its tooltip; `extra`: (text, callback, tooltip) of a second button, shown before it) under the name `key`."""
+        item = (priority, text, button, on_click, tip, extra)
         if self._items.get(key) == item:
             return
         self._items[key] = item
@@ -59,9 +64,11 @@ class Banner(QFrame):
     def _refresh(self):
         if not self._items:
             self.setVisible(False)
-            self._cb = None
+            self.button.setVisible(False)
+            self.button2.setVisible(False)
+            self._cb = self._cb2 = None
             return
-        _, text, button, cb, tip = max(self._items.values(), key=lambda v: v[0])
+        _, text, button, cb, tip, extra = max(self._items.values(), key=lambda v: v[0])
         self.label.setText(text)
         self.label.setToolTip(text)
         self.button.setVisible(bool(button))
@@ -69,6 +76,11 @@ class Banner(QFrame):
             self.button.setText(button)
             self.button.setToolTip(tip or "Stop picking the plane: the face and any previewed turn stay")
         self._cb = cb
+        self.button2.setVisible(bool(extra))
+        if extra:
+            self.button2.setText(extra[0])
+            self.button2.setToolTip(extra[2] if len(extra) > 2 else "")
+        self._cb2 = extra[1] if extra else None
         self.setVisible(True)
 
     def text(self) -> str:

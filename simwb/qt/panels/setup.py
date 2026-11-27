@@ -81,6 +81,7 @@ class SetupPanel(_Panel):
         self.draw_marks()
 
     def left(self):
+        self.rot.stop_preview()
         self.view.set_pick_mode(None)
         self.view.set_selection([])
         self.view.set_face_tints({})
@@ -142,9 +143,10 @@ class SetupPanel(_Panel):
             a["color"] = a.get("color") or t["ink"]
         for la in labels:
             la["color"] = la.get("color") or t["muted"]
-        self.view.set_face_tints(tints)
+        self.view.set_face_tints({**self.rot.part_tints(), **tints})          # (the parts in a zone, under the conditions' own tints)
         self.view.set_labels(labels)
         self.view.set_arrows(arrows)
+        self.rot.draw_zones()
         if self.active:
             bc = next((b for b in st.get("bcs") or [] if b["id"] == self.active), None)
             self.view.set_selection(bc.get("faces", []) if bc else [])
@@ -158,7 +160,7 @@ class SetupPanel(_Panel):
         sig = json.dumps([st["study"], st.get("bcs"), [(b["id"], b["name"], b.get("material"), b.get("material_is_default"), b.get("heat_W"))
                           for b in st["body_list"]], st.get("settings"), st.get("checks"), self.active, theme.effective(), hidden,
                           st.get("symmetry"), st.get("rotors"), st.get("moving_zones"), (st.get("domain") or {}).get("enclosure_mode"),
-                          st["geometry"].get("updated"), busy, self.sym.draft, self.sym.picking, self.axis_pick, self.rot.oblique, materials.VERSION],
+                          st["geometry"].get("updated"), busy, self.sym.draft, self.sym.picking, self.axis_pick, self.rot.oblique, self.rot.handle_zone, materials.VERSION],
                          default=str, sort_keys=True) + str(mode.simple())
         if sig == self._sig:
             self.draw_marks()

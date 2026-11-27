@@ -747,6 +747,7 @@ class MainWindow(QMainWindow):
                     info = next((f for f in self.panels["results"].fields if f["name"] == r["field"]), {})
                     flow = st["study"] in AIR_KINDS
                     if flow and r.get("flow") and (any(r["flow"][k]["on"] for k in ("iso", "volume", "vectors", "streams")) or r["flow"].get("planes")):
+                        self.view.show_geometry(False)    # (the CAD model must not stay drawn beside the object of the result: a turning propeller showed twice)
                         self._draw_flow_tools(r, info)
                         return
                     rng = r["range"]

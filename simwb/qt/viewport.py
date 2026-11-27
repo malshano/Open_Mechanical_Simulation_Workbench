@@ -34,7 +34,7 @@ from .handles import HandleSet
 from .planehandle import PlaneHandle
 from .layerview import LayerView
 from .regionview import RegionView
-from .scalehandles import ScaleHandles
+from .zoneview import ZoneView
 from .gizmo import RotateGizmo
 from .legend import Legend
 from .picking import FaceIndex, locator_for, long_segment
@@ -143,11 +143,10 @@ class Viewport(QWidget):
         self.mark_actors: list = []         # selection, hover and tint highlights
         self.layer_view = LayerView(self)           # the wall layers as a shell round the object (layerview.py)
         self.region_view = RegionView(self)         # the refinement regions of the Mesh step (regionview.py)
+        self.zone_view = ZoneView(self)             # the rotating zones of the Setup and Mesh steps (zoneview.py)
         self.plane_handle = PlaneHandle(self)      # the preview of a symmetry plane and its handle (planehandle.py)
-        self.scale_handles = ScaleHandles(self)  # the resize handles of a refinement region (scalehandles.py)
-        self.handles = HandleSet(self)          # the drag handles of the Results step's positioning controls (handles.py)
+        self.handles = HandleSet(self)          # the drag handles of the 3D view: the Results step's positioning controls, the refinement regions, the rotating zones (handles.py)
         self._hset_drag = False
-        self.region_gizmo = RotateGizmo(self)    # moves and turns a refinement region (its own: the model is not previewed with it)
         self.gizmo = RotateGizmo(self)      # the rings that turn the model, its preview and the align arrow (gizmo.py)
         self._gizmo_drag = False
         self._gz = self.gizmo                # the gizmo that took the press
@@ -188,6 +187,7 @@ class Viewport(QWidget):
             self.iren.AddObserver("LeftButtonPressEvent", self._on_press, 100)
             self.iren.AddObserver("LeftButtonReleaseEvent", self._on_release, 100)
             self.iren.AddObserver("MouseMoveEvent", self._on_move, 100)
+            self.iren.AddObserver("KeyPressEvent", self._on_key, 100)
 
     # ------------------------------------------------------------------ small things
     def apply_theme(self):
@@ -641,7 +641,7 @@ class Viewport(QWidget):
     # (the mouse: a press and release that hardly moved is a click, anything else is the camera being turned)
     def _on_press(self, obj, event):
         self._press = tuple(self.iren.GetEventPosition())
-        for g in (self.scale_handles, self.gizmo, self.region_gizmo):
+        for g in (self.gizmo,):
             if g.press(self._press[0], self.gizmo._size()[1] - 1 - self._press[1]):         # a ring is taken: it turns the model, the camera stays
                 self._gz = g
                 self._gizmo_drag = True
@@ -659,6 +659,27 @@ class Viewport(QWidget):
         if i is not None:                                   # a label is taken: it moves with the mouse and the camera stays where it is
             self._drag = (i, self._press, self._label_state[i]["off"], self._style)
             self.iren.SetInteractorStyle(None)
+
+    def _on_key(self, obj, event):
+        """Escape while a handle is being dragged (when the window has no Esc shortcut of its own): the drag is cancelled."""
+        if self.iren.GetKeySym() == "Escape":
+            self.cancel_drag()
+
+    def cancel_drag(self) -> bool:
+        """Escape during the drag of a handle - a shared one (rings, arrows, faces, planes, points), the Geometry step's gizmo or a symmetry plane's arrow: it goes back to
+        where it was when the mouse went down and the drag ends there. True when there was a drag."""
+        if self._hset_drag and self.handles.cancel():
+            self._hset_drag = False
+        elif self._gizmo_drag and self._gz.cancel():
+            self._gizmo_drag = False
+        elif self._plane_drag and self.plane_handle.cancel():
+            self._plane_drag = False
+        else:
+            return False
+        self._press = None
+        if self._style is not None:
+            self.iren.SetInteractorStyle(self._style)
+        return True
 
     def _on_release(self, obj, event):
         p, self._press = self._press, None
@@ -717,7 +738,7 @@ class Viewport(QWidget):
         if now - self._hover_t < 0.05:
             return
         self._hover_t = now
-        if any(g.on and g.hover_at(q[0], self.gizmo._size()[1] - 1 - q[1]) is not None for g in (self.scale_handles, self.gizmo, self.region_gizmo)):
+        if any(g.on and g.hover_at(q[0], self.gizmo._size()[1] - 1 - q[1]) is not None for g in (self.gizmo,)):
             return                                          # (over a ring: the cursor is a hand, no face is hovered)
         if self.plane_handle.on and self.plane_handle.hover_at(q[0], self.gizmo._size()[1] - 1 - q[1]):
             return                                          # (over the plane's arrow: the cursor is a hand)

@@ -32,8 +32,14 @@ class Legend(QWidget):
         super().__init__(parent)
         self.setFixedHeight(0)
         self.spec = None
+        self.extra: list = []                  # [{"color", "name"}]: other things drawn in the view that the colours do not explain (the zone boundaries of the Mesh step)
         self.setAttribute(Qt.WA_StyledBackground, True)
         theme.follow(self, lambda o, _m=None: o.update())
+
+    def set_extra(self, items: list):
+        """Name something else the view draws (the meshed boundary of a rotating zone) beside the colours: shown at the right of the legend's title row."""
+        self.extra = list(items)
+        self.update()
 
     def clear(self):
         self.spec = None
@@ -50,6 +56,23 @@ class Legend(QWidget):
         self.setFixedHeight(40)
         self.update()
 
+    def _paint_extra(self, p, th):
+        """The other things the view draws, a swatch and a name each, at the right end of the title row."""
+        f = QFont(self.font())
+        fm = QFontMetrics(f)
+        x = self.width() - 14
+        p.setFont(f)
+        for it in reversed(self.extra):
+            w = fm.horizontalAdvance(it["name"])
+            x -= w
+            p.setPen(QColor(th["ink"]))
+            p.drawText(QPointF(x, 24), it["name"])
+            x -= 21
+            p.setBrush(QColor(it["color"]))
+            p.setPen(QPen(QColor(th["line_strong"])))
+            p.drawRoundedRect(QRectF(x, 12, 14, 14), 3, 3)
+            x -= 22
+
     def paintEvent(self, _e):  # noqa: N802
         s = self.spec
         if not s:
@@ -60,6 +83,7 @@ class Legend(QWidget):
         p.fillRect(self.rect(), QColor(th["panel"]))
         p.setPen(QPen(QColor(th["line"])))
         p.drawLine(0, 0, self.width(), 0)
+        self._paint_extra(p, th)
         title = QFont(self.font())
         title.setBold(True)
         small = QFont(self.font())

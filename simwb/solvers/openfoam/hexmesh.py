@@ -167,9 +167,11 @@ def make_plan(data: dict, faces: list, info: dict, surf2patch: dict, patches: li
     for r in ms.get("regions") or []:
         lev = int(np.clip(round(math.log2(base / float(r["size"]))), 0, levels + 1))
         regions.append({**{k: r[k] for k in r if k not in ("size", "name", "rotation")}, "name": sanitize(r["name"]), "level": lev})
-        if r.get("rotation") and r.get("shape") != "cylinder":      # (snappyHexMesh's searchableBox cannot turn: the box round the turned one)
+        if r.get("rotation") and r.get("shape") != "cylinder":      # (snappyHexMesh's searchableBox cannot turn: the turned box is given as a closed surface)
             from ... import regions as region_tools
-            regions[-1]["min"], regions[-1]["max"] = region_tools.bounds(r)
+            regions[-1]["corners"] = region_tools.box_corners(r).tolist()
+            regions[-1]["triangles"] = region_tools.box_triangles(r)[1].tolist()
+            regions[-1]["min"], regions[-1]["max"] = region_tools.bounds(r)       # (the box round it: what the rest of the plan reads)
 
     lay = ms.get("layers") or {}
     n_lay = int(lay.get("n") or 0)
@@ -245,6 +247,18 @@ mergePatchPairs ();
             a, b = r["start"], r["end"]
             geom += (f"    {gname} {{ type searchableCylinder; point1 ({a[0]:.8g} {a[1]:.8g} {a[2]:.8g}); "
                      f"point2 ({b[0]:.8g} {b[1]:.8g} {b[2]:.8g}); radius {r['radius']:.8g}; }}\n")
+        elif r.get("corners"):                          # (a turned box: a closed 12-triangle surface; refined where cells are inside it)
+            v, t = np.asarray(r["corners"], float), np.asarray(r["triangles"], np.int64)
+            stl = [f"solid {gname}"]
+            for a_, b_, c_ in t:
+                nrm = np.cross(v[b_] - v[a_], v[c_] - v[a_])
+                nrm = nrm / (np.linalg.norm(nrm) or 1.0)
+                stl.append(f" facet normal {nrm[0]:.6g} {nrm[1]:.6g} {nrm[2]:.6g}\n  outer loop")
+                stl += [f"   vertex {p[0]:.10g} {p[1]:.10g} {p[2]:.10g}" for p in (v[a_], v[b_], v[c_])]
+                stl.append("  endloop\n endfacet")
+            stl.append(f"endsolid {gname}")
+            (case / "constant" / "triSurface" / f"{gname}.stl").write_text("\n".join(stl) + "\n", newline="\n")
+            geom += f'    {gname} {{ type triSurfaceMesh; file "{gname}.stl"; }}\n'
         else:
             a, b = r["min"], r["max"]
             geom += (f"    {gname} {{ type searchableBox; min ({a[0]:.8g} {a[1]:.8g} {a[2]:.8g}); "
