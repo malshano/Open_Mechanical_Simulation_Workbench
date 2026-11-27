@@ -804,12 +804,25 @@ layers** - and **Generate mesh**.
   To size only some faces of a part, press **Pick faces in the 3D view** and click the faces one by one (a second click takes a face out again; the air volume cannot be picked),
   then press **＋ Size the selected faces**. The picking stays on: pick the next group and add it, as many sizings as you need, each with its own size. The list names each
   one by its part and faces; **◎** shows its faces in the 3D view and **✕** removes it. The same faces cannot have two sizings.
+- **Edge refinement** (flow studies, tetrahedral mesh; Expert mode): finer cells along the sharp edges that cross the flow - the leading and trailing edge of a wing, the corner of a box -
+  where the flow changes fastest. Edges along the flow are left alone. The cells at the edge are the wall cells divided by **finer than the wall cells by** (2 to 20, default 6) and grow
+  back to the wall size away from the edge. **Refine sharp edges** switches it on; **refine edges sharper than** is the angle between the two surfaces at the edge (180° smooth, 90° the corner of a box,
+  a few degrees a knife edge; edges below the angle are refined, default 140°); **most extra cells (cap)** limits the cost: the edge cells are made coarser until the estimate fits under it (default 150,000), so the option cannot
+  use up the memory by itself. Open the group and the program looks for the sharp edges in the geometry (a second or two, once per geometry); a line under the fields then says, live, about how many extra cells
+  the settings add, how many sharp edges and how long they are, and the edge and wall cell sizes in mm - also while the option is off ("Off. Switched on it would: ..."). **Show the sharp edges in the 3D view** draws the edges that will be refined in orange.
+  The estimate is rough: on the example wing it said 48,000 extra cells and the mesh had about 71,000 more than the same mesh without the option (the fine surface cells along the edge count too). After meshing the group says what the mesher did
+  ("Last mesh: 1 sharp edge refined, cells of 4.17 mm, 6× finer ...") and counts, in the mesh itself, the cells within reach of the refined edges. When nothing was refined it says why (no sharp edge across the flow, the cap too low, a smallest cell size set by hand).
+  **Smart sizing** switches the refinement on by itself at 4×; the box shows it as on, and switching it off there keeps it off. With a **smallest cell** set in Advanced sizes and Smart sizing off the mesher keeps to the size you set and does not refine edges (the group says so).
+  In other kinds of study and for the hex-dominant mesh the group is there but greyed, with the reason.
 - **Wall layers** (flow studies; the block is open): the number of layers, the growth ratio, the first layer (0 = automatic) and the
   **target y+** of the first cell, **measured at its centre** as OpenFOAM does (0 = automatic: about 30 for the wall-function models, which want 30 or more; 5 to 30 is the buffer
   layer where they are least accurate; a target near 1 resolves the wall itself and needs many more layers). Beta 3 and earlier sized the first layer so that the target was
   reached at its outer face, so the cells came out at half the y+ (a mean of 15.8 on a wing run set up for 30). A line under the fields says what they come to - the first and the total thickness, the y+ it aims at and how many
   layers lie inside the boundary layer - and **Show the layers in the 3D view** draws a translucent shell round the object as thick as
   all the layers together (an approximation at sharp corners; it is the preview before the mesh exists).
+  - **Tolerant layers**: where the cells are small and the wall is sharp (a leading edge), the layer step removes layers that would be badly shaped. With **Tolerant layers** on its limits are looser, so more of
+    the layers stay there; they can be less smooth, so look at the mesh quality. Off is the default. After meshing, a line says how many layers were made, on what share of the wall faces, and with which limits; if you
+    change the switch afterwards it says the layers are out of date (**Make the layers again**). Not for the hex-dominant mesh, which makes its layers together with the mesh.
   - **The layers are made with the mesh.** When you press **Generate mesh** in a flow study (tetrahedral mesh, OpenFOAM installed), the
     program adds the layers with OpenFOAM's snappyHexMesh in its layer-only mode - the same step the run would do - so **the mesh you see,
     count and check is the mesh the solver runs**. Without OpenFOAM, or when the setup is not complete, the card says why and the run adds

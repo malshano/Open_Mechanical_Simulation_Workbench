@@ -46,6 +46,14 @@ On `examples/airplane_wing.step` (chord 314 mm along the flow, span 800 mm, 10 m
 **Scorecard**: after meshing, the mesh is measured in zones that do not depend on how it was sized and every check of section 2 is marked ok, to look at, or failed, with advice.
 The same for the assistant: `mesh_advice`, `mesh_apply_recipe`.
 
+### Edge refinement and tolerant layers (Mesh step, Expert)
+
+The leading and trailing edges of a thin body carry much of its friction, and the cells there are the most expensive to get right. **Edge refinement** makes the cells along the sharp edges across the flow (not the ones along it)
+the wall cell / factor (default 6) and grows them back to the wall size with the mesh growth ratio. The cost is estimated before meshing from the length of the edges (a tetrahedron of edge s has the volume s³ / (6 √2); the zone is the full tube round the edge, an upper bound
+for the air side) and capped (default 150,000 extra cells): the edge cells are made coarser until the estimate fits. The estimate is rough: on the example wing (quick, factor 6) it was 48,000 extra cells; the same mesh without the option had 54,500 cells and
+with it 125,600, i.e. 71,000 more (the fine surface cells along the edge are in that too), and 64,000 cells (51 %) lay within the reach of the edge field. Plan the memory with the larger number.
+**Tolerant layers** loosen the layer step's quality limits (maxFaceThicknessRatio 0.5 to 0.8, maxThicknessToMedialRatio 0.3 to 0.6, 100 instead of 50 iterations, relaxed mesh-quality limits) so that more layers survive on sharp edges; the price is less smooth layer cells there.
+
 ## 4. What we measured on the example wing (coarse preset unless noted)
 
 | | cells | wall | near | wake | score |
