@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import materials, regions as region_tools, studies
+from . import materials, regions as region_tools, studies, zones as zone_tools
 from . import axisfit, cad_edit, orient
 from . import symmetry as sym
 from .jobs import Cancelled, Job, JobManager, run_gmsh_task
@@ -1993,6 +1993,10 @@ class Project:
             cs = None if cs in (None, "", 0) else studies.finite(cs, f"{nm} cell size")
             if cs is not None and not 0 < cs < R:
                 raise ValueError(f"{nm}: the cell size inside the zone must be > 0 and smaller than its radius")
+            rmin, lmin, why = zone_tools.min_sizes({"cell_size": cs}, zone_tools.model_size(self.data["geometry"].get("info")), hard=True)
+            if R < rmin * (1 - 1e-9) or Lz < lmin * (1 - 1e-9):        # (a zone of 1 mm cannot hold a part: the mesh cannot resolve it)
+                raise ValueError(f"{nm}: the zone is too small: its radius must be at least {rmin * 1000:.3g} mm and its length at least {lmin * 1000:.3g} mm "
+                                 f"({why}); a smaller zone cannot hold a part and the mesh cannot resolve it")
             clean.append({"name": nm, "center": c, "axis": z["axis"], "radius": R, "length": Lz, "rpm": rpm,
                           "method": z.get("method", "mrf"), "cell_size": cs})
         if len({z["name"] for z in clean}) != len(clean):

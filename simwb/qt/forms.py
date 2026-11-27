@@ -119,7 +119,7 @@ class ParamForm(QWidget):
         self._visibility()
         self.changed.emit(key, val)
 
-    def show_value(self, key: str, value):
+    def show_value(self, key: str, value, force: bool = False):
         """Show a value that did not come from typing (a handle in the 3D view is being dragged): nothing is emitted, the typed number and the handle agree."""
         row = self.rows.get(key)
         if row is None:
@@ -128,7 +128,7 @@ class ParamForm(QWidget):
         self.vals[key] = value
         try:
             if hasattr(c, "setText"):
-                if not c.hasFocus():
+                if force or not c.hasFocus():
                     c.setText(fmt_num(value) if value not in (None, "") else "")
             else:
                 i = c.findData(value)

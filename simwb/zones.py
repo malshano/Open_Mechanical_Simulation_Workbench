@@ -127,17 +127,39 @@ def moved(z: dict, point) -> dict:
     return {**z, "center": [float(x) for x in point]}
 
 
-def grown(z: dict, g) -> dict:
+def model_size(info: dict | None) -> float:
+    """The largest extent of the parts (m), 0 when there is no geometry."""
+    b = (info or {}).get("parts_bbox") or (info or {}).get("bbox")
+    return float(max(b[k + 3] - b[k] for k in range(3))) if b else 0.0
+
+
+def min_sizes(z: dict, size: float = 0.0, hard: bool = False) -> tuple:
+    """(smallest radius, smallest length, why) of a zone (m): a few cells of the zone's own cell size where it has one (4 for the radius, 2 for the length),
+    otherwise a share of the model (2 % and 1 %); never less than 1 mm. A zone smaller than that cannot hold a part and the mesh cannot resolve it. The window
+    keeps to this; the engine (`hard`) refuses only what is half of it (2 cells, 1 % of the model), so that a study made with an older version still opens."""
+    cell = float(z.get("cell_size") or 0.0)
+    k = 0.5 if hard else 1.0
+    r, ln = max(0.02 * k * size, 1e-3), max(0.01 * k * size, 1e-3)
+    why = f"{2 * k:g} % of the model" if size else "1 mm"
+    if cell > 0 and 4 * k * cell >= r:
+        r, ln, why = 4 * k * cell, max(2 * k * cell, ln), f"{4 * k:g} cells of its cell size"
+    return r, ln, why
+
+
+def grown(z: dict, g, size: float = 0.0) -> dict:
     """The zone with its faces moved outwards by g = [[start, end], [radius, 0], ...] (m, as regions.grown: g[0] the two flat faces along the axis, g[1][0] the
-    radius). The opposite face stays; nothing gets smaller than regions.MIN_SIZE, and the radius stays above the cell size inside the zone (the engine
-    wants the cell smaller than the radius)."""
-    from . import regions as region_tools
-    c = region_tools.grown(as_cylinder(z), g)
-    a, b = np.asarray(c["start"], float), np.asarray(c["end"], float)
-    radius = float(c["radius"])
-    if z.get("cell_size"):
-        radius = max(radius, float(z["cell_size"]) * 1.01)
-    return {**z, "center": ((a + b) / 2).tolist(), "length": float(np.linalg.norm(b - a)), "radius": radius}
+    radius). The opposite face stays; the zone never gets smaller than min_sizes(z, size) (the face being moved stops there)."""
+    g = np.asarray(g, float).reshape(3, 2)
+    a, b = ends(z)
+    u = axis_of(z)
+    length = float(z["length"])
+    rmin, lmin, _why = min_sizes(z, size)
+    gs, ge = float(g[0, 0]), float(g[0, 1])
+    if length + gs + ge < lmin:
+        over = lmin - (length + gs + ge)
+        gs, ge = (gs + over, ge) if abs(gs) >= abs(ge) else (gs, ge + over)
+    a2, b2 = a - u * gs, b + u * ge
+    return {**z, "center": ((a2 + b2) / 2).tolist(), "length": float(np.linalg.norm(b2 - a2)), "radius": max(float(z["radius"]) + float(g[1, 0]), rmin)}
 
 
 def face_handles(z: dict) -> list:

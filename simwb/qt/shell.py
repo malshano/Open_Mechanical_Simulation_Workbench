@@ -66,6 +66,13 @@ class ToastStatusBar(QStatusBar):
             toasts.show(text, "warn" if text.startswith(("Cannot", "Could not")) else "info")
 
 
+# The hints of the handles read like the Geometry step's ("Drag a ring to turn · drag an arrow to move · ...")
+REGION_HINT = ("Drag a ring to turn · drag an arrow to move · drag the ball to move freely · drag a square-ended arrow to resize · hold Shift to snap (5°, round mm) · "
+               "Esc cancels a drag · nothing is stored until Apply")
+ZONE_HINT = ("Drag a ring to turn the axis (a quarter turn at a time) · drag an arrow to move · drag the ball to move freely · drag a square-ended arrow to resize · "
+             "hold Shift to snap (round mm) · Esc cancels a drag")
+
+
 class Shell(QObject):
     def __init__(self, win):
         super().__init__(win)
@@ -411,7 +418,7 @@ class Shell(QObject):
 
     # ------------------------------------------------------------------ the selection hint: what to click next
     def hint(self) -> tuple | None:
-        """(key, text, priority, button, callback, tip) for the bar under the 3D view, or None."""
+        """(key, text, priority, button, callback, tip[, (text, callback, tip) of a second button]) for the bar under the 3D view, or None."""
         w = self.win
         v = w.view
         if w.step == "setup":
@@ -432,15 +439,16 @@ class Shell(QObject):
                     return ("pick", f"Click faces to add or remove them from {bc['name']} ({n} selected). Ctrl-click adds more faces", 0, "Done",
                             lambda: (setattr(sp, "active", None), sp.redo()), "Finish picking faces for this condition")
             if sp.rot.handles.showing:
-                return ("pick", "Drag an arrow to move the rotating zone, a square-ended arrow to resize it, a ring to turn its axis a quarter turn (Shift: round steps), "
-                                "or type the numbers. Click a face to select it", 0, None, None, None)
+                rot = sp.rot
+                pend = bool(rot.draft)
+                return ("pick", ZONE_HINT + (" · not stored yet: press Apply" if pend else ""), 0, "Cancel" if pend else None, rot.cancel_draft if pend else None,
+                        "Put the zone back where it is stored" if pend else None, ("Apply", rot.apply_draft, "Store the zone where it is drawn now") if pend else None)
         if w.step == "mesh" and w.panels["mesh"].adv.xform.active:
             xf = w.panels["mesh"].adv.xform
             if xf.aligning:
                 return ("pick", "Click the face to line the region up with (a face of the model or a wall of the air volume): its nearest side is turned parallel to it", 0,
                         "Cancel", lambda: xf.stop_align(), "Stop choosing a face (the region stays as previewed)")
-            return ("pick", "Drag an arrow to move the region, a ring to turn it, a square-ended arrow to resize it (Shift: round steps), or type the numbers; then press Apply", 0,
-                    "Cancel", lambda: xf.cancel(), "Leave the region as it is")
+            return ("pick", REGION_HINT, 0, "Cancel", lambda: xf.cancel(), "Leave the region as it is", ("Apply", xf.apply, "Store the region where it is drawn now"))
         if w.step == "mesh" and getattr(w.panels["mesh"], "picking_part", False):
             mp = w.panels["mesh"]
             return ("pick", "Click a part in the 3D view: all its faces get a cell size (change it in Part sizing afterwards)", 0, "Cancel",
@@ -471,8 +479,11 @@ class Shell(QObject):
         if h is None:
             bar.clear("select")
             return
-        key, text, prio, button, cb, tip = h
-        bar.set("select", text, prio, button, cb, tip) if not button else bar.set("select", text, prio, button, self._cached_cb(button, text, cb), tip)
+        key, text, prio, button, cb, tip, *more = h
+        extra = more[0] if more else None
+        if extra:
+            extra = (extra[0], self._cached_cb(extra[0], text, extra[1]), extra[2])
+        bar.set("select", text, prio, button, cb, tip, extra) if not button else bar.set("select", text, prio, button, self._cached_cb(button, text, cb), tip, extra)
 
     def _cached_cb(self, button, text, cb):
         k = (button, text)

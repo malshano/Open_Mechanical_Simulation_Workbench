@@ -132,6 +132,7 @@ class HandleSet:
                     elif _sig_of(s) != _sig_of(self.specs[s["key"]]):
                         self.specs[s["key"]] = s
                         self._draw(s["key"])
+                        self._sig = None                       # (what is drawn is no longer the list the last set() was given: the next one draws again)
                 self.v.render()
             return
         sig = [_sig_of(s) for s in specs]

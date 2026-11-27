@@ -10,8 +10,9 @@ The engine keeps them (simwb.project set_rotors / detect_rotors / reset_thrusts 
 axis_info / rotate_geometry)."""
 from __future__ import annotations
 
+import numpy as np
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSlider, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSlider, QVBoxLayout, QWidget
 
 from .. import orient, studies
 from .. import zones as zone_tools
@@ -73,9 +74,16 @@ class Rotors:
         self._timer.timeout.connect(self._tick)
         self._where: dict = {}                     # classification of the parts of each zone, kept while nothing changes
         self.sliders: dict = {}
-        self.handle_zone: int | None = 0           # the zone whose handles are drawn in the 3D view (its "Show handles" box is ticked)
+        self.handle_zone: int = 0                  # the zone whose card was used last: its handles are drawn in the 3D view
+        self.handles_off = False                   # its "Show handles in the 3D view" box was unticked
+        self.draft: dict | None = None             # {"i": index, "zone": {center, axis, radius, length}}: a zone moved, resized or turned with its handles, not stored yet
         self.forms: dict = {}                      # zone index -> the ParamForm of its card (the numbers follow a handle that is being dragged)
+        self.boxes: dict = {}                      # zone index -> its "Show handles" box
         self.handles = ZoneHandles(self)           # move / resize / turn the axis of a zone by dragging (zonehandles.py)
+        try:
+            QApplication.instance().focusChanged.connect(self._focus_moved)
+        except Exception:  # noqa: BLE001
+            pass
 
     @property
     def pr(self):
@@ -130,10 +138,55 @@ class Rotors:
 
     # ------------------------------------------------------------------ zones
     def zones(self) -> list:
+        """The zones as they are stored."""
         return [dict(z, center=list(z["center"])) for z in self.panel.engine.state().get("moving_zones") or []]
 
-    def _save_zones(self, zs, msg=""):
-        return self._do(lambda: self.pr.set_moving_zones(zs), msg)
+    def current(self, i: int, z: dict | None = None) -> dict:
+        """Zone i as the card and the 3D view show it: the stored zone with what was dragged with its handles and not stored yet."""
+        z = dict(self.zones()[i] if z is None else z)
+        if self.draft and self.draft["i"] == i:
+            z.update(self.draft["zone"])
+        return z
+
+    def shown_zones(self) -> list:
+        return [self.current(i, z) for i, z in enumerate(self.zones())]
+
+    def _save_zones(self, zs, msg="", keep_draft=False):
+        """Store the zones (the draft goes: indices may have changed; keep_draft: only another number of the zone changed). A refused change leaves the draft."""
+        old = self.draft
+        if not keep_draft:
+            self.draft = None
+        out = self._do(lambda: self.pr.set_moving_zones(zs), msg)
+        if out is None:
+            self.draft = old
+        return out
+
+    def size(self) -> float:
+        return zone_tools.model_size(self.panel.engine.state()["geometry"].get("info"))
+
+    def min_for(self, z: dict) -> tuple:
+        return zone_tools.min_sizes(z, self.size())
+
+    def notice(self, text: str):
+        """A plain line in the panel, the status bar and a toast (a number was changed for the user)."""
+        self.panel.say(text)
+        toasts = getattr(getattr(self.panel, "win", None), "toasts", None)
+        if toasts is not None:
+            toasts.warn(text)
+
+    def clamp(self, z: dict) -> dict:
+        """The zone with a radius and a length of at least zone_tools.min_sizes; says so when it had to be changed."""
+        rmin, lmin, why = self.min_for(z)
+        said = []
+        if z["radius"] < rmin * (1 - 1e-9):
+            z["radius"] = rmin
+            said.append(f"radius {fmt_num(round(rmin * 1000, 3))} mm")
+        if z["length"] < lmin * (1 - 1e-9):
+            z["length"] = lmin
+            said.append(f"length {fmt_num(round(lmin * 1000, 3))} mm")
+        if said:
+            self.notice(f"The {' and '.join(said)} is the smallest this zone can be ({why}): a smaller zone cannot hold a part and the mesh cannot resolve it.")
+        return z
 
     def add_zone(self):
         try:
@@ -141,9 +194,11 @@ class Rotors:
         except Exception as e:  # noqa: BLE001
             return self.panel._fail(e)
         self.handle_zone = len(self.zones())                        # (the new zone shows its handles: drag it where it belongs)
+        self.handles_off = False
         return self._save_zones(self.zones() + [z], "Zone added: drag it into place, set its size and speed, or fit it around the rotating part")
 
     def set_zone(self, i: int, **kw):
+        """Store a change of zone i (the Setup panel's typed numbers, the control API): a radius or length below the smallest a zone can be is raised to it."""
         zs = self.zones()
         if not 0 <= i < len(zs):
             raise ValueError(f"No moving zone {i + 1} (there are {len(zs)})")
@@ -159,14 +214,113 @@ class Rotors:
                 z[k] = float(v)
             else:
                 z[k] = v
+        self.clamp(z)
         return self._save_zones(zs)
+
+    GEOMETRY = ("cx", "cy", "cz", "radius", "length", "axis")
+
+    def typed_zone(self, i: int, key: str, val):
+        """A number of zone i's card was typed. While the zone has been moved with its handles and not stored (a draft) a typed size, place or axis changes the
+        draft, like the typed numbers of a refinement region; otherwise it is stored at once, as every field of this panel."""
+        if key not in self.GEOMETRY or not (self.draft and self.draft["i"] == i):
+            keep = bool(self.draft and self.draft["i"] == i)
+            return self.set_zone(i, **{key: val}) if not keep else self._typed_other(i, key, val)
+        z = self.current(i)
+        if key in ("cx", "cy", "cz"):
+            z["center"] = list(z["center"])
+            z["center"]["xyz".index(key[1])] = float(val) / 1000
+        elif key == "axis":
+            z["axis"] = val
+        else:
+            z[key] = float(val) / 1000
+        self.clamp(z)
+        self.set_draft(i, z)
+        self.show_numbers(i, self.current(i), force=True)
+        self.draw_zones(i, live=True)
+        self.handles.sync()
+
+    def _typed_other(self, i: int, key: str, val):
+        """A field that is not part of the zone's shape changed while a draft is pending: stored, and the draft stays."""
+        zs = self.zones()
+        z = zs[i]
+        if key == "cell_size":
+            z[key] = None if val in (None, "") or not float(val) > 0 else float(val) / 1000
+        elif key == "rpm":
+            z[key] = float(val)
+        else:
+            z[key] = val
+        return self._save_zones(zs, keep_draft=True)
+
+    # ---- the draft: a zone moved, resized or turned with its handles is only shown until Apply
+    def set_draft(self, i: int, z: dict):
+        """The zone as dragged (its shape): None when it is where it is stored."""
+        keep = {k: (list(z[k]) if k == "center" else z[k]) for k in ("center", "axis", "radius", "length")}
+        st = self.zones()[i]
+        same = all(np.allclose(keep[k], st[k], atol=1e-9) if k != "axis" else keep[k] == st[k] for k in keep)
+        self.draft = None if same else {"i": i, "zone": keep}
+
+    def apply_draft(self):
+        if not self.draft:
+            return
+        i, z = self.draft["i"], self.draft["zone"]
+        zs = self.zones()
+        zs[i].update(z)
+        self.handles.hide_label()
+        self._save_zones(zs, f"{zs[i]['name']}: stored (the mesh is out of date: generate it again)")
+
+    def cancel_draft(self):
+        if not self.draft:
+            return
+        self.draft = None
+        self.handles.hide_label()
+        self.panel.say("The zone is back where it was")
+        self.panel.redo()
+
+    # ---- which zone shows its handles
+    def shown_zone(self) -> int | None:
+        """The zone whose handles are drawn: the one with a draft, else the one whose card was used last (unless its box was unticked)."""
+        if self.draft:
+            return self.draft["i"]
+        n = len(self.panel.engine.state().get("moving_zones") or [])
+        if self.handles_off or not n:
+            return None
+        return min(max(self.handle_zone, 0), n - 1)
 
     def set_handle_zone(self, i: int, on: bool):
         if on:
-            self.handle_zone = i
-        elif self.handle_zone == i:
-            self.handle_zone = None
-        self.panel.redo()
+            self.handle_zone, self.handles_off = i, False
+        elif self.shown_zone() == i:
+            self.handles_off = True
+        self._sync_boxes()
+        self.draw_zones()
+
+    def _sync_boxes(self):
+        sel = self.shown_zone()
+        for k, b in list(self.boxes.items()):
+            try:
+                if b.isChecked() != (k == sel):
+                    b.blockSignals(True)
+                    b.setChecked(k == sel)
+                    b.blockSignals(False)
+            except RuntimeError:
+                self.boxes.pop(k, None)
+
+    def _focus_moved(self, old, new):
+        """A field or button of a zone's card was used: that zone's handles are the ones in the 3D view (a card's own box can still hide them)."""
+        try:
+            w = new
+            while w is not None and w.property("zone_index") is None:
+                w = w.parentWidget()
+            if w is None or self.panel.win is None or self.panel.win.step != "setup":
+                return
+            i = int(w.property("zone_index"))
+            if i != self.handle_zone and not self.draft:
+                self.handle_zone = i
+                self._sync_boxes()
+                self.handles.sync()
+                self.draw_zones()
+        except (RuntimeError, TypeError, ValueError):
+            pass
 
     def fit_zone(self, i: int, part: str):
         zs = self.zones()
@@ -179,10 +333,7 @@ class Rotors:
     def delete_zone(self, i: int):
         zs = self.zones()
         z = zs.pop(i)
-        if self.handle_zone is not None and self.handle_zone >= i:
-            self.handle_zone = (self.handle_zone - 1 if self.handle_zone > i else i) if zs else None
-            if self.handle_zone is not None and self.handle_zone >= len(zs):
-                self.handle_zone = len(zs) - 1
+        self.handle_zone = max(min(self.handle_zone - (1 if self.handle_zone > i else 0), len(zs) - 1), 0)
         return self._save_zones(zs, f"Moving zone {z['name']} deleted")
 
     # ------------------------------------------------------------------ the zones in the 3D view, and the turn preview
@@ -195,38 +346,36 @@ class Rotors:
             self._where[i] = hit
         return hit[1]
 
-    def draw_zones(self, active=None, override: dict | None = None):
-        """The cylinders of the zones in the 3D view, and for a zone the preview has turned a ghost of what is inside it, turned. `override`: {index: zone}
-        drawn in place of the stored one (a handle is being dragged: where the zone would be)."""
+    def draw_zones(self, active=None, live: bool = False):
+        """The cylinders of the zones in the 3D view (a zone with a draft as dragged), and for a zone the preview has turned a ghost of what is inside it, turned.
+        live: a handle is being dragged (nothing but the cylinders is redrawn)."""
         v = self.panel.view
         if v is None:
             return
-        zs = list(self.panel.engine.state().get("moving_zones") or [])
-        for k, z in (override or {}).items():
-            if 0 <= k < len(zs):
-                zs[k] = z
+        zs = self.shown_zones()
         ghosts = {}
         for i, z in enumerate(zs):
-            if self.turn.get(i) and not (override and i in override):
+            if self.turn.get(i) and not live:
                 ids = [fid for b in self.where(i, z) if b["where"] == zone_tools.INSIDE for fid in b["faces"]]
                 if ids:
                     ghosts[i] = zone_tools.triangles_of(self.pr.faces(), ids)
-        v.zone_view.set(zs, active if active is not None else (self.handle_zone if self.handles.showing else None), self.turn, ghosts)
-        if override is None:
+        sel = self.shown_zone() if self.handles.showing or live else None
+        v.zone_view.set(zs, active if active is not None else sel, self.turn, ghosts)
+        if not live:
             self.handles.sync()
 
-    def show_numbers(self, i: int, z: dict):
+    def show_numbers(self, i: int, z: dict, force: bool = False):
         """The numbers of the zone's card, as the zone would be (a handle is being dragged): nothing is stored."""
         f = self.forms.get(i)
         if f is None:
             return
         for k, v in (("cx", z["center"][0] * 1000), ("cy", z["center"][1] * 1000), ("cz", z["center"][2] * 1000), ("radius", z["radius"] * 1000),
                      ("length", z["length"] * 1000), ("axis", z["axis"])):
-            f.show_value(k, round(v, 3) if not isinstance(v, str) else v)
+            f.show_value(k, round(v, 3) if not isinstance(v, str) else v, force=force)
 
     def set_turn(self, i: int, deg: float):
         """Preview the zone turned by deg degrees: the parts inside it turn about its axis in the 3D view (nothing is stored)."""
-        zs = self.panel.engine.state().get("moving_zones") or []
+        zs = self.shown_zones()
         if not 0 <= i < len(zs):
             raise ValueError(f"No moving zone {i + 1} (there are {len(zs)})")
         self.turn[i] = float(deg) % 360.0
@@ -275,6 +424,7 @@ class Rotors:
         self.playing = None
         self.turn = {}
         self.sliders = {}
+        self.draft = None
         self.handles.hide()
         v = self.panel.view
         if v is not None:
@@ -410,6 +560,28 @@ class Rotors:
         lab.setToolTip("The weight of the vehicle (mass × 9.81) and the thrust of all rotors together")
         return lab
 
+    def _pending_row(self, i: int) -> QWidget:
+        """Under the zone's name while it has been dragged and not stored: what that means and Apply / Cancel side by side."""
+        box = QWidget()
+        col = QVBoxLayout(box)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(4)
+        note = wid(QLabel("Moved with its handles and not stored yet: Apply keeps the zone as drawn, Cancel puts it back (Esc cancels a drag)."),
+                   f"setup.zone.{i}.pending")
+        note.setObjectName("muted")
+        note.setWordWrap(True)
+        col.addWidget(note)
+        row = QHBoxLayout()
+        ap = _btn("Apply", f"setup.zone.{i}.apply", "Store the zone where it is drawn now (the mesh is then out of date)", "primary")
+        ap.clicked.connect(self.apply_draft)
+        cn = _btn("Cancel", f"setup.zone.{i}.cancel", "Put the zone back where it is stored")
+        cn.clicked.connect(self.cancel_draft)
+        row.addWidget(ap)
+        row.addWidget(cn)
+        row.addStretch(1)
+        col.addLayout(row)
+        return box
+
     def _parts_note(self, i: int, z: dict) -> QLabel:
         """Which parts are inside the zone (they turn with it), which are outside, and a warning for a part the zone's boundary cuts through."""
         try:
@@ -487,7 +659,9 @@ class Rotors:
         parts = sorted({f.get("part") or "(body)" for f in self.pr.faces() if f.get("kind") not in ("farfield", "enclosure")})
         ap = self.panel.axis_pick
         for i, z in enumerate(st.get("moving_zones") or []):
+            z = self.current(i, z)                                   # (what the handles have made of it, not stored yet)
             card = _card()
+            card.setProperty("zone_index", i)
             v = QVBoxLayout(card)
             v.setContentsMargins(10, 8, 10, 8)
             v.setSpacing(6)
@@ -506,6 +680,8 @@ class Rotors:
             d.clicked.connect(lambda _=False, i=i: self.delete_zone(i))
             head.addWidget(d)
             v.addLayout(head)
+            if self.draft and self.draft["i"] == i:                  # (moved, resized or turned with the handles: Apply stores it, as for a refinement region)
+                v.addWidget(self._pending_row(i))
             methods = ["mrf", "sliding"] if aero else ["mrf"]
             params = [
                 {"key": "method", "label": "Method", "options": methods, "option_labels": {"mrf": "MRF (steady)", "sliding": "Sliding mesh (transient)"},
@@ -523,13 +699,15 @@ class Rotors:
                     "cell_size": _mm(z["cell_size"]) if z.get("cell_size") else None}
             f = ParamForm(params, vals, f"setup.zone.{i}")
             f.setEnabled(not busy)
-            f.changed.connect(lambda k, val, i=i: self.set_zone(i, **{k: val}))
+            f.changed.connect(lambda k, val, i=i: self.typed_zone(i, k, val))
             v.addWidget(f)
             self.forms[i] = f
             hb = wid(QCheckBox("Show handles in the 3D view"), f"setup.zone.{i}.handles")
-            hb.setChecked(self.handle_zone == i)
+            hb.setChecked(self.shown_zone() == i)
+            self.boxes[i] = hb
             hb.setToolTip("Drag this zone in the 3D view: the arrows and the ball move it, the square-ended arrows resize it, the rings turn its axis "
-                          "(a quarter turn at a time: a zone lies along x, y or z). The numbers above follow the handles and the handles follow the numbers")
+                          "(a quarter turn at a time: a zone lies along x, y or z). The numbers above follow the handles and the handles follow the numbers; "
+                          "nothing is stored until you press Apply. The handles are those of the zone whose card you used last")
             hb.toggled.connect(lambda on, i=i: self.set_handle_zone(i, on))
             v.addWidget(hb)
             row = QHBoxLayout()
