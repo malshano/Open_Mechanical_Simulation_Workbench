@@ -80,18 +80,16 @@ def main(argv):
           f"median {np.median(err):+.2f}, mean abs {np.mean(np.abs(err)):.2f}, worst {max(err, key=abs):+.2f}")
     solid = [d for d in data if d[0].get("study", "external_aero") != "external_aero"]
     from simwb import meshplan as mp
-    print("
-| geometry | study | preset | smart | edge | estimate | actual | estimate / actual | mesh job MB |
-|---|---|---|---|---|---|---|---|---|")
+    print("| geometry | study | preset | smart | edge | estimate | actual | estimate / actual | mesh job MB |")
+    print("|---|---|---|---|---|---|---|---|---|")
     errs = []
     for c, i, u, e, act, mb in data:
         solid = c.get("study", "external_aero") in ("heat_conduction", "static_structural", "vibration_modal")
-        est = mp.CELLS_CALIBRATION * i + (mp.SURFACE_CELLS_SOLID if solid else mp.SURFACE_CELLS) * u + e
+        est = (mp.CELLS_CALIBRATION * i + (mp.SURFACE_CELLS_SOLID if solid else mp.SURFACE_CELLS) * u) * (mp.SMART_FACTOR if c.get('smart') == '1' else 1.0) + e
         errs.append(est / act - 1)
         print(f"| {c['example'][:-5]} | {c.get('study', 'external_aero')} | {c.get('preset')} | {'yes' if c.get('smart') == '1' else 'no'}"
               f" | {c.get('edge', '-')} | {est:,.0f} | {act:,.0f} | {est / act:.2f} | {mb:.0f} |")
-    print(f"
-{len(errs)} meshes: median {np.median(errs):+.2f}, mean absolute {np.mean(np.abs(errs)):.2f}, worst {max(errs, key=abs):+.2f}")
+    print(f"{len(errs)} meshes: median {np.median(errs):+.2f}, mean absolute {np.mean(np.abs(errs)):.2f}, worst {max(errs, key=abs):+.2f}")
     cells = np.array([d[4] for d in data])
     mb = np.array([d[5] for d in data])
     slope, fixed = np.polyfit(cells, mb, 1)

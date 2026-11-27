@@ -75,7 +75,7 @@ The same for the assistant: `mesh_advice`, `mesh_apply_recipe`.
 
 ## 6. The memory planner: what the estimate rests on (#20, #21)
 
-`simwb/meshplan.py` estimates the tetrahedral mesh before it is made. **cells = 0.45 x (the integral of regular tetrahedra over the size field) + 8 x (wall area / wall size squared)** (3 x for solid studies), plus the
+`simwb/meshplan.py` estimates the tetrahedral mesh before it is made. **cells = (0.45 x (the integral of regular tetrahedra over the size field) + 8 x (wall area / wall size squared)) x 0.75 with smart sizing** (6 x the wall term for solid studies), plus the
 edge-refinement term. **Memory of the mesh job = 800 MB + 0.5 kB x cells** (`added_ram_mb` of `memwatch` around the gmsh worker: 22 meshes from 55,000 to 1.38 million cells fit 794 MB + 0.46 kB a cell, largest miss 39 MB);
 the run is 4.2 kB a cell (the earlier measurement, not re-measured). The fixed part is what #19 asked to see apart: 0.8 GB is the same for 55,000 cells and for 300,000.
 The mesher's cells are about 1.4 times the edge of a regular tetrahedron of the field size (so the integral over-counts by about 2.5) except at the walls, where it makes more and smaller cells than the field says
@@ -83,9 +83,39 @@ The mesher's cells are about 1.4 times the edge of a regular tetrahedron of the 
 
 Measured (gmsh worker alone, quick to fine presets, `benchmarks/results/mesh_plan_2026-11-28.jsonl`; estimate made before the mesh, with the constants above):
 
-TABLE_HERE
+| geometry | study | preset | smart | edge | estimate | actual | estimate / actual | mesh job MB |
+|---|---|---|---|---|---|---|---|---|
+| airplane_wing | external_aero | quick | no | - | 47,121 | 54,891 | 0.86 | 793 |
+| airplane_wing | external_aero | coarse | no | - | 59,864 | 74,341 | 0.81 | 813 |
+| airplane_wing | external_aero | medium | no | - | 102,261 | 155,545 | 0.66 | 866 |
+| airplane_wing | external_aero | fine | no | - | 206,119 | 297,954 | 0.69 | 937 |
+| airplane_wing | external_aero | quick | yes | - | 197,562 | 153,964 | 1.28 | 855 |
+| airplane_wing | external_aero | coarse | yes | - | 385,782 | 374,125 | 1.03 | 964 |
+| airplane_wing | external_aero | coarse | no | 6 | 134,864 | 178,616 | 0.76 | 874 |
+| quadcopter | external_aero | quick | no | - | 128,926 | 132,542 | 0.97 | 884 |
+| quadcopter | external_aero | coarse | no | - | 138,696 | 150,195 | 0.92 | 887 |
+| quadcopter | external_aero | medium | no | - | 302,639 | 371,584 | 0.81 | 961 |
+| quadcopter | external_aero | quick | yes | - | 191,685 | 156,494 | 1.22 | 904 |
+| quadcopter | external_aero | coarse | yes | - | 272,540 | 261,669 | 1.04 | 940 |
+| camera_mount | external_aero | quick | no | - | 103,115 | 123,769 | 0.83 | 842 |
+| camera_mount | external_aero | coarse | no | - | 136,820 | 155,259 | 0.88 | 849 |
+| camera_mount | external_aero | medium | no | - | 305,992 | 411,453 | 0.74 | 942 |
+| camera_mount | external_aero | fine | no | - | 669,667 | 1,375,953 | 0.49 | 1403 |
+| camera_mount | external_aero | quick | yes | - | 190,508 | 164,154 | 1.16 | 864 |
+| camera_mount | external_aero | coarse | yes | - | 369,023 | 345,679 | 1.07 | 953 |
+| camera_mount | external_aero | medium | yes | - | 953,690 | 996,119 | 0.96 | 1245 |
+| airplane_wing | external_aero | quick | no | - | 49,672 | 57,674 | 0.86 | 801 |
+| airplane_wing | external_aero | quick | no | - | 64,040 | 55,498 | 1.15 | 793 |
+| quadcopter | external_aero | quick | no | 6 | 203,926 | 365,506 | 0.56 | 984 |
+| heated_plate | heat_conduction | quick | no | - | 33,620 | 29,538 | 1.14 | 795 |
+| heated_plate | heat_conduction | medium | no | - | 36,480 | 32,987 | 1.11 | 799 |
+| topology_bracket | static_structural | quick | no | - | 15,993 | 19,479 | 0.82 | 806 |
+| topology_bracket | static_structural | medium | no | - | 27,608 | 44,062 | 0.63 | 821 |
+| heatsink_duct | cht_enclosure | quick | no | - | 248,736 | 221,287 | 1.12 | 895 |
 
-The estimate is within about 45 % of the real count on these meshes (the table has the misses); finer presets of thin or small-featured bodies are the worst (curved surfaces are sized by the
+27 meshes: median -0.12, mean absolute 0.19, worst -0.51 (estimate / actual - 1). The edge-refinement rows use the cap bound (half of 150,000 extra cells): the quadcopter row shows how far off that is (the real edge cells were 233,000), which is why the calibrated edge estimate (#50) is the plug.
+
+The estimate is within about 50 % of the real count on these meshes and 19 % on average (the table has the misses; the range shown is plus or minus 50 %); finer presets of thin or small-featured bodies are the worst (curved surfaces are sized by the
 mesher's curvature rule, which is only estimated from the display triangulation). The sharp-edge refinement is bounded by its cap until its calibrated estimate (#50) is joined. Not measured: meshes above 1.4 million cells,
 the hex-dominant mesher, and the run's memory.
 

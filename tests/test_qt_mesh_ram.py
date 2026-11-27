@@ -85,7 +85,7 @@ def test_a_refused_budget_is_shown_and_generate_mesh_says_why(ctl):
     m = settled(c)
     assert m.last["budget"]["status"] == "refused"
     txt = m.state.property("api_text")
-    assert txt.startswith("Budget on: the mesh does not fit.") and "smallest it can reach is about" in txt and "raise the budget to at least" in txt
+    assert txt.startswith("Budget on: refused.") and "smallest it can reach is about" in txt and "raise the budget to at least" in txt
     assert m.estimate.property("api_text").startswith("Smallest the budget can make:")
     with pytest.raises(Exception) as ex:
         c.widget_do("mesh.generate", "click")

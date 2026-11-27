@@ -608,7 +608,7 @@ TOOLS = [
     ("mesh_estimate", "Before meshing: how many cells and how much memory (MB) the tetrahedral mesh will need for the current mesh settings, worked out from the size fields "
                       "(no mesh is made, a second or two). Returns estimate {cells, cells_low, cells_high, mesh_mb (the meshing job: about 830 MB fixed plus a share per cell), "
                       "run_mb (the simulation run, flow studies), peak_mb and its range, the sizes}, free_mb, and - when a memory budget is on - budget {mb, status "
-                      "fits|coarsened|refused, message, changes} and applied (the estimate of the mesh the budget makes). Typically within 15 % of the real cell count (35 % allowed for), "
+                      "fits|coarsened|refused, message, changes} and applied (the estimate of the mesh the budget makes). On average within 20 % of the real cell count (the range allows 50 %), "
                       "see docs/MESHING_GUIDE.md. The hex-dominant mesh is not estimated.",
      {"type": "object", "properties": {}}, mesh_estimate),
     ("set_memory_budget", "Set the memory budget of the mesh: mb (a number of MB) or percent (of the free memory now, 5 to 95), or on: false to switch it off. With a budget on, "

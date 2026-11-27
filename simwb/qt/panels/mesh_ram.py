@@ -316,7 +316,7 @@ class MemoryCard(QWidget):
         st = bud.get("status")
         if bud.get("on") and st:
             col, sym, head = {"fits": (t["ok_text"], "✓", "Budget on: the mesh fits"), "coarsened": (t["ok_text"], "✓", "Budget on: the bulk is coarsened"),
-                              "refused": (t["bad_text"], "✗", "Budget on: the mesh does not fit")}[st]
+                              "refused": (t["bad_text"], "✗", "Budget on: refused")}[st]
             self.state.setText(f"<span style='color:{col}'><b>{sym} {head}.</b></span> {bud['message']}")
             self.state.setProperty("api_text", f"{head}. {bud['message']}")
             self.state.setVisible(True)

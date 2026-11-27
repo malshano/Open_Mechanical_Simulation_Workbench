@@ -25,9 +25,10 @@ TET_VOLUME = 1.0 / (6.0 * math.sqrt(2.0))       # volume of a regular tetrahedro
 
 # --- calibration: measured on real meshes with the gmsh worker (benchmarks/mesh_plan_calibrate.py, results in benchmarks/results/mesh_plan_*.jsonl) ---
 CELLS_CALIBRATION = 0.45    # real cells / the integral of regular tetrahedra, fitted on 22 real meshes of 3 example geometries (benchmarks/mesh_plan_fit.py; docs/MESHING_GUIDE.md)
-SURFACE_CELLS_SOLID = 3.0   # the same for a solid study (5 real meshes: heated plate, bracket; the flow value over-counts there)
+SURFACE_CELLS_SOLID = 6.0   # the same for a solid study (5 real meshes: heated plate, bracket; the flow value over-counts there)
 SURFACE_CELLS = 8.0         # cells on the walls per (area / wall size^2), same fit: the surface triangles and the tetrahedra under them, which the volume integral misses
-CELLS_SPREAD = 0.45         # the estimate is within this share of the real cells in those measurements (kept with a margin)
+SMART_FACTOR = 0.75         # smart sizing's meshes came out 0.64 to 0.8 of the estimate in 7 meshes (it keeps the edge sizes off the surface: Mesh.MeshSizeExtendFromBoundary 0)
+CELLS_SPREAD = 0.5          # the estimate is within this share of the real cells in those measurements (kept with a margin)
 RAM_FIXED_MB = 800.0        # what a mesh job holds before the first cell: Python, numpy, gmsh and the OpenCASCADE kernel (fit: 794 MB)
 RAM_PER_CELL_KB = 0.5       # the memory of the mesh job per cell (the slope), kilobytes (fit: 0.46 KB over 22 meshes, 55,000 to 1.4 million cells)
 RAM_SPREAD = 0.25           # share of the memory estimate for what the slope does not capture (surface mesh, the sizes, the system)
@@ -486,7 +487,7 @@ def sizing(study: str, faces: list, info: dict, ms: dict, rc: dict | None = None
     if study == "cht_enclosure":
         notes.append("Narrow air gaps between parts are refined by the mesher and are not in this estimate: it can be a little low for finned parts.")
     return {"field": Field(far, floor, src, notes), "region": region, "h_wall": h_wall, "h_body": h_body, "far": far, "growth": growth, "notes": notes,
-            "n_curv": n_curv, "surface": surf, "surface_units": units}
+            "n_curv": n_curv, "surface": surf, "surface_units": units, "smart": bool(rc)}
 
 
 # ---------------------------------------------------------------------------------------------------------------------------------- the memory model
@@ -546,7 +547,7 @@ def estimate_sizing(sz: dict, extra: dict | None = None) -> dict:
         if len(surf.T):
             keep = (lambda P: ~surf.inside(P)) if r["mode"] == "outside" else surf.inside
     out = integrate(r["lo"], r["hi"], sz["field"], keep)
-    base = CELLS_CALIBRATION * out["cells"] + (SURFACE_CELLS_SOLID if r["mode"] == "inside" else SURFACE_CELLS) * sz.get("surface_units", 0.0)
+    base = (CELLS_CALIBRATION * out["cells"] + (SURFACE_CELLS_SOLID if r["mode"] == "inside" else SURFACE_CELLS) * sz.get("surface_units", 0.0)) * (SMART_FACTOR if sz.get("smart") else 1.0)
     ex = extra or {"cells": 0.0, "low": 0.0, "high": 0.0}
     cells = base + ex["cells"]
     low = base * (1 - CELLS_SPREAD) + ex["low"]

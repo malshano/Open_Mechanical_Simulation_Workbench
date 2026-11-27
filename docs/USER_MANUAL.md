@@ -257,7 +257,7 @@ Heat sources are set on parts (body settings), not on faces, in the heat and coo
 6b. **Memory budget and the estimate** (every study, tetrahedral mesh; under the advanced options, above **Generate mesh**): how many cells and how much memory the mesh will need, before you make it.
    - The line **About 1.2 million cells (0.8 to 1.7 million), about 3.4 GB of memory (range 2.5 to 4.6 GB)** is worked out from the sizes the mesher will use (the cells at the walls, thin parts, part sizings,
      refinement regions, rotors, the near field and wake of smart sizing, the growth and the far field). It is not a mesh: it takes a second or two and follows every change of the settings. The range is
-     how far the estimate was from the real mesh in our measurements (cells: up to 45 %); it is not a guarantee. The line under it says how much of the memory is the mesh job (about 0.8 GB for Python and Gmsh,
+     how far the estimate was from the real mesh in our measurements (cells: up to 50 %, 19 % on average); it is not a guarantee. The line under it says how much of the memory is the mesh job (about 0.8 GB for Python and Gmsh,
      plus about 0.5 kB a cell) and how much the run needs (flow studies: about 4.2 kB a cell, from earlier runs). The bar shows the estimate (the pale part is the range) against the **budget** (the dark mark)
      and the memory that is free now (the length of the bar); it turns orange over the budget and red over the free memory.
    - **Memory budget**: **Off** (the default: nothing changes), **MB** (the most the mesh and the run may need) or **% of free memory** (counted when you press Generate mesh, so closing other programs gives a finer mesh).
