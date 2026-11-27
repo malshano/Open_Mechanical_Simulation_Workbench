@@ -378,3 +378,23 @@ def test_a_count_over_the_cap_is_flagged_and_the_cap_that_was_applied_is_named(f
     t = c.widget_do("mesh.edges.made")["text"]
     assert "over the cap of 100,000" in t and "Counted in the mesh: about 200,000 extra cells" in t and "⚠" in t
     assert t.index("Counted in the mesh") < t.index("estimated")                            # (the count comes before the estimate)
+
+
+def test_the_group_is_usable_while_the_sharp_edges_are_being_looked_for(flow, monkeypatch):
+    """The first open of the group starts the edge search (a second or two on a real model): the message says so and every control works meanwhile."""
+    from test_edge_estimate import _Sleeper
+    from simwb import memlimit
+
+    monkeypatch.setattr(memlimit, "LimitedPopen", _Sleeper)
+    _Sleeper.made.clear()
+    open_group(flow, "edges")
+    c = flow
+    assert edgepreview.scan_state(c.engine.project())["state"] == "running"
+    assert "Looking for the sharp edges" in c.widget_do("mesh.edges.estimate")["text"]
+    assert c.widget_do("mesh.edges.on")["enabled"]
+    c.widget_do("mesh.edges.on", "set", True)
+    assert c.widget_do("mesh.edges.factor")["enabled"]
+    c.widget_do("mesh.edges.factor", "set", "9")
+    assert mesh(c)["edge_refine"]["factor"] == 9.0
+    assert "Looking for the sharp edges" in c.widget_do("mesh.edges.estimate")["text"]
+    edgepreview.cancel_all_scans()

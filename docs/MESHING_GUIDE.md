@@ -48,10 +48,52 @@ The same for the assistant: `mesh_advice`, `mesh_apply_recipe`.
 
 ### Edge refinement and tolerant layers (Mesh step, Expert)
 
-The leading and trailing edges of a thin body carry much of its friction, and the cells there are the most expensive to get right. **Edge refinement** makes the cells along the sharp edges across the flow (not the ones along it)
-the wall cell / factor (default 6) and grows them back to the wall size with the mesh growth ratio. The cost is estimated before meshing from the length of the edges (a tetrahedron of edge s has the volume s³ / (6 √2); the zone is the full tube round the edge, an upper bound
-for the air side) and capped (default 150,000 extra cells): the edge cells are made coarser until the estimate fits. The estimate is rough: on the example wing (quick, factor 6) it was 48,000 extra cells; the same mesh without the option had 54,500 cells and
-with it 125,600, i.e. 71,000 more (the fine surface cells along the edge are in that too), and 64,000 cells (51 %) lay within the reach of the edge field. Plan the memory with the larger number.
+The leading and trailing edges of a thin body carry much of its friction, and the cells there are the most expensive to get right. **Edge refinement** makes the cells along the sharp edges across the flow
+(not the ones along it) the wall cell / factor (default 6) and grows them back to the wall size with the mesh growth ratio. The cells it adds are estimated before meshing and capped (default 150,000):
+the edge cells are made coarser, in steps of 8 %, until the estimate fits under the cap.
+
+**Why the first estimate was far off, and what was changed.** Measured as the mesh with the option minus the same mesh without it (gmsh only, quick preset, no layers), the first estimate (a regular tetrahedron
+of the field size, edge by edge) was 0.3 to 8 times the real number, and the real number could be several times over the cap. Three causes:
+
+1. The mesher's global smallest cell size (half the wall size, or the thin-part size) cut every edge cell finer than it back to it: a factor of 6 gave the cells of a factor of 3 or so. The edge cells now have their own floor.
+2. The size at the edge curves was extended from the boundary over the whole faces next to it (the Gmsh option `MeshSizeExtendFromBoundary`): fine triangles, and the tetrahedra under them, covered whole faces - 154,000 extra cells for a factor of 6 on the example wing
+   where the field alone makes about 40,000, and different from face to face. Where an edge field is used the size is no longer extended from the boundary (the smart sizing recipe already did this), so the size field alone decides and the estimate can count it.
+3. The sum over the edges counted the tubes of close edges twice (the two rims of a thin plate). `edge_cells_union` integrates the cells of the size field over the union of the tubes (Monte Carlo, fixed seed, about 1 % noise; each edge counts for the
+   air share of the tube, (360 - face angle) / 360), times a calibration constant of 0.52: the mesher's cells are about 1.5 times the edge of a regular tetrahedron of the field size.
+
+**What it comes to** (smart sizing, so that the mesh without the option is the same mesh but for the edges; quick preset; real = cells with less cells without; estimate = what the panel shows before meshing):
+
+| geometry | factor, cap | estimate | real | real / estimate | real / cap |
+|---|---|---|---|---|---|
+| wing | 3 | 13,900 | 16,400 | 1.18 | |
+| wing | 6 | 54,400 | 60,800 | 1.12 | |
+| wing | 12 | 144,200 | 150,300 | 1.04 | |
+| flutter plate | 3 | 42,800 | 37,200 | 0.87 | |
+| flutter plate | 6 | 174,800 | 168,600 | 0.96 | |
+| flutter plate | 12 | 508,600 | 469,600 | 0.92 | |
+| camera mount | 3 | 36,300 | 37,700 | 1.04 | |
+| camera mount | 6 | 141,600 | 131,700 | 0.93 | |
+| camera mount | 12 | 388,100 | 330,800 | 0.85 | |
+| wing | 12, cap 20,000 (factor lowered to 3.2) | 16,800 | 20,100 | 1.19 | 1.01 |
+| flutter plate | 12, cap 20,000 (to 2.2) | 17,500 | 14,700 | 0.84 | 0.74 |
+| camera mount | 12, cap 20,000 (to 2.4) | 19,200 | 20,800 | 1.08 | 1.04 |
+| wing | 12, cap 100,000 (to 8.8) | 96,200 | 105,900 | 1.10 | 1.06 |
+| flutter plate | 12, cap 100,000 (to 4.4) | 99,900 | 92,800 | 0.93 | 0.93 |
+| camera mount | 12, cap 100,000 (to 4.8) | 95,500 | 91,800 | 0.96 | 0.92 |
+| topology bracket (not used for the calibration) | 6 | 50,700 | 53,400 | 1.05 | |
+| quadcopter (not used) | 6 | 77,500 | 73,600 | 0.95 | |
+| topology bracket (not used) | 12, cap 50,000 (to 5.6) | 44,800 | 47,700 | 1.07 | 0.95 |
+| quadcopter (not used) | 12, cap 50,000 (to 4.4) | 45,100 | 45,100 | 1.00 | 0.90 |
+
+Over these 19 meshes the real number is 0.84 to 1.19 times the estimate (the calibration constant was fitted on the first nine; the other ten, among them two geometries it never saw, are within 0.84 to 1.10), and with the cap the real extra cells came out at 0.74 to 1.06
+times the cap. The panel therefore says "within about 25 %" and the cap can be overshot by a few percent. Not measured: other presets than quick, other flow models, very large models, and a mesh with wall layers (the layers are added to the mesh afterwards and are not in these numbers).
+
+With **Smart sizing off** the comparison is not clean: the old sizing spreads the sizes of curved edges over whole faces, which the edge size field does not, so the mesh with edge refinement can be smaller than without (example wing, factor 6: 2,100 more cells in total, though the edge zone holds
+about 15,000 more than it would at the wall size). The cap and the estimate are for the cells of the edge zone; the real total difference is lower in that mode.
+
+After meshing the panel counts the cells in the mesh itself: the tetrahedra within the reach of the edge field (`dist_max`) of the refined edges, less what the same volume holds at the wall size, taken from the mesh's own cells just outside that reach. In the smart sizing
+meshes it agreed with the real difference within 21 % in eleven of twelve cases (a small count, 33,000 against 14,700, was 2.2 times the real one), and it is shown in the warning colour when it is over the cap.
+
 **Tolerant layers** loosen the layer step's quality limits (maxFaceThicknessRatio 0.5 to 0.8, maxThicknessToMedialRatio 0.3 to 0.6, 100 instead of 50 iterations, relaxed mesh-quality limits) so that more layers survive on sharp edges; the price is less smooth layer cells there.
 
 ## 4. What we measured on the example wing (coarse preset unless noted)
