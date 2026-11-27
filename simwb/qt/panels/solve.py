@@ -190,10 +190,15 @@ class SolvePanel(_Panel):
         self.case.clicked.connect(self._case_only)
         self.zip = _btn("Save case (.zip)…", "solve.case_zip", "Save the OpenFOAM case folder of this study as a zip file")
         self.zip.clicked.connect(self._zip_dialog)
+        self.load_case = _btn("Load results from case", "solve.load_case",
+                              "Join the saved times in the case folder and load them as the results, without running the solver "
+                              "(a time that cannot be read is left out and named)")
+        self.load_case.clicked.connect(self._load_case)
         self.case_row = QWidget()
         _fl = FlowLayout(self.case_row)
         _fl.addWidget(self.case)
         _fl.addWidget(self.zip)
+        _fl.addWidget(self.load_case)
         self.v.addWidget(self.case_row)
         # ---- progress
         self.bar = wid(QProgressBar(), "solve.progress")
@@ -257,6 +262,15 @@ class SolvePanel(_Panel):
         try:
             self.engine.project().solve(export_only=True)
             self.state.setText("Writing the OpenFOAM case…")
+            self.engine.changed.emit()
+        except Exception as e:  # noqa: BLE001
+            self._fail(e)
+
+    def _load_case(self):
+        try:
+            self.engine.project().load_case_results()
+            self.log.clear()
+            self.state.setText("Loading the results from the case folder…")
             self.engine.changed.emit()
         except Exception as e:  # noqa: BLE001
             self._fail(e)
@@ -680,6 +694,10 @@ class SolvePanel(_Panel):
                 notes.append("Fix before solving:<br>" + "<br>".join("• " + b for b in blockers))
             if st["solve"].get("status") == "interrupted" and not self.running:
                 notes.append("The last run was stopped before it finished. Continue it below, or run again.")
+            ch = st.get("setup_changes")
+            if ch and st["solve"].get("status") in ("stale", "interrupted", "failed") and not self.running:
+                notes.append("Changed since the last run: " + "; ".join(ch[:4]) + (f" and {len(ch) - 4} more" if len(ch) > 4 else "")
+                             + ". Change it back to carry on the old run, or run again (that replaces the old case).")
         if blockers and meshed and not self.running and not getattr(self, "done", False):
             self.state.setText("Before it can run: " + blockers[0] + (f" (and {len(blockers) - 1} more: see above)" if len(blockers) > 1 else ""))
         self.note.setText("<br>".join(notes))
@@ -700,6 +718,19 @@ class SolvePanel(_Panel):
                              else "A run is in progress" if self.running else "Not yet: generate the mesh and complete the setup first")
         case_dir = P.open_project(self.engine.pid).case_dir if (self.engine.pid and st and self.flow) else None
         has_case = bool(case_dir is not None and case_dir.exists())
+        if has_case and not self.running:
+            from ...solvers.openfoam import runner
+
+            n_un = runner.unjoined_times(case_dir)
+            if n_un:   # (a new run deletes the old case: say so before, not after)
+                self.note.setText((self.note.text() + "<br>" if self.note.text() else "")
+                                  + f"The case folder holds {n_un} saved time(s) that are not loaded yet. Running again deletes them: "
+                                    "use 'Load results from case' first to keep what you can.")
+                self.note.setVisible(True)
+        self.load_case.setEnabled(has_case and not self.running)
+        self.load_case.setToolTip("Join the saved times in the case folder and load them as the results, without running the solver "
+                                  "(a time that cannot be read is left out and named)" if self.load_case.isEnabled()
+                                  else "A run is in progress" if self.running else "Not yet: no OpenFOAM case is written")
         self.zip.setEnabled(has_case and not self.running)
         self.zip.setToolTip("Save the OpenFOAM case folder of this study as a zip file" if self.zip.isEnabled()
                             else "A run is in progress" if self.running else "Not yet: no OpenFOAM case is written (run, or write the case only)")

@@ -451,6 +451,12 @@ def solve(pid: str, body: dict = Body(default={})):
                                           end_time=body.get("end_time"), write_interval=body.get("write_interval")))
 
 
+@app.post("/api/projects/{pid}/results/load_case")
+def results_load_case(pid: str):
+    """Join and load the results already in the case folder, without running the solver."""
+    return _job(P.open_project(pid).load_case_results())
+
+
 @app.post("/api/projects/{pid}/duplicate")
 def duplicate(pid: str, body: dict = Body(default={})):
     return P.duplicate_project(pid, body.get("name")).state()

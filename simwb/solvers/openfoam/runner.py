@@ -13,6 +13,7 @@ Supported backends (checked in this order):
 from __future__ import annotations
 
 import glob
+import json
 
 import numpy as np
 import os
@@ -492,6 +493,13 @@ def processor_count(case: Path) -> int:
     return sum(1 for d in Path(case).glob("processor*") if d.is_dir() and d.name[9:].isdigit())
 
 
+def unjoined_times(case: Path) -> int:
+    """How many saved times (not counting the start state) exist only as pieces in the processor folders: a new run
+    deletes them with the old case, so they are worth loading first."""
+    p0 = Path(case) / "processor0"
+    return sum(1 for t, v in _time_dirs(p0).items() if v > 0 and not (Path(case) / t).is_dir())
+
+
 def _time_dirs(d: Path) -> dict:
     return {x.name: float(x.name) for x in d.iterdir() if x.is_dir() and re.fullmatch(r"[0-9.eE+-]+", x.name)} \
         if d.is_dir() else {}
@@ -654,10 +662,57 @@ def divergence(text: str, tail: int = 60000) -> str | None:
     return None
 
 
-def failure_hint(case: Path, tail: str = "") -> str:
+# The start-up banner of every OpenFOAM program says that floating point exceptions are trapped ("trapFpe: Floating
+# point exception trapping enabled (FOAM_SIGFPE)", "sigFpe : Enabling floating point exception trapping"): that is a
+# setting, not a crash, and it must not count as one.
+_FPE_BANNER = re.compile(r"FOAM_SIGFPE|exception trapping|trapping enabled", re.I)
+_FPE_CRASH = re.compile(r"sigFpe::sigHandler|SIGFPE|Floating point exception", re.I)
+
+
+def real_fpe(text: str) -> bool:
+    """True when the text shows a floating point exception that really happened (the stack trace of sigFpe, or the
+    system's "Floating point exception (core dumped)"), not the banner line every run starts with."""
+    for line in (text or "").splitlines():
+        if _FPE_CRASH.search(line) and not _FPE_BANNER.search(line):
+            return True
+    return False
+
+
+RE_IO_FILE = re.compile(r"^file:\s*(?P<file>.*?)(?:\s+at line\s+(?P<line>\d+))?\.?\s*$")
+
+
+def io_error(text: str) -> dict | None:
+    """The last "FOAM FATAL IO ERROR" of a log as {why, file, line} (a file OpenFOAM could not read), None when there
+    is none."""
+    lines = (text or "").splitlines()
+    found = None
+    for i, ln in enumerate(lines):
+        if "FOAM FATAL IO ERROR" not in ln:
+            continue
+        why = next((x.strip() for x in lines[i + 1:i + 4] if x.strip()), "")
+        for x in lines[i + 1:i + 12]:
+            m = RE_IO_FILE.match(x.strip())
+            if m:
+                found = {"why": why if not RE_IO_FILE.match(why) else "", "file": m.group("file").strip().strip("\"'"),
+                         "line": int(m.group("line")) if m.group("line") else None}
+                break
+        else:
+            found = {"why": why, "file": "", "line": None}
+    return found
+
+
+def failure_hint(case: Path, tail: str = "", step: str | None = None) -> str:
     """A plain-language likely cause for a failed parallel run, from the log tail and the decomposed mesh ("" when
-    nothing is recognised)."""
+    nothing is recognised). step: the program that failed ("reconstructPar", "decomposePar", the solver ...); a
+    divergence is only named when the solver itself failed."""
     t = tail or ""
+    solver_failed = step in (None, "") or step not in ("reconstructPar", "decomposePar", "mapFields", "snappyHexMesh")
+    io = io_error(t)
+    if io is not None:
+        where = (io["file"] or "a saved file") + (f" (line {io['line']})" if io["line"] else "")
+        return (f"{step + ' ' if step else 'OpenFOAM '}could not read {where}: {io['why'] or 'unreadable file'}. "
+                "The file is damaged or was not written completely (the run was stopped while saving, or the disk "
+                "was full)")
     if "Message truncated" in t or "MPI_Bcast" in t:
         bad = split_interfaces(case)
         if bad:
@@ -665,7 +720,7 @@ def failure_hint(case: Path, tail: str = "") -> str:
                     "Windows MPI cannot run. Move the sliding zones further apart, or set CPU cores to 1 in Solve.")
         return ("the parallel communication broke down (a sliding-mesh interface split over processes is the usual "
                 "cause). Try CPU cores = 1 in Solve.")
-    if "Floating point exception" in t or "sigFpe" in t:
+    if solver_failed and real_fpe(t):
         return ("the solution diverged (floating point exception). Use a smaller time step, a coarser rotation per "
                 "step, or check the mesh quality near thin gaps and blade tips.")
     if "bad_alloc" in t or "out of memory" in t.lower():
@@ -736,17 +791,52 @@ def reconstruct_windows(case: Path, info: dict, regions: bool) -> None:
                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
 
+JOIN_SKIPPED = "join_skipped.json"  # written when some saved times could not be joined
 JOIN_RAMP_S = 20  # seconds between two joins starting (the memory of the last one is still growing)
 
 
-def run_split_times(case: Path, st: dict, exe: Path, env: dict, on_proc=None, on_line=None) -> int | None:
+UNJOINED = "unjoined"  # case sub-folder that keeps the pieces of a time that could not be joined
+
+
+def join_failure(log_text: str) -> str:
+    """Why one time could not be joined, in a line, from its reconstructPar log."""
+    io = io_error(log_text)
+    if io is not None:
+        return (f"could not read {io['file'] or 'a file'}" + (f" (line {io['line']})" if io["line"] else "")
+                + (f": {io['why']}" if io["why"] else ""))
+    last = [x.strip() for x in (log_text or "").splitlines() if x.strip()]
+    return last[-1][:200] if last else "no message"
+
+
+def set_unjoined_aside(case: Path, t: str) -> None:
+    """Move the pieces of a time that could not be joined to case/unjoined/<t>/processorN: they stay (nothing is
+    deleted, the damaged file can be repaired and the time joined by hand), and the processor folders then hold no
+    half-usable time that a restart or "latest time" would pick up."""
+    for d in Path(case).glob(f"processor*/{t}"):
+        dest = Path(case) / UNJOINED / t / d.parent.name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if dest.exists():
+            shutil.rmtree(dest, ignore_errors=True)
+        try:
+            shutil.move(str(d), str(dest))
+        except OSError:
+            pass
+    shutil.rmtree(Path(case) / t, ignore_errors=True)  # a half-written join of that time
+
+
+def run_split_times(case: Path, st: dict, exe: Path, env: dict, on_proc=None, on_line=None, report: dict | None = None,
+                    keep_pieces: bool = False) -> int | None:
     """reconstructPar is serial: with many saved times (a transient run) join them with several processes at once.
     The pieces of a joined time are deleted from the processor folders right away: the split and the joined copy of
     a whole run never sit on the disk together (a 2.7 M cell sliding run: about 0.6 GB per saved time compressed,
     twice that during a plain join). As many processes as the run had cores work at once, as long as the memory
     allows it: each holds a whole time of the mesh (about 0.6 GB per million cells), and the computer ran out of
     memory when too many did. A new one starts as soon as one finishes (no waiting for the slowest of a round).
-    Returns the worst exit code, None when there is nothing to split (the caller runs the step as usual)."""
+    The newest time is joined first. A time that cannot be joined (a damaged file in one of the pieces) is skipped:
+    the others are still joined, and the skipped one is named in report["skipped"] ({time, reason}); report["joined"]
+    lists the times that were joined. keep_pieces: leave the pieces in the processor folders (loading the results of a
+    case that may still be continued). Returns the worst exit code, None when there is nothing to split (the caller
+    runs the step as usual)."""
     from ... import memlimit  # (simwb/memlimit.py)
 
     p0 = case / "processor0"
@@ -754,8 +844,11 @@ def run_split_times(case: Path, st: dict, exe: Path, env: dict, on_proc=None, on
     # which failed a finished run at its very last step)
     times = sorted((d.name for d in p0.iterdir() if d.is_dir() and re.fullmatch(r"[0-9.eE+-]+", d.name)
                     and float(d.name) > 0), key=float) if p0.exists() else []
+    if keep_pieces:  # (loading the results of a case again: what is joined already is not joined twice)
+        times = [t for t in times if not (case / t).is_dir()]
     if len(times) < 2:
         return None
+    times = [times[-1]] + times[:-1]  # the newest first: it is the one the results are read from
     cells = 0
     try:
         cells = sum(int(c) for _, c in RE_PROC_CELLS.findall((case / "log.decomposePar").read_text(errors="ignore")))
@@ -771,6 +864,8 @@ def run_split_times(case: Path, st: dict, exe: Path, env: dict, on_proc=None, on
     import time as _time
 
     worst, k, pending, running, failed, last = 0, 0, list(times), [], False, 0.0
+    rep = report if report is not None else {}
+    rep.update(joined=[], skipped=[])
     logs = []  # (index, path), joined into the one log in time order at the end
     try:
         while pending or running:
@@ -786,26 +881,42 @@ def run_split_times(case: Path, st: dict, exe: Path, env: dict, on_proc=None, on
                 pr = subprocess.Popen([str(exe), *st.get("args", []), "-time", t, "-case", str(case)],
                                       cwd=case, env=env, stdout=lf, stderr=subprocess.STDOUT,
                                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-                running.append((pr, t, lf))
+                running.append((pr, t, lf, path))
                 if on_proc:
                     on_proc(pr)
             _time.sleep(0.5)
             for item in [r for r in running if r[0].poll() is not None]:
                 running.remove(item)
-                pr, t, lf = item
+                pr, t, lf, path = item
                 lf.close()
                 worst = max(worst, pr.returncode)
                 if pr.returncode != 0:
-                    failed = True
+                    try:
+                        why = join_failure(path.read_text(encoding="utf-8", errors="ignore"))
+                    except OSError:
+                        why = "no message"
+                    rep["skipped"].append({"time": t, "reason": why})
+                    shutil.rmtree(case / t, ignore_errors=True)  # (a half-written join of that time)
+                    if on_line:
+                        on_line(f"time {t} skipped: reconstructPar {why}")
+                    # (nothing joined after several tries: the cause is not one damaged time but the setup, stop)
+                    if not rep["joined"] and len(rep["skipped"]) >= 3:
+                        failed = True
                     continue
-                for d in case.glob(f"processor*/{t}"):  # joined: the pieces are no longer needed
-                    shutil.rmtree(d, ignore_errors=True)
+                rep["joined"].append(t)
+                if not keep_pieces:
+                    for d in case.glob(f"processor*/{t}"):  # joined: the pieces are no longer needed
+                        shutil.rmtree(d, ignore_errors=True)
                 if on_line:
-                    on_line(f"joined {len(times) - len(pending) - len(running)} of {len(times)} times")
+                    on_line(f"joined {len(rep['joined'])} of {len(times)} times")
             if failed and not running:
                 break
+        rep["not_tried"] = list(pending)
+        if rep["joined"] and not keep_pieces:  # the rest is joined: the damaged times are put aside, nothing is lost
+            for sk in rep["skipped"]:
+                set_unjoined_aside(case, sk["time"])
     finally:
-        for pr, _, lf in running:  # an exception (Cancel): leave nothing running
+        for pr, _, lf, _p in running:  # an exception (Cancel): leave nothing running
             try:
                 pr.kill()
             except OSError:
@@ -829,8 +940,12 @@ def run_steps_windows(case: Path, steps: list, info: dict, on_proc=None, on_line
     if not any(st.get("keep_logs") for st in steps):
         for f in case.glob("log.*"):
             f.unlink()
-    for name in ("case.done", "case.failed"):
+    for name in ("case.done", "case.failed", JOIN_SKIPPED):
         (case / name).unlink(missing_ok=True)
+
+    def failed(st):  # case.failed names the step that failed: the diagnosis reads that step's log, not the solver's
+        (case / "case.failed").write_text(json.dumps({"step": st.get("app"), "log": st.get("log")}))
+
     for st in steps:
         if st.get("action") == "reset0":
             if (case / "0").exists():
@@ -848,13 +963,23 @@ def run_steps_windows(case: Path, steps: list, info: dict, on_proc=None, on_line
             (case / "0").mkdir(exist_ok=True)
             continue
         exe = Path(info["bin_dir"]) / (st["app"] + ".exe")
-        rc = run_split_times(case, st, exe, env, on_proc, on_line) if st.get("split_times") else None
+        rep: dict = {}
+        rc = run_split_times(case, st, exe, env, on_proc, on_line, report=rep) if st.get("split_times") else None
         if rc == 0:
+            continue
+        if rc is not None and rep.get("joined"):
+            # some times could not be joined, the others were: carry on with those and say which are missing
+            (case / JOIN_SKIPPED).write_text(json.dumps({"skipped": rep["skipped"], "not_tried": rep.get("not_tried", []),
+                                                         "joined": len(rep["joined"])}))
+            if on_line:
+                for sk in rep["skipped"]:
+                    on_line(f"WARNING: time {sk['time']} was left out: {sk['reason']}. Its pieces are kept in "
+                            f"{UNJOINED}/{sk['time']}")
             continue
         if rc is not None and not st.get("allow_fail"):
             if on_line:
                 on_line(f"{st['app']} failed (exit code {rc}) - see {st['log']}")
-            (case / "case.failed").touch()
+            failed(st)
             return False
         cmd = [str(exe), *st.get("args", []), "-case", str(case)]
         if st.get("mpi"):
@@ -871,9 +996,13 @@ def run_steps_windows(case: Path, steps: list, info: dict, on_proc=None, on_line
         if rc != 0 and not st.get("allow_fail"):
             if on_line:
                 on_line(f"{st['app']} failed (exit code {rc}) - see {st['log']}")
-            (case / "case.failed").touch()
+            failed(st)
             return False
-    log = case / next((st for st in steps if st.get("main")), steps[-1])["log"]
+    main = next((st for st in steps if st.get("main")), steps[-1])
+    log = case / main["log"]
     ok = log.exists() and re.search(r"^End\s*$", log.read_text(errors="ignore"), re.M) is not None
-    (case / ("case.done" if ok else "case.failed")).touch()
+    if ok:
+        (case / "case.done").touch()
+    else:
+        failed(main)
     return ok
