@@ -44,7 +44,7 @@ class ZoneView:
         self._iface_sig = None if not items else tuple((i["name"], i["faces"]) for i in items)
         for it in items:
             pd = _pd(it["vertices"], polys=[tuple(t) for t in it["triangles"]])
-            for wire, op in ((False, 0.8), (True, 1.0)):
+            for wire, op in ((False, 0.30), (True, 0.85)):          # (a faint fill and the mesh edges: the cells of the zone stay visible through it)
                 m = vtkPolyDataMapper()
                 m.SetInputData(pd)
                 act = vtkActor()
@@ -56,8 +56,7 @@ class ZoneView:
                 pr.SetDiffuse(0.0)
                 if wire:
                     pr.SetRepresentationToWireframe()
-                    pr.SetColor(*_rgb("#ffffff"))
-                    pr.SetOpacity(0.35)
+                    pr.SetOpacity(0.85)
                 act.PickableOff()
                 self.v.ren.AddActor(act)
                 self.iface_actors.append(act)

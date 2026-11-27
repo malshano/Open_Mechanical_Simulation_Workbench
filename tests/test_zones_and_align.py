@@ -339,9 +339,12 @@ def test_the_zone_boundary_of_the_mesh_is_counted_and_drawn_in_the_mesh_step(aer
     zv = c.win.view.zone_view
     assert len(zv.iface_actors) == 2 and mp.iface_chk.isVisibleTo(mp) is not None
     assert f"prop: sliding interface, {len(tris):,} faces" in mp.iface_note.text() and "cm²" in mp.iface_note.text()
+    ops = sorted(a.GetProperty().GetOpacity() for a in zv.iface_actors)
+    assert ops[0] <= 0.35 and ops[1] >= 0.8 and zv.iface_actors[1].GetProperty().GetRepresentation() == 1          # (a faint fill and the mesh edges: the cells stay visible through it)
+    assert c.win.view.legend.extra and "Zone boundary" in c.win.view.legend.extra[0]["name"]                        # (the legend says what the pink is)
     mp.iface_chk.setChecked(False)                                                           # (the box takes it out of the view; the count stays)
-    assert not zv.iface_actors and mp.iface_note.text()
+    assert not zv.iface_actors and mp.iface_note.text() and not c.win.view.legend.extra
     mp.iface_chk.setChecked(True)
     assert zv.iface_actors
     c.do("step.go", {"step": "geometry"})
-    assert not zv.iface_actors
+    assert not zv.iface_actors and not c.win.view.legend.extra

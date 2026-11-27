@@ -72,6 +72,7 @@ class MeshPanel(_Panel):
         v = self.view
         v.region_view.clear()
         v.zone_view.clear()
+        v.legend.set_extra([])
         v.layer_view.clear()
         v.set_labels([])
         v.set_face_tints({})
@@ -198,6 +199,8 @@ class MeshPanel(_Panel):
                 items = []
         show = bool(items) and self.iface_chk.isChecked()
         self.view.zone_view.set_interface(items if show else [])
+        from ..zoneview import INTERFACE_COLOUR
+        self.view.legend.set_extra([{"color": INTERFACE_COLOUR, "name": "Zone boundary (sliding interface)"}] if show else [])       # (the legend's colours are the cells'; this is what the pink is)
         self.iface_chk.setVisible(bool(items))
         self.iface_note.setVisible(bool(items))
         self.iface_note.setText("\n".join(
