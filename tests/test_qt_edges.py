@@ -352,3 +352,29 @@ def test_a_real_mesh_of_the_wing_made_from_the_panel_uses_the_settings(ctl):
     assert er["size"] == pytest.approx(pv["plan"]["h_edge"]) and s["sizes"]["near_wall"] == pytest.approx(pv["h_wall"])
     assert s["edge_refine_skipped"] is None
     assert ROUGH(er['estimated_extra_cells']) in ctl.widget_do("mesh.edges.made")["text"]
+
+
+def test_a_count_over_the_cap_is_flagged_and_the_cap_that_was_applied_is_named(flow, monkeypatch):
+    c = flow
+    c.widget_do("mesh.edges.on", "set", True)
+    c.widget_do("mesh.edges.factor", "set", "20")
+    c.widget_do("mesh.edges.cap", "set", "1,000")                                          # (typed with a separator, as it is shown)
+    assert mesh(c)["edge_refine"]["max_cells"] == 1000.0 and c.widget_do("mesh.edges.cap")["value"] == "1,000"
+    open_group(c, "edges")
+    scanned(c)
+    t = c.widget_do("mesh.edges.estimate")["text"]
+    assert "cap 1,000" in t and ("instead of 20×" in t or "nothing is refined" in t)         # what was applied, in words
+    c.widget_do("mesh.edges.cap", "set", "100,000")
+    c.widget_do("mesh.edges.factor", "set", "12")
+    c.do("mesh.generate")
+    wait(c)
+    scanned(c)
+    er = mesh(c)["stats"]["edge_refine"]
+    monkeypatch.setattr(edgepreview, "measure", lambda pr, wait=False: {"state": "ready", "result": {"zone_cells": 500000, "zone_share": 0.5, "extra_cells": 2 * er["cap_cells"],
+                                                                                                          "distance": er["dist_max"]}, "error": None})
+    c.win.panels["mesh"].adv._sig = None                                                    # (build the panel again)
+    c.engine.changed.emit()
+    c._settle()
+    t = c.widget_do("mesh.edges.made")["text"]
+    assert "over the cap of 100,000" in t and "Counted in the mesh: about 200,000 extra cells" in t and "⚠" in t
+    assert t.index("Counted in the mesh") < t.index("estimated")                            # (the count comes before the estimate)

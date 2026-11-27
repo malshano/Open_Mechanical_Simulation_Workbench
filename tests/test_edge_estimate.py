@@ -80,8 +80,8 @@ def test_a_partial_dictionary_keeps_the_other_values(aero):
     assert aero.data["mesh"]["edge_refine"]["max_cells"] == 5000.0               # (a refused call changes nothing)
     aero.set_mesh(edge_refinement=False)
     aero.set_mesh(smart=True)
-    aero.set_mesh(edge_refinement={"max_cells": 8000})                           # (a first dictionary with smart sizing on: its factor, 4, not 6)
-    assert aero.data["mesh"]["edge_refine"] == {"factor": edgepreview.SMART_FACTOR, "max_cells": 8000.0}
+    aero.set_mesh(edge_refinement={"max_cells": 8000})                           # (a first dictionary without a factor: the default, 6)
+    assert aero.data["mesh"]["edge_refine"] == {"factor": 6.0, "max_cells": 8000.0}
 
 
 def test_off_stays_off_whatever_smart_sizing_does(aero):

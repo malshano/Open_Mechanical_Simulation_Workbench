@@ -131,6 +131,9 @@ def _estimate(pv: dict, on: bool) -> QLabel:
     if pl["capped"]:
         txt += f" ⚠ The cap changed the setting: edge cells {used}× finer than the wall cells instead of {fmt_num(pv['factor'])}×."
         tone = "warn"
+    if on and not pv["smart"]:
+        txt += (" With Smart sizing off the whole mesh can come out smaller than without edge refinement: the old sizing spreads fine cells from curved edges over "
+                "whole faces, the edge field does not.")
     if pv["source"] == "smart":
         txt += " Smart sizing switches this on by itself (4×); change a value or switch it off here to use your own."
     return _msg(txt, tone, name)

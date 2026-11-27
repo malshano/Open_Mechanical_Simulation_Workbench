@@ -3013,8 +3013,7 @@ class Project:
             else:
                 from . import edgepreview
 
-                m["edge_refine"] = edgepreview.check_options(edge_refinement, base=m.get("edge_refine"),
-                                                             default_factor=edgepreview.SMART_FACTOR if m.get("smart") else 6.0)
+                m["edge_refine"] = edgepreview.check_options(edge_refinement, base=m.get("edge_refine"))
                 m.pop("no_edge_refine", None)
         if defeature_mm is not False:  # small-face groups merged into the face they sit on: None / 0 = off
             d = studies.finite(defeature_mm or 0, "Defeature size")
