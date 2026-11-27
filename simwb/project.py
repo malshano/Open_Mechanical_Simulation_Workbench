@@ -3877,7 +3877,7 @@ class Project:
                     # (controlDict is rewritten and the run starts from the latest saved time)
                     end = want if end_changed else tr["end_time"]
                     wi = new_wi or wi0
-                    job = self._extend_transient(end, min(wi, end - t0) if wi > 0 and end > t0 else None)
+                    job = self._extend_transient(end, min(wi, end - t0) if wi > 0 and end > t0 else None, keep_end=True)
                     self.data["case_run"] = {k: self.data["settings"].get(k) for k in ("n_frames", "frame_deg")}
                     self.save()
                     return job
@@ -4297,9 +4297,25 @@ class Project:
             wi = end / (max(2, int(s.get("n_frames") or 21)) - 1)
         return wi if abs(wi - wi0) > 0.01 * wi0 else None
 
-    def _extend_transient(self, end_time, write_interval=None) -> Job:
+    @staticmethod
+    def fit_resume_interval(t0: float, end: float, wi: float, dt: float = 0.0) -> tuple:
+        """(end, interval, saves) for a resumed run that keeps the end time the user set: the remaining time is a whole
+        number of saves, so the last one falls on the end. The interval is the requested one when it divides the remaining
+        time, else the nearest that does (with a fixed time step: a whole number of steps, and the end on a solved step)."""
+        rest = end - t0
+        if dt > 0:
+            steps = max(1, round(rest / dt))
+            want = max(1.0, wi / dt)
+            per = min((d for d in range(1, steps + 1) if steps % d == 0), key=lambda d: abs(math.log(d / want)))
+            return t0 + steps * dt, per * dt, steps // per
+        n = max(1, int(rest / wi + 0.5))
+        return end, rest / n, n
+
+    def _extend_transient(self, end_time, write_interval=None, keep_end=False) -> Job:
         """Run a finished (or stopped) transient run on from its last saved time to a later end time, saving every
-        write_interval seconds from there (default: as before). The saved times so far are kept."""
+        write_interval seconds from there (default: as before). The saved times so far are kept. keep_end (a resume
+        with changed settings): the end time is the one the user set, the interval is fitted to it
+        (fit_resume_interval) instead of the end being moved to a whole number of intervals."""
         from .solvers.openfoam import runner
 
         if not (self.case_dir / "simwb_case.json").exists():
@@ -4321,6 +4337,16 @@ class Project:
         if not 0 < wi <= end - t0:
             raise ValueError("The save interval must be positive and at most the extra time")
         dt = float(meta["transient"].get("dt") or 0) if meta["transient"].get("fixed_dt") else 0.0
+        if keep_end:
+            req = wi
+            end, wi, n = self.fit_resume_interval(t0, end, wi, dt)
+            note = f"{n} more save{'s' if n != 1 else ''} every {wi:.4g} s" + (
+                f", fitted from {req:.4g} s so that the last one falls on the end time {end:.6g} s"
+                if abs(wi - req) > 1e-9 * max(req, 1e-30) else "")
+            if n > 400:
+                raise ValueError("That saves more than 400 more time points: use a longer save interval")
+            return JOBS.start("solve", self.id, self._solve_openfoam, False, None, resume_transient=True,
+                              extend=(end, wi, note))
         if dt > 0:  # whole time steps: every saved time is a solved step, and the run ends on one
             wi = max(1, round(wi / dt)) * dt
             end = t0 + max(1, round((end - t0) / wi)) * wi
@@ -4422,13 +4448,14 @@ class Project:
             txt = re.sub(r"^startFrom\s+\w+;", "startFrom       latestTime;", cd.read_text(), flags=re.M)
             txt = re.sub(r"^stopAt\s+\w+;", "stopAt          endTime;", txt, flags=re.M)  # undo Stop's writeNow
             if extend:  # a later end time (and the save interval from here on)
-                end, wi = extend
+                end, wi, *how = extend
                 for key, v in (("endTime", end), ("writeInterval", wi), ("maxDeltaT", wi)):
                     txt = re.sub(rf"^{key}\s+[^;]+;", f"{key:<16}{v:.8g};", txt, flags=re.M)
                 meta["transient"].update(end_time=end, write_interval=wi,
                                          n_frames=len(runner._time_dirs(self.case_dir)) + int(round((end - start) / wi)))
                 (self.case_dir / "simwb_case.json").write_text(json.dumps(meta, indent=1))
-                self.data["settings"]["end_time"] = end
+                if not how:   # (a resume keeps the end time the user set: only a plain extension moves it)
+                    self.data["settings"]["end_time"] = end
                 self.save()
             cd.write_text(txt, newline="\n")
             old = self.case_dir / f"log.{meta['app']}"
@@ -4456,7 +4483,7 @@ class Project:
             it_from = 0
             t_from = start
             msg = (f"Continuing the run from t = {start:.4g} s to {meta['transient']['end_time']:.4g} s, saving every "
-                   f"{meta['transient']['write_interval']:.4g} s" if extend else
+                   f"{meta['transient']['write_interval']:.4g} s" + (f" ({extend[2]})" if len(extend) > 2 else "") if extend else
                    f"Resuming the interrupted run from t = {start:.4g} s to {meta['transient']['end_time']:.4g} s")
             JOBS.update(job, 0.05, msg, log=msg)
         elif continue_iterations:
