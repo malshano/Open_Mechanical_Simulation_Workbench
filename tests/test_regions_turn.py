@@ -250,3 +250,36 @@ def test_the_cell_estimate_of_a_turned_box_is_that_of_the_box():
     assert region_cells(turned)[0] == pytest.approx(region_cells(BOX)[0])               # (turning does not change the volume: the estimate is of the box in its own axes, not the box round it)
     lo, hi = regions.bounds(turned)
     assert np.prod(np.subtract(hi, lo)) > 1.2 * np.prod(np.subtract(BOX["max"], BOX["min"]))     # (the box round it is larger: using it would over-count)
+
+
+def test_a_region_turns_and_moves_with_the_model_it_was_placed_on(aero):
+    """'Relative to the model': turn or move the whole model in the Geometry step and the regions go with it (as the rotating zones and rotors do)."""
+    pr = aero.engine.project()
+    pr.set_mesh(regions=[{**BOX, "name": "tilted", "min": [0.02, 0.0, 0.0], "max": [0.06, 0.01, 0.01], "rotation": rz(30).tolist()},
+                         {"name": "cyl", "shape": "cylinder", "start": [0.0, 0.0, 0.0], "end": [0.05, 0.0, 0.0], "radius": 0.01, "size": 0.005}])
+    before = [dict(r) for r in aero.engine.state()["mesh"]["regions"]]
+    c = np.asarray(pr._parts_center(), float)
+    D = rz(90)
+    j = pr.transform_geometry(matrix=D.tolist())                                           # (the Geometry step's turn: about the middle of the parts)
+    assert j.wait(300) and j.status == "done", j.error
+    after = aero.engine.state()["mesh"]["regions"]
+    box0, box1 = before[0], after[0]
+    mid0 = (np.asarray(box0["min"]) + np.asarray(box0["max"])) / 2
+    mid1 = (np.asarray(box1["min"]) + np.asarray(box1["max"])) / 2
+    assert mid1 == pytest.approx(D @ (mid0 - c) + c, abs=1e-9)                              # (the middle went with the model: turned about the middle of the parts)
+    assert np.asarray(box1["max"]) - np.asarray(box1["min"]) == pytest.approx(np.asarray(box0["max"]) - np.asarray(box0["min"]))
+    assert np.asarray(box1["rotation"]) == pytest.approx(D @ rz(30))                         # (and it kept its place against the model: turned by the same 90 degrees)
+    cyl0, cyl1 = before[1], after[1]
+    assert np.asarray(cyl1["start"]) == pytest.approx(D @ (np.asarray(cyl0["start"]) - c) + c, abs=1e-9)
+    assert np.asarray(cyl1["end"]) == pytest.approx(D @ (np.asarray(cyl0["end"]) - c) + c, abs=1e-9)
+    j = pr.transform_geometry(shift=[0.01, 0.0, 0.0])                                           # (a move of the whole model)
+    assert j.wait(300) and j.status == "done", j.error
+    moved = aero.engine.state()["mesh"]["regions"]
+    assert np.asarray(moved[0]["min"]) == pytest.approx(np.asarray(box1["min"]) + [0.01, 0, 0], abs=1e-9)
+    assert np.asarray(moved[1]["end"]) == pytest.approx(np.asarray(cyl1["end"]) + [0.01, 0, 0], abs=1e-9)
+    assert regions.transformed(BOX, np.eye(3), [0, 0, 0])["min"] == BOX["min"] and "rotation" not in regions.transformed(BOX, np.eye(3))
+
+
+def test_the_turn_of_a_region_goes_back_to_none_when_the_model_is_turned_back():
+    t = regions.transformed({**BOX, "rotation": rz(30).tolist()}, rz(-30))
+    assert "rotation" not in t

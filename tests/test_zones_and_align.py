@@ -117,9 +117,9 @@ def test_the_zone_card_says_which_parts_are_inside_and_turns_a_ghost_of_them(aer
     assert part in c.widget_do("setup.zone.0.parts")["value"] and "Inside" in c.widget_do("setup.zone.0.parts")["value"]
     assert "cuts through" not in c.widget_do("setup.zone.0.parts")["value"]
     z = c.engine.state()["moving_zones"][0]
-    c.win.panels["setup"].rot.set_zone(0, radius=3.0)                                        # (a zone that only reaches a part of the 100 mm box)
+    c.win.panels["setup"].rot.set_zone(0, cx=0.0, radius=30.0)                             # (a zone round one end of the 100 mm box: the boundary cuts it)
     assert "cuts through" in c.widget_do("setup.zone.0.parts")["value"]
-    c.win.panels["setup"].rot.set_zone(0, radius=z["radius"] * 1000, length=300.0)
+    c.win.panels["setup"].rot.set_zone(0, cx=z["center"][0] * 1000, radius=z["radius"] * 1000, length=300.0)
     rot = c.win.panels["setup"].rot
     n0 = len(c.win.view.zone_view.actors)
     rot.set_turn(0, 40.0)
@@ -241,3 +241,107 @@ def test_the_results_step_does_not_draw_the_saved_model_beside_the_result(aero):
     assert not any(a.GetVisibility() for a in c.win.view.geo_actors)
     c.do("step.go", {"step": "setup"})
     assert c.win.view._geo_shown                                                              # (back in Setup the model is drawn again)
+
+
+# ---------------------------------------------------------------- the parts of a zone tinted in the 3D view (#10)
+def test_parts_in_a_zone_and_parts_it_cuts_are_tinted_in_setup_and_in_mesh(aero):
+    c = aero
+    c.do("step.go", {"step": "setup"})
+    c.widget_do("setup.zone.add", "click")
+    part = c.widget_do("setup.zone.0.fit")["value"]["items"][1]
+    c.widget_do("setup.zone.0.fit", "set", part)                                             # (round the whole box: it turns with the zone)
+    body = {f["id"] for f in c.engine.project().faces() if f.get("kind") == "body"}
+    tints = c.win.view.face_tints
+    assert body and all(tints.get(f) == Z.TINT_INSIDE for f in body)                          # (the zone's own colour)
+    rot = c.win.panels["setup"].rot
+    rot.set_zone(0, cx=0.0, radius=30.0)                                                     # (a zone round one end of the 100 mm box: the boundary cuts it)
+    assert all(c.win.view.face_tints.get(f) == Z.TINT_PARTLY for f in body)                   # (the warning colour, as the card's warning)
+    c.do("step.go", {"step": "mesh"})
+    assert all(c.win.view.face_tints.get(f) == Z.TINT_PARTLY for f in body)
+    c.do("step.go", {"step": "setup"})
+    rot.set_zone(0, cx=900.0)                                                                # (a zone far from every part: nothing is tinted)
+    assert not any(f in c.win.view.face_tints for f in body)
+
+
+def test_a_negligible_share_of_a_part_is_not_a_cut():
+    assert Z.share_text(0.0) == "less than 1 %" and Z.share_text(0.004) == "less than 1 %" and Z.share_text(0.37) == "37 %" and Z.share_text(0.999) == "more than 99 %"
+    zone = dict(ZONE, radius=0.01, length=0.004)
+    pts = [[0.001, 0, 0]] + [[0.5 + 0.01 * k, 0.5, 0.5] for k in range(199)]                   # (1 point of 200 in the zone: 0.5 %)
+    faces = [{"id": 1, "part": "Body", "kind": "body", "volumes": [1], "mesh": {"vertices": pts, "triangles": [[0, 1, 2]]}}]
+    assert Z.classify_parts(zone, faces)[0]["where"] == Z.OUTSIDE                              # (not "cuts through ... 0 % inside")
+    assert Z.part_tints([Z.classify_parts(zone, faces)]) == {}
+    pts2 = [[0.001, 0, 0]] * 10 + [[0.5 + 0.01 * k, 0.5, 0.5] for k in range(190)]              # (5 %: a real cut)
+    faces[0]["mesh"]["vertices"] = pts2
+    rows = Z.classify_parts(zone, faces)
+    assert rows[0]["where"] == Z.PARTLY and Z.part_tints([rows]) == {1: Z.TINT_PARTLY}
+
+
+def test_the_zone_card_never_says_zero_percent_for_a_part_that_is_cut(aero):
+    c = aero
+    c.do("step.go", {"step": "setup"})
+    c.widget_do("setup.zone.add", "click")
+    c.win.panels["setup"].rot.set_zone(0, cx=0.0, radius=30.0)
+    t = c.widget_do("setup.zone.0.parts")["value"]
+    assert "cuts through" in t and "0 % inside" not in t
+
+
+# ---------------------------------------------------------------- the zone's solid does not hide the handles (#10)
+def test_the_solid_of_a_zone_fades_while_the_camera_is_inside_it(aero):
+    c = aero
+    c.do("step.go", {"step": "setup"})
+    c.widget_do("setup.zone.add", "click")
+    zv = c.win.view.zone_view
+    z = c.engine.state()["moving_zones"][0]
+    solid = next(a for a, base, _z in zv.fills)
+    base = zv.fills[0][1]
+    cam = c.win.view.ren.GetActiveCamera()
+    cam.SetPosition(*(np.asarray(z["center"]) + [3.0, 3.0, 3.0]))
+    zv._camera_moved()
+    assert solid.GetProperty().GetOpacity() == pytest.approx(base) and not zv.camera_inside(z)
+    cam.SetPosition(*(np.asarray(z["center"]) + [0.0, 0.0, 0.001]))                         # (zoomed in until the camera is inside the zone)
+    zv._camera_moved()
+    assert zv.camera_inside(z) and solid.GetProperty().GetOpacity() == pytest.approx(zv.FAINT) and zv.FAINT < 0.05
+    c.widget_do("setup.zone.0.radius", "set", str(float(z["radius"]) * 1000 * 1.01))         # (drawn again with the camera still inside: faint from the start)
+    assert zv.fills and zv.fills[0][0].GetProperty().GetOpacity() == pytest.approx(zv.FAINT)
+    cam.SetPosition(*(np.asarray(z["center"]) + [3.0, 3.0, 3.0]))
+    zv._camera_moved()
+    assert zv.fills[0][0].GetProperty().GetOpacity() == pytest.approx(zv.fills[0][1])
+
+
+# ---------------------------------------------------------------- the sliding interface, from the mesh (#10)
+def _fake_mesh_with_zone_boundary(pr, zones):
+    from simwb.qt.regionview import cylinder_geometry
+    pts, tris, _lines = cylinder_geometry([0, 0, -0.01], [0, 0, 0.01], 0.06, n=24)
+    pts = np.asarray(pts, float)
+    tris = np.asarray(tris, np.int32)
+    pr.data["moving_zones"] = zones
+    pr.mesh_dir.mkdir(parents=True, exist_ok=True)
+    np.savez(pr.mesh_dir / "mesh.npz", nodes=pts, tets=np.zeros((0, 4), np.int32), zone_tris=tris, zone_tri_zone=np.zeros(len(tris), np.int32))
+    return pts, tris
+
+
+def test_the_zone_boundary_of_the_mesh_is_counted_and_drawn_in_the_mesh_step(aero):
+    c = aero
+    pr = c.engine.project()
+    assert pr.zone_interface() == [] and pr.mesh_zone_count() == 0                         # (no mesh: nothing to show)
+    zone = {"name": "prop", "center": [0, 0, 0], "axis": "+z", "radius": 0.06, "length": 0.02, "rpm": 1000.0, "method": "sliding"}
+    pts, tris = _fake_mesh_with_zone_boundary(pr, [zone])
+    it = pr.zone_interface()
+    assert len(it) == 1 and it[0]["faces"] == len(tris) and it[0]["method"] == "sliding" and pr.mesh_zone_count() == 1
+    side = 2 * np.pi * 0.06 * 0.02
+    caps = 2 * np.pi * 0.06 ** 2
+    assert it[0]["area"] == pytest.approx(side + caps, rel=0.05)                              # (a 24-sided prism of the cylinder: its area, from the triangles)
+    assert pr.zone_interface() is it                                                         # (kept until the mesh file changes)
+    c.do("step.go", {"step": "mesh"})
+    mp = c.win.panels["mesh"]
+    mp.zones_ok = True
+    mp._draw_interface(c.engine.state()["moving_zones"])
+    zv = c.win.view.zone_view
+    assert len(zv.iface_actors) == 2 and mp.iface_chk.isVisibleTo(mp) is not None
+    assert f"prop: sliding interface, {len(tris):,} faces" in mp.iface_note.text() and "cm²" in mp.iface_note.text()
+    mp.iface_chk.setChecked(False)                                                           # (the box takes it out of the view; the count stays)
+    assert not zv.iface_actors and mp.iface_note.text()
+    mp.iface_chk.setChecked(True)
+    assert zv.iface_actors
+    c.do("step.go", {"step": "geometry"})
+    assert not zv.iface_actors

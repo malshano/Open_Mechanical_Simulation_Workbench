@@ -364,6 +364,13 @@ class Rotors:
         if not live:
             self.handles.sync()
 
+    def part_tints(self) -> dict:
+        """{face: colour}: the parts inside a zone tinted in its colour, the parts a zone's boundary cuts through in the warning colour (as the zone's card says)."""
+        try:
+            return zone_tools.part_tints([self.where(i, z) for i, z in enumerate(self.shown_zones())])
+        except Exception:  # noqa: BLE001
+            return {}
+
     def show_numbers(self, i: int, z: dict, force: bool = False):
         """The numbers of the zone's card, as the zone would be (a handle is being dragged): nothing is stored."""
         f = self.forms.get(i)
@@ -595,7 +602,7 @@ class Rotors:
         if out:
             text += "Outside: " + ", ".join(out) + ". "
         if part:
-            text += ("⚠ The zone's boundary cuts through " + ", ".join(f"{b['name']} ({round(b['share'] * 100)} % inside)" for b in part)
+            text += ("⚠ The zone's boundary cuts through " + ", ".join(f"{b['name']} ({zone_tools.share_text(b['share'])} inside)" for b in part)
                      + ": the mesh cannot match there. Make the zone larger, or smaller, so that every part is wholly inside or outside.")
         lab = wid(QLabel(text), f"setup.zone.{i}.parts")
         lab.setWordWrap(True)

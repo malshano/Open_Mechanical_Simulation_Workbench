@@ -178,7 +178,31 @@ class MeshPanel(_Panel):
         for r in m.get("refinements") or []:
             for f in r.get("faces") or []:
                 tints[int(f)] = "#14b8a6"
-        self.view.set_face_tints(tints)
+        zt = {}
+        if zs:                                                       # (the parts inside a rotating zone, and the ones its boundary cuts through, as in Setup)
+            try:
+                pr = self.engine.project()
+                zt = zone_tools.part_tints([zone_tools.classify_parts(z, pr.faces()) for z in zs])
+            except Exception:  # noqa: BLE001
+                zt = {}
+        self.view.set_face_tints({**zt, **tints})
+        self._draw_interface(zs)
+
+    def _draw_interface(self, zs):
+        """The meshed boundary of the rotating zones (the sliding interface), in the 3D view and counted under the colour buttons."""
+        items = []
+        if zs and self.zones_ok and self.engine.pid:
+            try:
+                items = self.engine.project().zone_interface()
+            except Exception:  # noqa: BLE001
+                items = []
+        show = bool(items) and self.iface_chk.isChecked()
+        self.view.zone_view.set_interface(items if show else [])
+        self.iface_chk.setVisible(bool(items))
+        self.iface_note.setVisible(bool(items))
+        self.iface_note.setText("\n".join(
+            f"{it['name']}: {'sliding interface' if it['method'] == 'sliding' else 'zone boundary'}, {it['faces']:,} faces, {fmt_num(round(it['area'] * 1e4, 2))} cm²"
+            for it in items))
 
     def __init__(self, engine, parent=None):
         super().__init__(engine, parent)
@@ -271,6 +295,14 @@ class MeshPanel(_Panel):
             self.v.addWidget(w)
         self.color_note = wid(_muted(""), "mesh.color.note")
         self.v.addWidget(self.color_note)
+        self.iface_chk = wid(QCheckBox("Show the zone boundaries"), "mesh.zones.interface")
+        self.iface_chk.setChecked(True)
+        self.iface_chk.setToolTip("Draw the boundary of each rotating zone as the mesh has it (pink): for a sliding-mesh zone the sliding interface, where the turning cells "
+                                  "meet the fixed ones. It should be a clean cylinder")
+        self.iface_chk.toggled.connect(lambda _on: self.draw_marks())
+        self.v.addWidget(self.iface_chk)
+        self.iface_note = wid(_muted(""), "mesh.zones.interface_text")
+        self.v.addWidget(self.iface_note)
         self.budget = wid(Budget(), "mesh.budget")
         self.v.addWidget(self.budget)
         row = QHBoxLayout()

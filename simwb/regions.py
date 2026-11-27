@@ -132,6 +132,30 @@ def align_with_direction(r: dict, n) -> tuple:
     return R, k, ang
 
 
+def transformed(r: dict, D, t=None) -> dict:
+    """The region after the model it was placed on was turned and moved, x' = D x + t (what the Geometry step does to the whole model): a box keeps its size and
+    turns with the model (its rotation becomes D times its rotation, its middle moves), a cylinder's end points move."""
+    D = np.asarray(D, float)
+    t = np.zeros(3) if t is None else np.asarray(t, float)
+    out = dict(r)
+    if r.get("shape") == "cylinder":
+        for k in ("start", "end"):
+            out[k] = (D @ np.asarray(r[k], float) + t).tolist()
+        a, b = np.asarray(out["start"]), np.asarray(out["end"])
+        ax = (b - a) / (np.linalg.norm(b - a) or 1.0)
+        ext = float(r["radius"]) * np.sqrt(np.clip(1 - ax ** 2, 0, 1))
+        out["min"], out["max"] = (np.minimum(a, b) - ext).tolist(), (np.maximum(a, b) + ext).tolist()
+        return out
+    lo, hi = np.asarray(r["min"], float), np.asarray(r["max"], float)
+    c, h = D @ ((lo + hi) / 2) + t, (hi - lo) / 2
+    out["min"], out["max"] = (c - h).tolist(), (c + h).tolist()
+    R = D @ rotation_of(r)
+    out.pop("rotation", None)
+    if not np.allclose(R, np.eye(3), atol=1e-9):
+        out["rotation"] = R.tolist()
+    return out
+
+
 MIN_SIZE = 1e-3          # a region is never made smaller than this (m): a 1 mm box or a 1 mm long, 1 mm radius cylinder
 
 

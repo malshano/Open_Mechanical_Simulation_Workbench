@@ -143,7 +143,7 @@ class SetupPanel(_Panel):
             a["color"] = a.get("color") or t["ink"]
         for la in labels:
             la["color"] = la.get("color") or t["muted"]
-        self.view.set_face_tints(tints)
+        self.view.set_face_tints({**self.rot.part_tints(), **tints})          # (the parts in a zone, under the conditions' own tints)
         self.view.set_labels(labels)
         self.view.set_arrows(arrows)
         self.rot.draw_zones()

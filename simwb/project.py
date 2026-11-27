@@ -1133,6 +1133,9 @@ class Project:
             keep.append(dict(z, center=pt(z["center"]), axis=ax))
         if "moving_zones" in self.data:
             self.data["moving_zones"] = keep
+        regs = (self.data.get("mesh") or {}).get("regions")
+        if regs:  # (refinement regions are placed relative to the model: they turn and move with it)
+            self.data["mesh"]["regions"] = [region_tools.transformed(r, D, t) for r in regs]
 
     def prepare_geometry(self, new_file: bool = False, turn=None, rotation=False, symmetry=None, turn_t=None,
                          translation=False, snap_zones: bool = False, edits=None) -> Job:
@@ -3590,11 +3593,40 @@ class Project:
     def mesh_zone_count(self) -> int:
         """How many rotating zones the stored mesh has (their boundary is meshed with it); 0 without a mesh."""
         try:
-            m = self.load_mesh()
+            return len(self.zone_interface())
         except Exception:  # noqa: BLE001
             return 0
-        z = m.get("zone_tri_zone")
-        return int(len(set(np.asarray(z).tolist()))) if z is not None and len(z) else 0
+
+    def zone_interface(self) -> list:
+        """The meshed boundary of each rotating zone of the stored mesh - for a sliding-mesh zone the sliding interface, where the turning cells meet the fixed ones:
+        [{name, method, faces, area, vertices (n, 3), triangles (m, 3)}] in the order of the study's zones (a zone that is not in the mesh is left out); [] without a
+        mesh or a hex-dominant one. Read from the arrays the mesh was made with (the triangles the zone boundary was meshed as), kept until the mesh file changes."""
+        p = self.mesh_dir / "mesh.npz"
+        try:
+            stt = p.stat()
+        except OSError:
+            return []
+        key = (stt.st_mtime_ns, stt.st_size, repr(self.data.get("moving_zones")))
+        hit = getattr(self, "_zone_iface", None)
+        if hit and hit[0] == key:
+            return hit[1]
+        out = []
+        with np.load(p) as z:
+            have = "zone_tris" in z.files and "zone_tri_zone" in z.files and "hex" not in z.files
+            if have and len(z["zone_tris"]):
+                tris, owner, nodes = np.asarray(z["zone_tris"], np.int64), np.asarray(z["zone_tri_zone"]), np.asarray(z["nodes"], float)
+                for k, zone in enumerate(self.data.get("moving_zones") or []):
+                    sel = tris[owner == k]
+                    if not len(sel):
+                        continue
+                    used, inv = np.unique(sel, return_inverse=True)
+                    v = nodes[used]
+                    t = inv.reshape(-1, 3)
+                    area = float(np.linalg.norm(np.cross(v[t[:, 1]] - v[t[:, 0]], v[t[:, 2]] - v[t[:, 0]]), axis=1).sum() / 2)
+                    out.append({"name": zone["name"], "method": zone.get("method", "mrf"), "index": k, "faces": int(len(sel)), "area": area,
+                                "vertices": v, "triangles": t})
+        self._zone_iface = (key, out)
+        return out
 
     def zone_cell_labels(self, m) -> np.ndarray:
         """Per tetrahedron: 0 outside every rotating zone, k + 1 inside zone k of the study (the cells enclosed by the zone's meshed boundary, as the

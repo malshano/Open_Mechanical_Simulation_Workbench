@@ -10,6 +10,34 @@ import numpy as np
 
 AXIS_VEC = {"+x": (1.0, 0.0, 0.0), "-x": (-1.0, 0.0, 0.0), "+y": (0.0, 1.0, 0.0), "-y": (0.0, -1.0, 0.0), "+z": (0.0, 0.0, 1.0), "-z": (0.0, 0.0, -1.0)}
 INSIDE, PARTLY, OUTSIDE = "inside", "partly", "outside"
+NEGLIGIBLE = 0.01                  # a share of a part's surface below this is not worth a warning
+TINT_INSIDE, TINT_PARTLY = "#9b6cff", "#f59e0b"        # the parts that turn with a zone (its own colour) and the parts its boundary cuts through (the warning colour)
+
+
+def share_text(share: float) -> str:
+    """'37 %', and 'less than 1 %' / 'more than 99 %' at the ends, where a rounded number would say 0 % or 100 % of a part that is not wholly out or in."""
+    if share < NEGLIGIBLE:
+        return "less than 1 %"
+    if share > 1 - NEGLIGIBLE:
+        return "more than 99 %"
+    return f"{round(share * 100)} %"
+
+
+def part_tints(rows_per_zone: list) -> dict:
+    """{face id: colour} for the 3D view from classify_parts() of each zone: the parts inside a zone in its colour, the parts a zone's boundary cuts through in the
+    warning colour (a part cut by any zone is warned about even if another zone has it inside)."""
+    tints = {}
+    for rows in rows_per_zone:
+        for b in rows:
+            if b["where"] == INSIDE:
+                for f in b["faces"]:
+                    tints.setdefault(f, TINT_INSIDE)
+    for rows in rows_per_zone:
+        for b in rows:
+            if b["where"] == PARTLY:
+                for f in b["faces"]:
+                    tints[f] = TINT_PARTLY
+    return tints
 
 
 def axis_of(z: dict) -> np.ndarray:
@@ -51,7 +79,7 @@ def classify_parts(z: dict, faces: list) -> list:
     for name, chunks in pts.items():
         p = np.vstack(chunks)
         share = float(inside_mask(z, p).mean()) if len(p) else 0.0
-        where = INSIDE if share > 0.999 else OUTSIDE if share < 0.001 else PARTLY
+        where = INSIDE if share > 0.999 else OUTSIDE if share < NEGLIGIBLE else PARTLY        # (a part with under 1 % of its surface in the zone is outside it: a sliver of the sampling, not a cut)
         out.append({"name": str(name), "share": share, "where": where, "faces": ids[name]})
     return out
 
