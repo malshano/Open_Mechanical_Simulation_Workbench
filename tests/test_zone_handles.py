@@ -405,3 +405,89 @@ def test_a_typed_radius_is_still_raised_to_the_least_but_the_length_is_left_alon
     c.widget_do("setup.zone.0.radius", "set", "1.5")                           # (typed below the least, 2 mm: raised; the short length is not touched)
     z = zone(c)
     assert z["radius"] == pytest.approx(0.002, rel=1e-3) and z["length"] == 0.002
+
+
+def _every_handle_is_taken_where_it_is_drawn(c):
+    hs = c.win.view.handles
+    spec = hs.specs["move"]
+    for part, a, b in hs._arrows(spec):                              # (the whole of every move arrow, up to the far end of its cone)
+        d = (b - a) / np.linalg.norm(b - a)
+        for f in (0.35, 0.7, 1.0):
+            assert hs.pick(*hs._px(a + (b - a) * f)) == ("move", part), (part, f)
+        assert hs.pick(*hs._px(b + d * 0.1 * np.linalg.norm(b - a))) == ("move", part), (part, "cone")
+    for key, s in hs.specs.items():                                   # (and each resize handle at its square end, each ring on the ring)
+        if s["kind"] == "face":
+            assert hs.pick(*hs.grab_px(key, "face")) == (key, "face"), key
+            mid = hs._px(sum(hs._arrows(s)[0][1:]) / 2)
+            assert hs.pick(*mid) == (key, "face"), (key, "shaft")
+        if s["kind"] == "ring":
+            for deg in (20, 110, 200, 290):
+                assert hs.pick(*hs._px(hs._ring_point(s, deg))) == (key, "ring"), (key, deg)
+
+
+def test_no_arrow_tip_of_a_zone_takes_the_resize_handle_beside_it(aero):
+    """The outer end of the move arrows along y and z used to take the radius and length handles that lie on the same lines (a press on a tip resized the zone)."""
+    c = aero
+    _every_handle_is_taken_where_it_is_drawn(c)                               # (the default zone, along z)
+    drag(c, "tilt.x", 90.0)
+    c.widget_do("setup.zone.0.apply", "click")                                # (and one along -y)
+    assert zone(c)["axis"] == "-y"
+    _every_handle_is_taken_where_it_is_drawn(c)
+    c.widget_do("setup.zone.0.length", "set", "90")                           # (a long, thin one: the radius handle is nearer the middle than the arrows' tips)
+    c.widget_do("setup.zone.0.radius", "set", "10")
+    _every_handle_is_taken_where_it_is_drawn(c)
+
+
+# ---------------------------------------------------------------- the bar, one toast, overlaps, colours (round 2)
+def test_the_bar_is_one_short_line_while_a_zone_is_a_draft(aero):
+    c = aero
+    full = c.win.shell.hint()[1]
+    assert len(full) > 120 and "Esc cancels a drag" in full
+    drag(c, "face.radius", 0.01)
+    short = c.win.shell.hint()[1]
+    assert short == "Not stored: Apply / Cancel" and len(short) < 40
+    c.widget_do("setup.zone.0.cancel", "click")
+    c._settle()
+    assert c.win.shell.hint()[1] == full                                       # (the full hint is back when there is no draft)
+
+
+def test_a_smallest_size_message_is_shown_once(aero):
+    c = aero
+    c.widget_do("setup.zone.0.radius", "set", "0.5")
+    said = [t for t in c.win.toasts.listing() if "smallest this zone can be" in t["text"]]
+    assert len(said) == 1
+
+
+def test_a_zone_dragged_onto_another_says_so_before_apply_and_the_refusal_stays_in_the_status_line(aero):
+    c = aero
+    c.widget_do("setup.zone.add", "click")
+    c.widget_do("setup.zone.0.handles", "set", True)
+    c._settle()
+    other = c.engine.state()["moving_zones"][1]["name"]
+    hs = c.win.view.handles
+    spec = hs.specs["face.radius"]
+    assert hs.press(*hs.grab_px("face.radius"), force=("face.radius", "face"))
+    hs.drag_to(*hs._px(hs._taken(spec, "face") + np.asarray(spec["dir"]) * 5.0))          # (5 m wider: over the other zone)
+    assert f"overlaps {other}" in c.win.view.gizmo.text and "Apply will be refused" in c.win.view.gizmo.text        # (while it is dragged)
+    hs.release(*hs._px(hs._taken(spec, "face") + np.asarray(spec["dir"]) * 5.0))
+    c._settle()
+    card = c.widget_do("setup.zone.0.overlap")["value"]
+    assert other in card and "Apply will be refused" in card and "Move them apart" in card                    # (in the card)
+    assert other in c.win.shell.hint()[1] and "Apply will be refused" in c.win.shell.hint()[1]                # (and in the bar)
+    c.widget_do("setup.zone.0.apply", "click")
+    c._settle()
+    st = c.win.panels["setup"].status.text()
+    assert st.startswith("Not stored:") and "overlap" in st                                                   # (the refusal stays where it can be read)
+    assert rot(c).draft is not None
+
+
+def test_each_zone_has_its_own_colour_in_the_view_the_tints_and_the_card(aero):
+    c = aero
+    assert len({Z.colour_of(i) for i in range(4)}) == 4
+    c.widget_do("setup.zone.add", "click")
+    zv = c.win.view.zone_view
+    colours = {tuple(round(v, 3) for v in a.GetProperty().GetColor()) for a, _op, _z in zv.fills}
+    assert len(zv.fills) == 2 and len(colours) == 2                                                           # (two zones: two colours in the view)
+    rows_inside = [{"name": "P", "where": Z.INSIDE, "faces": [7], "share": 1.0}]
+    assert Z.part_tints([[], rows_inside]) == {7: Z.colour_of(1)} and Z.part_tints([rows_inside, []]) == {7: Z.colour_of(0)}
+    assert Z.COLOURS[:4] == ("#9b6cff", "#ff7ab6", "#5ad1a6", "#f5b942")                                      # (the Mesh colouring by the cells that turn uses the same)

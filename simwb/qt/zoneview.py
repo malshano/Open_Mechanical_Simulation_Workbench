@@ -86,17 +86,18 @@ class ZoneView:
                 continue                                          # (a zone that is half typed is not drawn)
             hot = active == i
             sliding = z.get("method") == "sliding"
-            self._add(_pd(pts, polys=tris), 0.20 if hot else 0.09, False, 1.0, fill_of=z)
-            self._add(_pd(pts, lines=lines), 1.0 if hot or sliding else 0.75, True, width * (2.2 if sliding else 1.3) * (1.4 if hot else 1.0))
+            col = zone_tools.colour_of(i)                                      # (each zone in its own colour)
+            self._add(_pd(pts, polys=tris), 0.20 if hot else 0.09, False, 1.0, fill_of=z, colour=col)
+            self._add(_pd(pts, lines=lines), 1.0 if hot or sliding else 0.75, True, width * (2.2 if sliding else 1.3) * (1.4 if hot else 1.0), colour=col)
             tick = self._tick(z, a, b, float(angles.get(i, 0.0)))
             if tick is not None:
-                self._add(_pd(*tick), 1.0, True, width * 2.0)
+                self._add(_pd(*tick), 1.0, True, width * 2.0, colour=col)
             g = ghosts.get(i)
             if g is not None and len(g[1]) and angles.get(i):
                 pts_g = np.asarray(g[0], float)
                 M = zone_tools.turn_matrix(z, float(angles[i]))
                 pts_g = pts_g @ M[:3, :3].T + M[:3, 3]            # (what is inside, turned: a ghost in the zone colour beside the part itself)
-                self._add(_pd(pts_g, polys=g[1]), 0.55, False, 1.0)
+                self._add(_pd(pts_g, polys=g[1]), 0.55, False, 1.0, colour=col)
         self.v.render()
 
     @staticmethod
@@ -131,13 +132,13 @@ class ZoneView:
             if abs(act.GetProperty().GetOpacity() - op) > 1e-9:
                 act.GetProperty().SetOpacity(op)         # (the camera move that came with this is followed by a render)
 
-    def _add(self, pd, opacity: float, wire: bool, width: float, fill_of: dict | None = None):
+    def _add(self, pd, opacity: float, wire: bool, width: float, fill_of: dict | None = None, colour: str = ZONE_COLOUR):
         m = vtkPolyDataMapper()
         m.SetInputData(pd)
         act = vtkActor()
         act.SetMapper(m)
         pr = act.GetProperty()
-        pr.SetColor(*_rgb(ZONE_COLOUR))
+        pr.SetColor(*_rgb(colour))
         pr.SetOpacity(opacity)
         pr.SetAmbient(1.0)
         pr.SetDiffuse(0.0)

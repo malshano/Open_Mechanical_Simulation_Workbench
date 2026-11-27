@@ -437,9 +437,11 @@ class HandleSet:
                 if s["kind"] == "face" and tip < CAP_PX * dpr:
                     found.append(((1, tip, 0.0, n), (k, part)))
                     continue
-                d2 = self._near_segment(q, pa, pb)
+                d2 = self._near_segment(q, pa, pb if s["kind"] == "face" else pb + (pb - pa) * 0.12)         # (an arrow's cone is part of it)
                 if d2 < GRAB_PX * dpr:                                   # (on a line two arrows share, a move arrow wins over the shaft of a face handle: that is taken at its square end)
                     found.append(((2, round(d2 / (4 * dpr)) + (1 if s["kind"] == "face" else 0), tip, n), (k, part)))
+        if any(f[0][0] == 2 and not self.specs[f[1][0]]["kind"] == "face" for f in found):
+            found = [f for f in found if not (f[0][0] == 2 and self.specs[f[1][0]]["kind"] == "face")]       # (where a move arrow is under the pointer, the shaft of a resize arrow is not: it is taken at its square end)
         return min(found, key=lambda f: f[0])[1] if found else None
 
     def _taken(self, s, part: str) -> np.ndarray:

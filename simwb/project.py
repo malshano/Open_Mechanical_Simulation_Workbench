@@ -3720,7 +3720,7 @@ class Project:
     def _zone_payload(self, rs, tris, cells, lab):
         """The triangles coloured by the rotating zone their cell is in: grey outside every zone, one colour per zone inside."""
         zs = self.data.get("moving_zones") or []
-        cols = ["#9b6cff", "#ff7ab6", "#5ad1a6", "#f5b942"]
+        cols = zone_tools.COLOURS
         cats = [{"name": "Outside the zones (fixed cells)", "color": "#8a93a6"}] + [
             {"name": f"{z['name']}: cells that turn ({'sliding mesh' if z.get('method') == 'sliding' else 'MRF'})", "color": cols[i % len(cols)]} for i, z in enumerate(zs)]
         fv = lab[cells].astype(np.float32) if len(cells) else np.zeros(0, np.float32)

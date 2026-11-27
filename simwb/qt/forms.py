@@ -19,7 +19,7 @@ def fmt_num(v) -> str:
         f = float(v)
     except (TypeError, ValueError):
         return str(v)
-    return f"{f:.6g}"
+    return f"{0.0 if f == 0 else f:.6g}"                      # (never "-0")
 
 
 def _met(show_if: dict | None, values: dict) -> bool:

@@ -11,7 +11,12 @@ import numpy as np
 AXIS_VEC = {"+x": (1.0, 0.0, 0.0), "-x": (-1.0, 0.0, 0.0), "+y": (0.0, 1.0, 0.0), "-y": (0.0, -1.0, 0.0), "+z": (0.0, 0.0, 1.0), "-z": (0.0, 0.0, -1.0)}
 INSIDE, PARTLY, OUTSIDE = "inside", "partly", "outside"
 NEGLIGIBLE = 0.01                  # a share of a part's surface below this is not worth a warning
-TINT_INSIDE, TINT_PARTLY = "#9b6cff", "#f59e0b"        # the parts that turn with a zone (its own colour) and the parts its boundary cuts through (the warning colour)
+COLOURS = ("#9b6cff", "#ff7ab6", "#5ad1a6", "#f5b942")            # each zone has its own colour (the Mesh colouring by the cells that turn uses the same)
+TINT_INSIDE, TINT_PARTLY = COLOURS[0], "#f59e0b"            # (the first zone's colour; the parts its boundary cuts through are in the warning colour)
+
+
+def colour_of(i: int) -> str:
+    return COLOURS[int(i) % len(COLOURS)]
 
 
 def share_text(share: float) -> str:
@@ -27,11 +32,11 @@ def part_tints(rows_per_zone: list) -> dict:
     """{face id: colour} for the 3D view from classify_parts() of each zone: the parts inside a zone in its colour, the parts a zone's boundary cuts through in the
     warning colour (a part cut by any zone is warned about even if another zone has it inside)."""
     tints = {}
-    for rows in rows_per_zone:
+    for k, rows in enumerate(rows_per_zone):
         for b in rows:
             if b["where"] == INSIDE:
                 for f in b["faces"]:
-                    tints.setdefault(f, TINT_INSIDE)
+                    tints.setdefault(f, colour_of(k))
     for rows in rows_per_zone:
         for b in rows:
             if b["where"] == PARTLY:

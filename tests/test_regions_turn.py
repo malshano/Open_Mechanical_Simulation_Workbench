@@ -330,3 +330,20 @@ def test_escape_cancels_the_drag_in_progress_before_anything_else(aero):
     assert hs.drag is None and not x.grow.any() and x.active                  # (the drag is gone, the region is as it was, the session goes on)
     c.win.shell.escape()                                                       # (a second Esc: the session's Cancel)
     assert not x.active
+
+
+def test_a_turn_or_move_of_nothing_is_never_shown_as_minus_zero(aero):
+    from simwb.qt.forms import fmt_num
+    assert fmt_num(-0.0) == "0" and fmt_num(0.0) == "0" and fmt_num(-1.5) == "-1.5"
+    c = aero
+    c.do("mesh.region_add", {"kind": "box"})
+    c.widget_do("mesh.region.0.xform", "set", True)
+    c.widget_do("mesh.region.0.xf.tz", "set", "30")
+    c.widget_do("mesh.region.0.xf.tz", "set", "0")                              # (turned back to nothing: the angles of the matrix are -0 and so on)
+    c.widget_do("mesh.region.0.xf.reset", "click")
+    x = c.win.panels["mesh"].adv.xform
+    from simwb.qt.gizmo import rot_about
+    x.R = rot_about(2, -1e-12)                                                   # (a turn of a hair below zero)
+    x._fill_fields()
+    for k in ("tx", "ty", "tz", "mx", "my", "mz"):
+        assert c.widget_do(f"mesh.region.0.xf.{k}")["value"] not in ("-0", "-0.0"), k

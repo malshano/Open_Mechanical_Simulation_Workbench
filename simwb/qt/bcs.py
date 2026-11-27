@@ -13,6 +13,8 @@ import math
 from .forms import fmt_num
 
 AXIS_VEC = {"+x": [1, 0, 0], "-x": [-1, 0, 0], "+y": [0, 1, 0], "-y": [0, -1, 0], "+z": [0, 0, 1], "-z": [0, 0, -1]}
+from ..zones import colour_of as zone_colour  # noqa: E402
+
 ZONE_COLOUR, ROTOR_COLOUR, SYM_COLOUR, DRAFT_COLOUR, HEAT_COLOUR = "#9b6cff", "#ff8a00", "#4cc9f0", "#ffb703", "#fb5607"
 EXCHANGE = ("convection", "radiation_convection", "wall_convection", "natural_convection")
 
@@ -149,12 +151,12 @@ def marks(st: dict, faces: list, center, size: float, active: str | None = None,
             text = (f"Open to the room ({fmt_num(s.get('T_room'))} °C, air in / out)" if open_box and nat
                     else "Open sides (slip, adiabatic)" if open_box else "Walls (no-slip, adiabatic)")
             labels.append({"point": c, "text": text, "color": "#9aa4b2"})
-    for z in st.get("moving_zones") or []:                  # a rotating zone: its axis at the centre, its name and speed at the rim
+    for zi, z in enumerate(st.get("moving_zones") or []):  # a rotating zone: its axis at the centre, its name and speed at the rim (in the zone's own colour)
         a = AXIS_VEC.get(z["axis"], [0, 0, 1])
         perp = [0, 0, 1] if abs(a[2]) < 0.9 else [1, 0, 0]
         tip = [z["center"][k] + a[k] * (z["length"] / 2 + 0.5 * z["radius"]) for k in range(3)]
-        arrows.append({"point": tip, "dir": a, "color": ZONE_COLOUR, "length": z["length"] / 2 + 0.5 * z["radius"]})
-        labels.append({"point": [z["center"][k] + a[k] * z["length"] / 2 + perp[k] * z["radius"] for k in range(3)], "color": ZONE_COLOUR,
+        arrows.append({"point": tip, "dir": a, "color": zone_colour(zi), "length": z["length"] / 2 + 0.5 * z["radius"]})
+        labels.append({"point": [z["center"][k] + a[k] * z["length"] / 2 + perp[k] * z["radius"] for k in range(3)], "color": zone_colour(zi),
                        "text": f"{z['name']}: {fmt_num(z['rpm'])} rpm ({'sliding mesh' if z.get('method') == 'sliding' else 'MRF'})"})
     for i, r in enumerate(st.get("rotors") or []):          # a rotor disc: its thrust axis and its size
         a = r.get("axis") or [0, 0, 1]

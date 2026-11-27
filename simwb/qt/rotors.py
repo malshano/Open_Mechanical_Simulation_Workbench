@@ -20,6 +20,7 @@ from . import theme
 from .forms import ParamForm, fmt_num
 from .ids import wid
 from .panels.common import FlowLayout, _h, _muted
+from ..project import Project
 from .zonehandles import ZoneHandles
 
 MZ_HELP = {
@@ -156,10 +157,32 @@ class Rotors:
         old = self.draft
         if not keep_draft:
             self.draft = None
-        out = self._do(lambda: self.pr.set_moving_zones(zs), msg)
+        self.refusal = ""
+
+        def store():
+            try:
+                return self.pr.set_moving_zones(zs)
+            except Exception as e:  # noqa: BLE001
+                self.refusal = str(e)
+                raise
+
+        out = self._do(store, msg)
         if out is None:
             self.draft = old
         return out
+
+    def overlaps(self, i: int) -> list:
+        """The names of the other zones that zone i (as drawn, with its draft) overlaps or touches."""
+        try:
+            zs = self.shown_zones()
+            return [o["name"] for k, o in enumerate(zs) if k != i and Project._zones_touch(zs[i], o)]
+        except (KeyError, TypeError, ValueError):
+            return []
+
+    def overlap_text(self, i: int) -> str:
+        names = self.overlaps(i)
+        return (f"This zone overlaps {', '.join(names)}: Apply will be refused. Move them apart or make them smaller (the air between two turning zones needs cells)."
+                if names else "")
 
     def size(self) -> float:
         return zone_tools.model_size(self.panel.engine.state()["geometry"].get("info"))
@@ -169,10 +192,7 @@ class Rotors:
 
     def notice(self, text: str):
         """A plain line in the panel, the status bar and a toast (a number was changed for the user)."""
-        self.panel.say(text)
-        toasts = getattr(getattr(self.panel, "win", None), "toasts", None)
-        if toasts is not None:
-            toasts.warn(text)
+        self.panel.say(text)                                         # (the panel's line, the status bar and a toast come from this one call)
 
     def clamp(self, z: dict, only=("radius", "length")) -> dict:
         """The zone with the radius and / or length that the user just typed or dragged (`only`) raised to zone_tools.min_sizes, and a plain line when it had to be.
@@ -272,7 +292,9 @@ class Rotors:
         zs = self.zones()
         zs[i].update(z)
         self.handles.hide_label()
-        self._save_zones(zs, f"{zs[i]['name']}: stored (the mesh is out of date: generate it again)")
+        if self._save_zones(zs, f"{zs[i]['name']}: stored (the mesh is out of date: generate it again)") is None and self.refusal:
+            self.panel.say(f"Not stored: {self.refusal}")                # (the toast fades; the panel's line stays)
+            self.panel.redo()
 
     def cancel_draft(self):
         if not self.draft:
@@ -584,6 +606,12 @@ class Rotors:
         note.setObjectName("muted")
         note.setWordWrap(True)
         col.addWidget(note)
+        ov = self.overlap_text(i)
+        if ov:                                                       # (plain words, which zones, before Apply is pressed)
+            warn = wid(QLabel("⚠ " + ov), f"setup.zone.{i}.overlap")
+            warn.setWordWrap(True)
+            warn.setStyleSheet(f"color: {theme.tokens()['warn_text']};")
+            col.addWidget(warn)
         row = QHBoxLayout()
         ap = _btn("Apply", f"setup.zone.{i}.apply", "Store the zone where it is drawn now (the mesh is then out of date)", "primary")
         ap.clicked.connect(self.apply_draft)
@@ -679,7 +707,7 @@ class Rotors:
             v.setContentsMargins(10, 8, 10, 8)
             v.setSpacing(6)
             head = QHBoxLayout()
-            head.addWidget(_swatch("#9b6cff", "A rotating zone"))
+            head.addWidget(_swatch(zone_tools.colour_of(i), "Its colour in the 3D view"))
             nm = wid(QLineEdit(z["name"]), f"setup.zone.{i}.name")
             nm.setToolTip("Rename this zone (letters, digits and _)")
             nm.editingFinished.connect(lambda i=i, w=nm, old=z["name"]: self.set_zone(i, name=w.text().strip()) if w.text().strip() not in ("", old) else None)

@@ -168,7 +168,7 @@ class MeshPanel(_Panel):
         from ..zoneview import ZONE_COLOUR
         zs = st.get("moving_zones") or []
         self.view.zone_view.set(zs)
-        zlab = [{"point": zone_tools.label_point(z), "color": ZONE_COLOUR, "key": f"zone{i}",
+        zlab = [{"point": zone_tools.label_point(z), "color": zone_tools.colour_of(i), "key": f"zone{i}",
                  "text": f"{z['name']}: {fmt_num(z['rpm'])} rpm ({'sliding mesh' if z.get('method') == 'sliding' else 'MRF'})"
                          + (f", cells {fmt_num(round(z['cell_size'] * 1000, 3))} mm" if z.get("cell_size") else "")}
                 for i, z in enumerate(zs)]

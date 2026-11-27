@@ -180,7 +180,8 @@ class RegionTransform:
         for k, e in list(self.fields.items()):
             try:
                 if not e.hasFocus():
-                    e.setText(fmt_num(round(vals[k], 3)))
+                    v = round(vals[k], 3)
+                    e.setText(fmt_num(0.0 if v == 0 else v))                 # (never "-0": a turn or a move of nothing)
             except RuntimeError:
                 self.fields.pop(k, None)
 

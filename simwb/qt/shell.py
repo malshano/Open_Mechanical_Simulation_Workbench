@@ -442,15 +442,18 @@ class Shell(QObject):
                             lambda: (setattr(sp, "active", None), sp.redo()), "Finish picking faces for this condition")
             if sp.rot.handles.showing:
                 rot = sp.rot
-                pend = bool(rot.draft)
-                return ("pick", ZONE_HINT + (" · not stored yet: press Apply" if pend else ""), 0, "Cancel" if pend else None, rot.cancel_draft if pend else None,
-                        "Put the zone back where it is stored" if pend else None, ("Apply", rot.apply_draft, "Store the zone where it is drawn now") if pend else None)
+                if rot.draft:                                        # (a short line: the full hint would take eight lines of a narrow window)
+                    ov = rot.overlaps(rot.draft["i"])
+                    return ("pick", "Not stored: Apply / Cancel" + (f" · overlaps {', '.join(ov)}: Apply will be refused" if ov else ""), 0, "Cancel", rot.cancel_draft,
+                            "Put the zone back where it is stored", ("Apply", rot.apply_draft, "Store the zone where it is drawn now"))
+                return ("pick", ZONE_HINT, 0, None, None, None)
         if w.step == "mesh" and w.panels["mesh"].adv.xform.active:
             xf = w.panels["mesh"].adv.xform
             if xf.aligning:
                 return ("pick", "Click the face to line the region up with (a face of the model or a wall of the air volume): its nearest side is turned parallel to it", 0,
                         "Cancel", lambda: xf.stop_align(), "Stop choosing a face (the region stays as previewed)")
-            return ("pick", REGION_HINT, 0, "Cancel", lambda: xf.cancel(), "Leave the region as it is", ("Apply", xf.apply, "Store the region where it is drawn now"))
+            text = "Not stored: Apply / Cancel" if xf.pending() else REGION_HINT           # (a short line once something is dragged: the full hint takes many lines of a narrow window)
+            return ("pick", text, 0, "Cancel", lambda: xf.cancel(), "Leave the region as it is", ("Apply", xf.apply, "Store the region where it is drawn now"))
         if w.step == "mesh" and getattr(w.panels["mesh"], "picking_part", False):
             mp = w.panels["mesh"]
             return ("pick", "Click a part in the 3D view: all its faces get a cell size (change it in Part sizing afterwards)", 0, "Cancel",
