@@ -312,7 +312,7 @@ The panel is split into four tabs; the 3D view is the same in all of them.
 | Tab | What it holds |
 |---|---|
 | **Summary** | The numbers of the study as tiles with a verdict (green / amber / red edge: safety factor, margin to an allowed temperature, a mode in the excitation range, heat balance) and a **show on model** link under the key values. Bars compare the parts (stress as a share of the yield strength, temperatures on one scale, forces and moments from a zero line); a stacked bar shows where the heat goes; the vibration study draws its natural frequencies as stems (height = share of the mass moving in the main direction, colour = direction, red band = excitation range, click a stem to show the mode); a flow study draws the solver residuals. Type an **Allowed temperature** to see the margin of every part (kept per study). Warnings are listed under the numbers. |
-| **Display** | **Field**, **Colours** (colour map: turbo, viridis, plasma, inferno, cool-warm, rainbow, grayscale; reverse; flat colour bands; the range), the **distribution** of the field over the drawn surface (drag over it to set the colour range, double-click for automatic), **Model** (opacity, min / max labels, mirrored half), **Deformation** and the contour planes, vortex surfaces, volume, arrows and particles of a flow. |
+| **Display** | **Field**, **Colours** (colour map: turbo, viridis, plasma, inferno, cool-warm, rainbow, grayscale; reverse; flat colour bands; the range), the **distribution** of the field over the drawn surface (drag over it to set the colour range, double-click for automatic), **Model** (opacity, min / max labels, the whole model from a symmetry plane), **Deformation** and the contour planes, vortex surfaces, volume, arrows and particles of a flow. |
 | **Probe** | A **line plot**: the field along a straight line between two points you click on the model (or from the lowest to the highest value); move over the plot to see the point on the model; **Copy data** puts the table on the clipboard. The values pinned with **Probe** are listed here. |
 | **Checks** | The mesh-sensitivity check, the flow-model comparison, the comparison with the previous run and the model assumptions. |
 
@@ -1143,9 +1143,20 @@ the plane is moved, flipped or removed in the Symmetry planes card.
 Up to **three planes that are perpendicular to each other** (half, quarter, eighth). Two planes at another angle, or
 parallel planes, are refused: the mirror images would not tile the model.
 
-**In the Results step**, **Show mirrored half** (Display) draws the mirror image(s) of the model and of whatever result
-is shown: the surface colours, sections, vortex surfaces, volume cloud, arrows, particles. Untick it to see only the
-solved part. **Fit** includes the mirrored part. The images are redrawn from the planes: nothing is stored twice.
+**In the Results step**, **Show the whole model (mirror the symmetry plane)** (Display tab, above "Show in the view") draws
+the mirror image(s) of the model and of whatever result is shown: the surface colours, sections (and the section view of
+a flow), contour planes, vortex surfaces, volume cloud, arrows, particles, the air box, and the outlines of moving zones
+and refinement regions. It is on by default and enabled only when the study has a symmetry plane; untick it to see only the
+solved part. The copy is marked: **mirrored copy** in the colour legend, a faint outline of each plane in the view and a line
+in the status bar. Values on the copy are the solved ones (scalars as they are, vectors reflected). A **sliding-mesh** propeller
+turns on the copy the other way about the mirrored axis, because each saved time is mirrored on its own; the time bar, Play, the
+picture and the MP4 show what the view shows. A zone centred on the plane is drawn once, one off the plane twice.
+**Probes and line plots read the solved part**: a point you click on the copy shows the solved value and is marked "mirrored side"
+(a line picked there is drawn on the solved part). The numbers in the Summary are the study's: a flow's forces are already the
+whole body's, other studies' numbers are for the solved part. With several planes (quarter, eighth) the images of all planes are drawn.
+The switch is a viewing choice of the session, not saved with the study. A contour plane across the symmetry normal is drawn on
+the solved side and at the mirrored position on the other (two planes); across any other axis it is one cut through the whole
+model. The volume cloud is mirrored for planes normal to x, y or z only. **Fit** includes the mirrored part.
 
 **What changes in the numbers** (the summary says so):
 

@@ -782,6 +782,23 @@ automatically (Three.js flips the winding of a mirrored object itself). `bounds(
 also tints the removed side); `_bindSymDrag` slides a handle along the plane normal (`onChange(id, point, final)`).
 `app.js`: `symmetryHtml`, `bindSymmetry`, `symApply`, `symItems`, `symDragged`, `S.symDraft`, `S.symPick`, `S.mirror`.
 
+**Qt Results step: the whole model (`simwb/mirrorview.py`, `simwb/qt/mirrormarks.py`).** Only what is drawn is mirrored, as numpy
+copies of the payloads the engine already makes; the volume mesh is never copied. `images(planes)` gives the reflections in every
+non-empty subset of the (perpendicular) planes, composed in order (mirror about the first plane, then the result about the second);
+a reflection has det -1 and turns the triangle winding, a product of two has det +1 and keeps it, so the normals of an image point
+outward. `whole_surface` (solved part first, then each image; `payload["mirror"]` = solved triangle count and the transforms, for
+probes), `mirror_vectors` (positions and vectors, v - 2 (v.n) n), `mirror_paths`, `mirror_volumes` (grid flipped and moved, axis planes
+only), `mirror_box` (camera box), `mirror_regions` (zone / region outlines; an image equal to an existing one is dropped), `mirror_faces`
+(air box; faces lying in a plane, key `symmetry`, are the cut and are left out). Scalars and vector magnitudes are copied; the
+deformation vectors of a structural result are reflected. `Engine.mirror_view` (default True, a session choice) and
+`Engine.mirror_planes()` (the planes the run recorded in `summary["symmetry"]["definition"]`, else the study's) decide; `result_surface`,
+`flow_object` and `flow_layers` apply it after the cached payloads (the cache holds the solved part), the window mirrors the vortex
+surface after smoothing and merging with the object (smoothing must not cross the plane). Cut after mirroring is not needed: a
+section / contour plane is cut on the half and its cut is mirrored (a plane across the plane's normal therefore appears at +d and -d).
+A transient result is mirrored frame by frame, so a sliding zone turns the other way on the copy. `mirrormarks.mark` adds the legend entry
+and the plane outlines. Not mirrored: probes and plots (solved part), the force numbers; the volume cloud across a slanted plane; no
+rotor (actuator disc) overlay exists in the Results step. Control: widget `results.mirror`, `results.show {mirror}`, `state.shell.mirror`.
+
 **Tests** (`tests/test_symmetry.py`): the force / moment expansion against explicit mirrored bodies for 1, 2 and 3
 planes; geometry cuts through the project (flip, move, quarter, delete, failed cut, a plane from a face, BC and body
 carry-over); flow set-up checks; the OpenFOAM `symmetry` patch; whole-body forces from the half; cooling fields in
