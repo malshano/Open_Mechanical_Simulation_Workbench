@@ -20,6 +20,14 @@ ZONE_CELLS = {"quick": 36, "coarse": 48, "medium": 64, "fine": 96, "very_fine": 
 RUN_COST = {"cht_enclosure": (5.1e-6, 1700), "external_aero": (6.2e-6, 500)}          # s per cell per iteration, iterations to auto-stop
 
 
+def ROUGH(v) -> str:
+    """An estimated count as the estimate deserves: two or three digits, not the last cell (48,263 would claim more than it knows)."""
+    v = float(v)
+    if v < 1000:
+        return f"{int(round(v, -1)):,}"
+    return f"{int(round(v, -2 if v < 100_000 else -3)):,}"
+
+
 def _f(v, d=3) -> str:
     """A number with d significant digits, as the web version writes it ('–' when there is none)."""
     if v is None or (isinstance(v, float) and math.isnan(v)):
@@ -66,7 +74,7 @@ def stats_rows(st: dict) -> list:
         rows.append(("Defeatured faces", str(s["defeatured_faces"])))
     er = s.get("edge_refine")
     if er:
-        rows.append(("Edge refinement", f"{er['edges']} edge{'s' if er['edges'] != 1 else ''} · cells of {_f(er['size'] * 1000)} mm · about {er['estimated_extra_cells']:,.0f} extra cells (estimate)"))
+        rows.append(("Edge refinement", f"{er['edges']} edge{'s' if er['edges'] != 1 else ''} · cells of {_f(er['size'] * 1000)} mm · about {ROUGH(er['estimated_extra_cells'])} extra cells (estimate)"))
     if s.get("method") == "hex" and s.get("cell_types"):
         ct, x = s["cell_types"], s.get("hex") or {}
         rows += [("Hexahedra", f"{100 * ct.get('hexahedra', 0) / max(s.get('cells', 1), 1):.0f} %"),

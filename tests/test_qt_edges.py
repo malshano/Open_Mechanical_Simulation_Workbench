@@ -33,6 +33,7 @@ def ids(c, visible=False):
 def scanned(c):
     """The edge search of the open study, finished (the window asks for it when the group is open)."""
     edgepreview.ensure_scan(c.engine.project(), wait=True)
+    edgepreview.preview(c.engine.project(), scan=True, wait=True)                           # (and the estimate)
     c.engine.changed.emit()
     c._settle()
 
@@ -162,7 +163,7 @@ def test_the_estimate_line_follows_the_settings_and_the_mesher_plan(flow):
     open_group(c, "edges")
     scanned(c)
     pr = c.engine.project()
-    pv = edgepreview.preview(pr)
+    pv = edgepreview.preview(pr, wait=True)
     assert pv["scan"] == "ready" and pv["plan"]["applied"]
     off = c.widget_do("mesh.edges.estimate")["text"]
     assert off.startswith("Off. Switched on it would:") and ROUGH(pv['plan']['estimated_extra_cells']) in off
@@ -170,12 +171,12 @@ def test_the_estimate_line_follows_the_settings_and_the_mesher_plan(flow):
     scanned(c)
     on = c.widget_do("mesh.edges.estimate")["text"]
     assert on.startswith("About ") and "extra cells" in on and "edge cells" in on and "wall cells" in on
-    pv = edgepreview.preview(pr)
+    pv = edgepreview.preview(pr, wait=True)
     n1 = pv["plan"]["estimated_extra_cells"]
     assert ROUGH(n1) in on
     c.widget_do("mesh.edges.factor", "set", "12")                                           # finer edge cells: more cells
     scanned(c)
-    n2 = edgepreview.preview(pr)["plan"]["estimated_extra_cells"]
+    n2 = edgepreview.preview(pr, wait=True)["plan"]["estimated_extra_cells"]
     assert n2 > n1 and ROUGH(n2) in c.widget_do("mesh.edges.estimate")["text"]
     c.widget_do("mesh.edges.cap", "set", "1000")                                            # a cap that bites
     scanned(c)
@@ -192,7 +193,7 @@ def test_smart_sizing_refines_edges_by_itself_and_off_is_respected(flow, monkeyp
     c.engine.project().set_mesh(smart=True)
     c.engine.changed.emit()
     c._settle()
-    pv = edgepreview.preview(c.engine.project())
+    pv = edgepreview.preview(c.engine.project(), wait=True)
     assert pv["on"] and pv["source"] == "smart" and pv["factor"] == edgepreview.SMART_FACTOR
     assert val(c, "mesh.edges.on")["checked"]                                               # (the box says what the mesher will do)
     seen = []
@@ -237,7 +238,7 @@ def test_the_sharp_edges_can_be_shown_in_the_3d_view(flow):
     assert c.win.view.sharp_view.count == 0
     c.widget_do("mesh.edges.show", "set", True)
     scanned(c)
-    n = edgepreview.preview(c.engine.project())["plan"]["edges"]
+    n = edgepreview.preview(c.engine.project(), wait=True)["plan"]["edges"]
     assert n > 0 and c.win.view.sharp_view.count == n and len(c.win.view.sharp_view.actors) == 1
     c.do("step.go", {"step": "setup"})                                                      # (the marks belong to the Mesh step)
     assert c.win.view.sharp_view.count == 0
@@ -340,7 +341,7 @@ def test_a_real_mesh_of_the_wing_made_from_the_panel_uses_the_settings(ctl):
     ctl.widget_do("mesh.edges.factor", "set", "5")
     scanned(ctl)
     pr = ctl.engine.project()
-    pv = edgepreview.preview(pr)
+    pv = edgepreview.preview(pr, wait=True)
     shown = ctl.widget_do("mesh.edges.estimate")["text"]
     assert ROUGH(pv['plan']['estimated_extra_cells']) in shown
     ctl.do("mesh.generate")
@@ -398,3 +399,42 @@ def test_the_group_is_usable_while_the_sharp_edges_are_being_looked_for(flow, mo
     assert mesh(c)["edge_refine"]["factor"] == 9.0
     assert "Looking for the sharp edges" in c.widget_do("mesh.edges.estimate")["text"]
     edgepreview.cancel_all_scans()
+
+
+def test_the_legacy_headline_the_smart_shortcut_and_the_scoped_qualifiers(flow):
+    c = flow
+    open_group(c, "edges")
+    c.widget_do("mesh.edges.on", "set", True)
+    scanned(c)
+    assert "edge zone only" in c.widget_do("mesh.edges.legacy")["text"] and "much less" in c.widget_do("mesh.edges.legacy")["text"]
+    assert "for the edge zone" in c.widget_do("mesh.edges.estimate")["text"] and c.widget_do("mesh.edges.estimate")["tooltip"].startswith("How exact")
+    c.widget_do("mesh.edges.smart", "click")                                                 # (the shortcut switches Smart sizing on)
+    scanned(c)
+    assert mesh(c)["smart"] is True and "mesh.edges.legacy" not in ids(c) and "mesh.edges.smart" not in ids(c)
+    assert "typically within 25 % with Smart sizing" in c.widget_do("mesh.edges.estimate")["text"]
+    c.widget_do("mesh.edges.cap", "set", "5,000")
+    scanned(c)
+    t = c.widget_do("mesh.edges.estimate")["text"]
+    assert "1.1 to 1.7 times larger" in t and "typically within" not in t
+
+
+def test_a_small_count_is_not_an_alarm_and_the_stats_row_is_rounded_like_the_panel(flow, monkeypatch):
+    from simwb.qt import meshtools
+
+    c = flow
+    c.engine.project().set_mesh(smart=True)
+    c.widget_do("mesh.edges.on", "set", True)
+    c.widget_do("mesh.edges.cap", "set", "5,000")
+    c.do("mesh.generate")
+    wait(c)
+    scanned(c)
+    er = mesh(c)["stats"]["edge_refine"]
+    monkeypatch.setattr(edgepreview, "measure", lambda pr, wait=False: {"state": "ready", "result": {"zone_cells": 9000, "zone_share": 0.1, "extra_cells": 8293.0,
+                                                                                                          "distance": er["dist_max"]}, "error": None})
+    c.win.panels["mesh"].adv._sig = None
+    c.engine.changed.emit()
+    c._settle()
+    t = c.widget_do("mesh.edges.made")["text"]
+    assert "about 8,300 extra cells" in t and "can be 2x off at this size" in t and "⚠" not in t and "over the cap" not in t
+    row = dict(meshtools.stats_rows(c.engine.state()))["Edge refinement"]
+    assert meshtools.ROUGH(er["estimated_extra_cells"]) in row and f"{er['estimated_extra_cells']:,.0f}" not in row.replace(meshtools.ROUGH(er["estimated_extra_cells"]), "")

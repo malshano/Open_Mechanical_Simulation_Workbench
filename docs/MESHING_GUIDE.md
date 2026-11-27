@@ -84,12 +84,20 @@ of the field size, edge by edge) was 0.3 to 8 times the real number, and the rea
 | quadcopter (not used) | 6 | 77,500 | 73,600 | 0.95 | |
 | topology bracket (not used) | 12, cap 50,000 (to 5.6) | 44,800 | 47,700 | 1.07 | 0.95 |
 | quadcopter (not used) | 12, cap 50,000 (to 4.4) | 45,100 | 45,100 | 1.00 | 0.90 |
+| topology bracket, small cap | 12, cap 5,000 (to 2.0) | 3,900 | 6,700 | 1.70 | 1.34 |
+| camera mount, small cap | 12, cap 5,000 (to 1.6) | 3,900 | 5,700 | 1.45 | 1.13 |
+| wing, small cap | 12, cap 5,000 (to 2.0) | 4,200 | 6,700 | 1.58 | 1.34 |
+| topology bracket, small cap | 12, cap 10,000 (to 2.6) | 8,600 | 11,900 | 1.39 | 1.19 |
+| camera mount, small cap | 12, cap 10,000 (to 1.9) | 8,400 | 8,900 | 1.07 | 0.89 |
+| wing, small cap | 12, cap 10,000 (to 2.6) | 9,200 | 11,000 | 1.19 | 1.10 |
 
-Over these 19 meshes the real number is 0.84 to 1.19 times the estimate (the calibration constant was fitted on the first nine; the other ten, among them two geometries it never saw, are within 0.84 to 1.10), and with the cap the real extra cells came out at 0.74 to 1.06
-times the cap. The panel therefore says "within about 25 %" and the cap can be overshot by a few percent. Not measured: other presets than quick, other flow models, very large models, and a mesh with wall layers (the layers are added to the mesh afterwards and are not in these numbers).
+For caps of 20,000 and up (the first 19 meshes) the real number is 0.84 to 1.19 times the estimate (the calibration constant was fitted on the first nine; the other ten, among them two geometries it never saw, are within 0.84 to 1.10), and with the cap the real extra cells
+came out at 0.74 to 1.06 times the cap. **Below 20,000 the estimate is too low**: with caps of 5,000 and 10,000 the mesh came out 1.07 to 1.70 times the estimate and 0.89 to 1.34 times the cap. The edge cells are then only about 1.6 to 2.6 times finer than the wall cells, where the
+extra cells of the curve discretisation and the transition are a larger share than the field's integral; the shortfall is roughly 2,000 to 3,000 cells whatever the geometry, but adding that constant makes the 20,000 rows worse (the plate would go from 0.84 to 0.73), so no correction was applied and the panel says so. The panel
+claims "typically within 25 % with Smart sizing" only for caps of 20,000 and up, and "usually 1.1 to 1.7 times larger" below. Not measured: other presets than quick, other flow models, very large models, and a mesh with wall layers (the layers are added to the mesh afterwards and are not in these numbers).
 
 With **Smart sizing off** the comparison is not clean: the old sizing spreads the sizes of curved edges over whole faces, which the edge size field does not, so the mesh with edge refinement can be smaller than without (example wing, factor 6: 2,100 more cells in total, though the edge zone holds
-about 15,000 more than it would at the wall size). The cap and the estimate are for the cells of the edge zone; the real total difference is lower in that mode.
+about 15,000 more than it would at the wall size). The cap and the estimate are for the cells of the edge zone; the real total difference is lower in that mode: the reviewer measured 0.04 to 0.7 times the estimate (wing factor 6: estimate 25,700, whole mesh +900; camera mount factor 12: estimate 430,000, whole mesh +307,000). The panel says so at the head of the estimate and offers to turn Smart sizing on.
 
 After meshing the panel counts the cells in the mesh itself: the tetrahedra within the reach of the edge field (`dist_max`) of the refined edges, less what the same volume holds at the wall size, taken from the mesh's own cells just outside that reach. In the smart sizing
 meshes it agreed with the real difference within 21 % in eleven of twelve cases (a small count, 33,000 against 14,700, was 2.2 times the real one), and it is shown in the warning colour when it is over the cap.

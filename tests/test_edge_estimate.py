@@ -174,3 +174,28 @@ def test_the_estimate_and_the_cap_hold_on_real_meshes(aero):
     real = st["cells"] - off
     assert st["edge_refine"]["capped"] and st["edge_refine"]["factor_used"] == pytest.approx(pv["plan"]["factor_used"])
     assert 0.5 * cap <= real <= 1.25 * cap, real
+
+
+def test_the_plan_is_made_once_per_setting_and_never_on_the_calling_thread(aero, monkeypatch):
+    calls = []
+    real = G.edge_refine_plan
+
+    def slow(*a, **k):
+        calls.append(a[4:6])
+        time.sleep(0.6)
+        return real(*a, **k)
+
+    monkeypatch.setattr(G, "edge_refine_plan", slow)
+    aero.set_mesh(edge_refinement={"factor": 8, "max_cells": 90000})
+    edgepreview.preview(aero, scan=True, wait=True)                                # (the edge search and the first plan)
+    assert len(calls) == 1
+    for _ in range(3):
+        pv = edgepreview.preview(aero)                                             # (the same setting asked again, as the window does on every rebuild: no new plan)
+        assert pv["plan"]["applied"] and not pv["estimating"]
+    assert len(calls) == 1
+    aero.set_mesh(edge_refinement={"max_cells": 40000})                              # (another cap: a new plan, behind the call)
+    t0 = time.time()
+    pv = edgepreview.preview(aero)
+    assert time.time() - t0 < 0.15 and pv["estimating"] and pv["plan"] is None   # not held up by the 0.6 s plan
+    pv = edgepreview.preview(aero, wait=True)
+    assert pv["plan"]["applied"] and len(calls) == 2

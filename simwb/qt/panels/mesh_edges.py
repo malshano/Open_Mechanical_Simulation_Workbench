@@ -7,23 +7,20 @@ from __future__ import annotations
 import re
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QCheckBox, QLabel
+from PySide6.QtWidgets import QCheckBox, QLabel, QPushButton
 
 from ... import edgepreview, gmsh_worker
 from .. import mode, theme
 from ..forms import ParamForm, fmt_num
 from ..ids import wid
+from ..meshtools import ROUGH          # noqa: F401  (also imported from here by the tests)
 from .common import _muted
+
+SMALL_CAP = 20_000      # below this many cells the estimate and the count in the mesh are less exact (see ESTIMATE_TIP)
 
 N = lambda v: f"{int(round(v)):,}"            # noqa: E731  (a count with thousands)
 
 
-def ROUGH(v) -> str:
-    """An estimated count as the estimate deserves: two or three digits, not the last cell (48,263 would claim more than it knows)."""
-    v = float(v)
-    if v < 1000:
-        return f"{int(round(v, -1)):,}"
-    return f"{int(round(v, -2 if v < 100_000 else -3)):,}"
 MM = lambda v: fmt_num(float(f"{v * 1000:.3g}"))  # noqa: E731  (metres as mm with three digits)
 
 
@@ -38,7 +35,8 @@ def signature(adv, st) -> list:
     s = _stats(m)
     return [m.get("edge_refine"), m.get("no_edge_refine"), m.get("smart"), m.get("preset"), m.get("growth"), s.get("seconds"), s.get("edge_refine"), s.get("edge_refine_skipped"),
             (s.get("layers") or {}).get("seconds"), m.get("status"), adv.show_edges, adv._open.get("mesh.edges"),
-            edgepreview.scan_state(pr)["state"] if pr else None, (getattr(pr, "_edge_measure", None) or {}).get("state") if pr else None]
+            edgepreview.scan_state(pr)["state"] if pr else None, (getattr(pr, "_edge_measure", None) or {}).get("state") if pr else None,
+            (lambda pc: (pc.get("state"), repr(pc.get("key"))))(getattr(pr, "_edge_plan", None) or {}) if pr else None]
 
 
 def _msg(text: str, tone: str = "muted", name: str | None = None) -> QLabel:
@@ -51,6 +49,12 @@ def _msg(text: str, tone: str = "muted", name: str | None = None) -> QLabel:
     return lab
 
 
+ESTIMATE_TIP = ("How exact this is. Measured on 19 meshes (quick preset, Smart sizing on, no wall layers): with caps of 20,000 and up the mesh had 0.84 to 1.19 times the "
+                "estimated extra cells and landed at 0.74 to 1.06 times the cap. With a smaller cap it usually comes out 1.1 to 1.7 times larger than estimated. With "
+                "Smart sizing off the numbers are for the edge zone and the whole mesh grows by 0.04 to 0.7 times the estimate. Other presets and meshes with "
+                "wall layers were not measured.")
+
+
 # ---------------------------------------------------------------------------------------------------------------------------------- the group
 def section(adv, st, m):
     """The 'Edge refinement' group of the advanced options."""
@@ -59,9 +63,7 @@ def section(adv, st, m):
     s = adv._sec("Edge refinement", "mesh.edges", bool(e))
     s.head.toggled.connect(lambda on: QTimer.singleShot(0, lambda: adv.rebuild()))               # (opened: the edges are looked for, if that has not been done)
     s.body.addWidget(_muted("Finer cells along the sharp edges that cross the flow (the leading and trailing edge of a wing, the corner of a box), where the flow "
-                            "changes fastest; the cells grow back to the wall size away from the edge. The extra cells are estimated before the mesh is made and "
-                            "the edge cells are made coarser until the estimate fits under the cap. The estimate is within about 25 % in our measurements, so the "
-                            "mesh can come out a little over the cap."))
+                            "changes fastest. The extra cells are estimated before the mesh is made; the edge cells are made coarser until the estimate fits under the cap."))
     want = bool(e) or adv.show_edges or adv._open.get("mesh.edges", False) or bool(_stats(m).get("edge_refine"))
     pv = edgepreview.preview(pr, scan=want)
     adv.edge_pv = pv
@@ -82,13 +84,23 @@ def section(adv, st, m):
                     "help": "The angle between the two surfaces at the edge: 180° is smooth, 90° is the corner of a box, a few degrees is a knife edge. Edges "
                             "with a smaller angle than this are refined (140° leaves out rounded and lightly bent edges)."},
                    {"key": "cap", "label": "most extra cells (cap)", "unit": "cells", "default": pv["max_cells"], "min": 1000.0, "max": 5000000.0, "thousands": True,
-                    "help": "The edge cells are made coarser until the estimated extra cells fit under this number (the estimate is within about 25 % in our measurements, so the mesh can come out a little over it)."}],
+                    "help": "The edge cells are made coarser until the estimated extra cells fit under this number (how exact the estimate is: see the tip of the estimate line)."}],
                   {"factor": pv["factor"], "angle": pv["max_angle"], "cap": pv["max_cells"]}, "mesh.edges")
     f.setEnabled(on)
     f.setToolTip("" if on else "Switch on 'Refine sharp edges' first")
     f.changed.connect(lambda k, v, f=f: _options(adv, f.values()))
     s.body.addWidget(f)
-    s.body.addWidget(_estimate(pv, on))
+    if on and not pv["smart"]:
+        s.body.addWidget(_msg("⚠ The numbers below are for the edge zone only: with Smart sizing off the whole mesh can grow by much less (0.04 to 0.7 times the estimate in our runs).",
+                              "warn", "mesh.edges.legacy"))
+        sm = wid(QPushButton("Turn Smart sizing on"), "mesh.edges.smart")
+        sm.setObjectName("ghostBorder")
+        sm.setToolTip("Smart sizing makes the estimate and the cap match the real mesh (and sizes the whole mesh from the length along the flow: see Mesh advisor above)")
+        sm.clicked.connect(lambda _=False: _smart_on(adv))
+        s.body.addWidget(sm)
+    est = _estimate(pv, on)
+    est.setToolTip(ESTIMATE_TIP)
+    s.body.addWidget(est)
     sw = wid(QCheckBox("Show the sharp edges in the 3D view"), "mesh.edges.show")
     ok = bool(pv["lines"])
     sw.setChecked(adv.show_edges and ok)
@@ -115,6 +127,8 @@ def _estimate(pv: dict, on: bool) -> QLabel:
     if pv["scan"] == "failed":
         return _msg(f"The sharp edges could not be looked for here ({pv.get('scan_error') or 'unknown reason'}); the mesher still does it when the mesh is made.",
                     "warn", name)
+    if pv.get("estimating"):
+        return _msg("Estimating the extra cells…", name=name)
     if pl is None:
         return _msg("", name=name)
     lead = "" if on else "Off. Switched on it would: "
@@ -125,15 +139,18 @@ def _estimate(pv: dict, on: bool) -> QLabel:
                "cap_too_low": f"even the coarsest edge cells would add more than the cap of {N(pl['cap_cells'])} cells, so nothing is refined: raise the cap"}[pl["reason"]]
         return _msg((lead + why + ".") if on else f"Off. {why[0].upper() + why[1:]}.", "muted" if on else "muted", name)
     length, used = fmt_num(float(f"{pl['total_length']:.3g}")), fmt_num(round(pl["factor_used"], 2))
-    txt = (f"{lead}{'About' if on else 'about'} {ROUGH(pl['estimated_extra_cells'])} extra cells (a rough estimate, within about {int(gmsh_worker.EDGE_ESTIMATE_SPREAD * 100)} % in our "
-           f"measurements; cap {N(pl['cap_cells'])}): {pl['edges']} sharp edge{'s' if pl['edges'] != 1 else ''} across the flow, {length} m long; "
+    if not pv["smart"]:
+        rough = "rough, for the edge zone"
+    elif pl["cap_cells"] < SMALL_CAP:
+        rough = "rough: with a cap this small the mesh usually comes out 1.1 to 1.7 times larger"
+    else:
+        rough = f"rough: typically within {int(gmsh_worker.EDGE_ESTIMATE_SPREAD * 100)} % with Smart sizing"
+    txt = (f"{lead}{'About' if on else 'about'} {ROUGH(pl['estimated_extra_cells'])} extra cells ({rough}; cap {N(pl['cap_cells'])}): "
+           f"{pl['edges']} sharp edge{'s' if pl['edges'] != 1 else ''} across the flow, {length} m long; "
            f"edge cells {MM(pl['h_edge'])} mm where the wall cells are {MM(pv['h_wall'])} mm.")
     if pl["capped"]:
         txt += f" ⚠ The cap changed the setting: edge cells {used}× finer than the wall cells instead of {fmt_num(pv['factor'])}×."
         tone = "warn"
-    if on and not pv["smart"]:
-        txt += (" With Smart sizing off the whole mesh can come out smaller than without edge refinement: the old sizing spreads fine cells from curved edges over "
-                "whole faces, the edge field does not.")
     if pv["source"] == "smart":
         txt += " Smart sizing switches this on by itself (4×); change a value or switch it off here to use your own."
     return _msg(txt, tone, name)
@@ -156,9 +173,11 @@ def _last_mesh(m: dict, pv: dict) -> QLabel | None:
         lines = []
         if mm and mm["state"] == "ready":
             r = mm["result"]
-            over = r["extra_cells"] > er["cap_cells"]
-            col = t["warn_text"] if over else t["ok_text"]
-            lines.append(f"<div style='color:{col}'><b>{'⚠ ' if over else '✓ '}Counted in the mesh: about {ROUGH(r['extra_cells'])} extra cells</b> "
+            small = r["extra_cells"] < SMALL_CAP
+            over = r["extra_cells"] > er["cap_cells"] and not small              # (a small count can be twice the real one: no alarm for it)
+            col = t["warn_text"] if over else (t["muted"] if small else t["ok_text"])
+            lines.append(f"<div style='color:{col}'><b>{'⚠ ' if over else ('' if small else '✓ ')}Counted in the mesh: about {ROUGH(r['extra_cells'])} extra cells</b>"
+                         f"{' (can be 2x off at this size)' if small else ''} "
                          f"({N(r['zone_cells'])} cells within {MM(r['distance'])} mm of the edges, {r['zone_share'] * 100:.0f} % of the mesh)"
                          f"{' - over the cap of ' + N(er['cap_cells']) if over else ', cap ' + N(er['cap_cells'])}.</div>")
         elif mm and mm["state"] == "running":
@@ -197,6 +216,15 @@ def _switch(adv, on: bool, pv: dict):
 def _options(adv, v: dict):
     try:
         adv.engine.project().set_mesh(edge_refinement={"factor": v["factor"], "max_angle": v["angle"], "max_cells": v["cap"]})
+        adv.engine.changed.emit()
+    except Exception as e:  # noqa: BLE001
+        adv.panel._fail(e)
+        adv.engine.changed.emit()
+
+
+def _smart_on(adv):
+    try:
+        adv.engine.project().set_mesh(smart=True)
         adv.engine.changed.emit()
     except Exception as e:  # noqa: BLE001
         adv.panel._fail(e)

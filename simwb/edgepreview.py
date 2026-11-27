@@ -226,7 +226,7 @@ def preview(pr, scan: bool = False, wait: bool = False) -> dict:
     why = unavailable(pr)
     s = settings(pr)
     out = {"available": why is None, "reason": why, **s, "smart": bool(m.get("smart")), "blocked": None, "scan": "none", "scan_error": None,
-           "h_wall": None, "plan": None, "lines": [], "measured": None}
+           "h_wall": None, "plan": None, "lines": [], "measured": None, "estimating": False}
     if why is not None:
         return out
     if m.get("size_min") and not m.get("smart"):
@@ -252,7 +252,15 @@ def preview(pr, scan: bool = False, wait: bool = False) -> dict:
     out["h_wall"], out["growth"] = h_wall, growth
     out["edges_found"] = len(edges)
     out["edges_sharp"] = len([e for e in edges if e[1] < s["max_angle"]])
-    plan = gmsh_worker.edge_refine_plan(edges, h_wall, L, growth, s["factor"], s["max_cells"], s["max_angle"])
+    # the plan (with a cap that binds the estimate is computed a dozen times: 1 to 5 s) is made once per setting, on a thread of its own, and kept
+    key = (_key(pr), id(sc["result"]), round(h_wall, 9), round(growth, 6), s["factor"], s["max_cells"], s["max_angle"])
+    pc = _background(pr, "_edge_plan", key, lambda: gmsh_worker.edge_refine_plan(edges, h_wall, L, growth, s["factor"], s["max_cells"], s["max_angle"]), wait=wait)
+    out["estimating"] = pc["state"] == "running"
+    if pc["state"] == "failed":
+        out["scan"], out["scan_error"] = "failed", pc["error"]
+    if pc["state"] != "ready":
+        return out
+    plan = pc["result"]
     out["lines"] = [e[3] for e in plan["edges"]] if plan["applied"] else []
     out["plan"] = {k: v for k, v in plan.items() if k != "edges"}
     out["plan"]["edges"] = len(plan["edges"])
