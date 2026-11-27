@@ -150,12 +150,74 @@ class Engine(QObject):
     def result_fields(self) -> list:
         return self.project().results().field_info()
 
+    # ------------------------------------------------------------------ topology optimisation: the shape above a density threshold
+    def topopt_threshold(self) -> float:
+        return float(self.__dict__.setdefault("_topo_thr", {}).get(self.pid, 0.5))
+
+    def set_topopt_threshold(self, v: float):
+        self.__dict__.setdefault("_topo_thr", {})[self.pid] = min(max(float(v), 0.05), 0.95)
+
+    def _shape(self, rs):
+        """The result set reduced to the elements above the density threshold (cached for the threshold), so that surface, cut and colours draw the shape."""
+        from ..topopt import view as tview
+        key = (id(rs), round(self.topopt_threshold(), 3))
+        c = self.__dict__.get("_shape_cache")
+        if c and c[0] == key:
+            return c[1]
+        keep = rs.fields["Density"][1] >= self.topopt_threshold()
+        out = tview.subset(rs, keep) if keep.any() else rs
+        self._shape_cache = (key, out)
+        return out
+
+    def topopt_shown(self) -> dict:
+        """What the threshold shows: the share of the part's mass above it (and in kg), from the saved density."""
+        from ..topopt import view as tview
+        pr = self.project()
+        rs = pr.results()
+        key = (id(rs), "vol")
+        c = self.__dict__.get("_topo_vol")
+        if not c or c[0] != key:
+            c = self.__dict__["_topo_vol"] = (key, tview.volumes(rs.nodes, rs.tets))
+        v, d = c[1], rs.fields["Density"][1]
+        share = float(v[d >= self.topopt_threshold()].sum() / v.sum())
+        kg = ((self._flow_summary().get("topopt") or {}).get("mass_kg_solid") or 0.0) * share
+        return {"share": share, "kg": kg, "threshold": self.topopt_threshold()}
+
+    def topopt_export_stl(self, path: str, smooth: bool = True) -> dict:
+        """Write the shape at the threshold as a binary STL (in millimetres); the faces the optimiser made are smoothed, the part's own faces are left exactly as they are."""
+        from ..topopt import view as tview
+        rs = self.project().results()
+        sub = self._shape(rs)
+        v, t = tview.shape_surface(sub, rs, smooth=smooth)
+        n = tview.write_stl(path, v, t, name=self.project().data.get("name") or "shape")
+        return {"path": str(path), "triangles": int(n), "threshold": self.topopt_threshold(), "smoothed": bool(smooth)}
+
+    def topopt_live_payload(self):
+        """The shape the running (or last) optimisation has now, as a surface payload; None when there is none."""
+        from ..topopt import view as tview
+        pr = self.project()
+        live = pr.topopt_live()
+        if not live or live.get("density") is None:
+            return None
+        c = self.__dict__.get("_topo_mesh")
+        if not c or c[0] != self.pid:
+            m = pr.load_mesh()
+            c = self.__dict__["_topo_mesh"] = (self.pid, m["nodes"], m["tets"].astype(np.int64))
+        d = live["density"]
+        if len(d) != len(c[2]):
+            return None
+        base = tview.live_base(c[1], c[2], d)
+        keep = d >= self.topopt_threshold()
+        return tview.subset(base, keep).surface("Density") if keep.any() else None
+
     def result_surface(self, field: str, time_index: int = -1, section=None, hide=None, groups=None):
         """The result field on the part's surface; with section=(axis 'x'|'y'|'z', fraction 0..1 of the part's extent) the part is cut there
         and the cells on the low side are shown with the cut faces open (the inside of the part). hide: result regions (parts) not drawn
         (None: the study's own choice - the air of a cooling study is hidden). groups: the surface groups of a flow result to draw (None: the study's own
         choice; [] none)."""
         rs = self.project().results().at(time_index)
+        if self.project().study == "topology_optimization":
+            rs = self._shape(rs)
         flow = self.project().study in FLOW_STUDIES
         box = self._flow_box(rs) if flow else None            # (a flow result is looked at close to the object, not across the whole far field)
         pos = ax = None

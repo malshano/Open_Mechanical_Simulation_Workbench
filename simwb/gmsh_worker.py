@@ -648,7 +648,7 @@ def _union_bbox(bbs):
 
 ZONE_CELLS = {"quick": 36, "coarse": 48, "medium": 64, "fine": 96, "very_fine": 128}  # facets round a moving zone
 # cells across narrow fluid gaps (fin channels) and across a rotor radius in the wake, per preset
-SOLID_STUDIES = ("heat_conduction", "vibration_modal", "static_structural", "aeroelastic_flutter")  # solid-only domains (no air)
+SOLID_STUDIES = ("heat_conduction", "vibration_modal", "static_structural", "topology_optimization", "aeroelastic_flutter")  # solid-only domains (no air)
 GAP_CELLS = {"quick": 4, "coarse": 6, "medium": 8, "fine": 10, "very_fine": 12}
 WAKE_CELLS = {"quick": 5, "coarse": 5, "medium": 8, "fine": 11, "very_fine": 15}
 # cells across the smallest solid feature (arm / boom diameter) for external aerodynamics
