@@ -56,13 +56,15 @@ def test_the_daemon_thread_call_returns_results_and_errors():
     asyncio.run(go())
 
 
-def test_the_exit_watchdog_ends_a_process_that_does_not_end(monkeypatch):
+def test_the_exit_watchdog_ends_a_process_that_does_not_end(tmp_path):
     from simwb.qt import app
 
     ended = threading.Event()
     got = {}
-    app.ensure_exit(3, grace=0.2, exit_fn=lambda rc: (got.update(rc=rc), ended.set()))
+    app.ensure_exit(3, grace=0.2, exit_fn=lambda rc: (got.update(rc=rc), ended.set()), log_dir=tmp_path)
     assert ended.wait(3) and got["rc"] == 3
+    text = (tmp_path / "close.log").read_text()          # (findable under pythonw, which has no console)
+    assert "did not end by itself" in text and "still running" in text
 
 
 def test_the_control_file_of_this_run_is_removed(tmp_path, monkeypatch):

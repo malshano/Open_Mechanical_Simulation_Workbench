@@ -100,7 +100,7 @@ def _remove_control_file():
         pass
 
 
-def ensure_exit(rc: int, grace: float = EXIT_GRACE_S, exit_fn=None):
+def ensure_exit(rc: int, grace: float = EXIT_GRACE_S, exit_fn=None, log_dir=None):
     """The window is gone, so the process must be too. Python waits for every thread that is not a daemon before it exits: one of them
     (a tool call of the assistant waiting for a job, a library's worker) kept the closed workbench alive and invisible for minutes. This
     ends the process `grace` seconds after the event loop ended, whatever is still running, and names what was in the way."""
@@ -110,8 +110,19 @@ def ensure_exit(rc: int, grace: float = EXIT_GRACE_S, exit_fn=None):
     def watchdog():
         time.sleep(grace)
         left = [t.name for t in threading.enumerate() if not t.daemon and t is not threading.main_thread()]
-        print(f"The workbench did not end by itself after closing; ending it now (still running: {left or 'unknown'})",
-              file=sys.stderr, flush=True)
+        msg = f"The workbench did not end by itself after closing; ending it now (still running: {left or 'unknown'})"
+        try:
+            print(msg, file=sys.stderr, flush=True)          # (there is no console under pythonw: the file is where to look)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from .. import project as P
+            d = log_dir or (P.WORKSPACE / ".ui")
+            d.mkdir(parents=True, exist_ok=True)
+            with open(d / "close.log", "a", encoding="utf-8") as f:
+                f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {msg}" + chr(10))
+        except Exception:  # noqa: BLE001
+            pass
         (exit_fn or os._exit)(rc)
 
     threading.Thread(target=watchdog, daemon=True, name="simwb-exit-watchdog").start()
