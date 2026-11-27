@@ -817,10 +817,10 @@ One behaviour for everything that can be dragged in the 3D view; a control descr
 Kinds: `plane` (a sheet dragged along its axis), `point` (a ball and x / y / z arrows; with a `resolver` the ball follows the surface under the pointer), `ring`
 (`axis` or `normal`, `point`, `radius`; value = angle in rad since the drag began; `detent_deg` makes it jump in steps, Shift snaps to `snap_deg`), `face` (`point`, `dir`,
 `length`, `limits`; value = distance in m moved outwards since the drag began). Rings and faces call back with 0 and `final=False` when the drag starts (the control
-keeps what it was), then with the value, then with `final=True` on release; planes and points report the new position. **Escape**: `HandleSet.cancel()` (the viewport's
+keeps what it was), then with the value, then with `final=True` on release; planes and points report the new position. **Escape**: `HandleSet.cancel()` (and `RotateGizmo.cancel()` of the Geometry step, `PlaneHandle.cancel()` of a symmetry plane; the viewport's
 `cancel_drag`, called first by `Shell.escape` because the window owns the Esc shortcut) puts the handle back to what it was at the press (`restore`) and tells the control the
 drag ended there (`callback(key, old, True)`, or a spec's `on_cancel`; `on_press` / `on_cancel` are how pins and line ends restore what they were). **Which handle is taken**
-(`pick`): a ball, then the square end of a face handle, then an arrow (a move arrow before the shaft of a face handle on the same line; between collinear arrows the one
+(`pick`): a ball, then the square end of a face handle, then an arrow (an arrow's cone counts as part of it; a move arrow before the shaft of a face handle: where a move arrow is under the pointer a resize arrow's shaft is not taken; between collinear arrows the one
 whose own tip is nearer), then a ring (`RING_PX`, taken anywhere on it). A face handle may `start` away from its face (a thin line leads to it). While a handle is dragged `HandleSet.set()`
 updates the other handles (a region's rings follow the arrow that moves it) and the dragged one follows the pointer itself. `"fit": True` keeps the largest
 part of a spec inside 30 % of the picture's smaller side (it is drawn again when the camera moves). Everything works from pixel positions and the camera, so
@@ -828,10 +828,10 @@ part of a spec inside 30 % of the picture's smaller side (it is drawn again when
 Users: `resulthandles.py` (Results step), `regionhandles.py` + `regionxform.py` (the Move / turn session of a refinement region: `x' = R (x - c) + c + shift`, faces
 through `regions.grown`), `zonehandles.py` (a rotating zone in Setup: move, `zones.grown` for the faces, a quarter-turn ring through `zones.tilted_axis`; stored on
 Apply: a zone that is dragged is a **draft** (`Rotors.draft`, `current(i)`: the stored zone with the dragged shape), shown by `draw_zones` and the card, stored by `apply_draft` -> `set_moving_zones`,
-dropped by `cancel_draft` or by leaving the step; typed shape numbers change the draft while one is pending. The handle layout is in `zonehandles.py` (move arrows 0.8 of the
-size, length handles starting just beyond them, rings 1.4). **Smallest zone**: `zones.min_sizes` (4 cells / 2 % of the model for the radius, 2 cells / 1 % for the length;
-`hard=True` is half of it and is what `set_moving_zones` refuses); `zones.grown` stops there, `Rotors.clamp` raises a typed number and says so. The zone whose card was used
-last (`QApplication.focusChanged`, the card's `zone_index` property) shows its handles. **Parts**: `zones.part_tints` (inside purple, cut amber; under 1 % of a part's
+dropped by `cancel_draft` or by leaving the step; typed shape numbers change the draft while one is pending. The handle layout is in `zonehandles.py` (move arrows 0.7 of the
+size, resize arrows starting at 1.0 of it from the middle with a thin line to the face, rings 1.4). **Smallest zone**: `zones.min_sizes` (4 cells / 2 % of the model for the radius, 2 cells / 1 % for the length;
+`hard=True` is half of it and is what `set_moving_zones` refuses); `zones.grown` stops there, `Rotors.clamp(z, only)` raises only the typed field (never grows a zone that is already smaller; a cell size the zone is too small for is refused in `set_zone`). The zone whose card was used
+last (`QApplication.focusChanged`, the card's `zone_index` property) shows its handles. **Colours**: `zones.colour_of(i)` for every drawing of zone i. **Overlap**: `Rotors.overlaps` (the engine's `_zones_touch`) is shown in the card, the bar and the drag label before Apply. **Parts**: `zones.part_tints` (inside purple, cut amber; under 1 % of a part's
 surface is outside) tints faces in Setup and Mesh; `ZoneView` makes its solid faint while `camera_inside`. **Sliding interface**: `Project.zone_interface()` reads the mesh's
 `zone_tris` / `zone_tri_zone` (cached on the file's mtime) -> `ZoneView.set_interface`, counted by the Mesh panel. **Regions follow the model**: `regions.transformed`, called
 from `Project._turn_setup` for the whole-model turn or move. The Geometry step keeps its own `RotateGizmo` (it also previews the model).

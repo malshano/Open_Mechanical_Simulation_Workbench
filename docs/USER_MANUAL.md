@@ -651,7 +651,7 @@ The tabs are the ones of section 8, with these differences and additions.
   blue z) and a **ball** move something, **rings** turn it (Shift: 5 degree steps), and a **square-ended arrow** on a face resizes it. The pointer becomes a hand over a
   handle, the handle lights up, and a line in the corner of the view says what the drag does (for example *Turning about z: +30.0°*). In every step the numbers and
   the handles follow each other, and what is expensive waits until you let go. **Esc during a drag** puts the handle back where it was when you pressed the mouse
-  (in every step); a second Esc presses the **Cancel** of the bar under the 3D view. Where two handles lie on one line, a move arrow is taken along its shaft and a
+  (in every step: the shared handles, the Geometry step's rings and arrows and a symmetry plane's arrow); a second Esc presses the **Cancel** of the bar under the 3D view. Where two handles lie on one line, a move arrow is taken along its shaft and a
   resize arrow at its square end; a ring is taken anywhere on it.
 - **Probe**: pin values by clicking the coloured result; line plot between two points or from the minimum to the maximum.
 - **Time bar** (Display, under the field; transient results): the saved time shown, a slider over the saved times and **▶ Play** /
@@ -757,12 +757,12 @@ gravity too). A line at the top of the panel says what the last action did, or w
 - **Moving zones** (flow studies): **＋ Add rotating zone**; each zone has its name, **Method** (MRF steady, or sliding mesh in a transient external
   flow), speed, axis, centre, radius, length, **Cell size inside** (empty = automatic), **Fit around part** and **⌖ Centre on a cylinder or circular
   edge…**. If the picked axis is not along x, y or z, the panel offers **Turn the model** (or **Leave it**).
-  **Each zone is drawn in the 3D view** (Setup and Mesh) as a translucent purple cylinder with its name, speed and method on it; a sliding-mesh zone has a heavier
+  **Each zone is drawn in the 3D view** (Setup and Mesh) as a translucent cylinder in **its own colour** (purple, pink, green, amber for the first four zones: the card's swatch, the tints and the Mesh colouring by the cells that turn use the same) with its name, speed and method on it; a sliding-mesh zone has a heavier
   outline, because its boundary is the sliding interface. A tick on the two flat faces shows how far it has turned. Under the zone's numbers a line says which parts
   are **inside** (they turn with it), which are **outside**, and warns in the warning colour about a part the zone's boundary cuts through (the mesh cannot
   match there: make the zone larger or smaller). **Preview the turn** (a slider over one revolution, and ▶) turns a purple ghost of what is inside the zone;
   with a transient analysis it says how many saved frames the angle is (the **Saved frame every** setting). Nothing is stored; leaving the step puts it away.
-  **Parts in the 3D view**: the parts that are inside a zone are tinted in the zone's purple, and a part its boundary cuts through in the warning amber (the same
+  **Parts in the 3D view**: the parts that are inside a zone are tinted in that zone's colour, and a part its boundary cuts through in the warning amber (the same
   words as the line on the card; a part with less than 1 % of its surface in the zone counts as outside and the card says *less than 1 %*). The tint is in Setup
   and in Mesh, under the colour of a boundary condition.
   **Drag a zone in the 3D view**: the zone whose card you used last shows its handles (its **Show handles in the 3D view** box hides them; a new zone shows them at
@@ -771,10 +771,12 @@ gravity too). A line at the top of the panel says what the last action did, or w
   axis it shows and when it will jump, and the card's **Axis** follows; for any other direction use **Centre on a round edge** and **Turn the model**). The **Centre**,
   **Radius**, **Length** and **Axis** in the card follow the handles and the handles follow the numbers. **Like a refinement region, a dragged zone is only previewed**:
   the card shows **Apply** and **Cancel** side by side (and the bar under the 3D view has them too), a number typed meanwhile changes the preview, and nothing is
-  stored - and the mesh does not become out of date - until you press **Apply**. **Esc** cancels a drag; if the zone would touch another one, **Apply** says why and
-  the preview stays for you to change. **The smallest a zone can be**: a few cells of its **Cell size inside** (4 for the radius, 2 for the length) or, without one, 2 %
-  (radius) and 1 % (length) of the model; a drag stops there, a typed smaller number is raised to it and a line says so in plain words, and the engine refuses a zone
-  smaller than half of it. The handles are put away while you are choosing a centre of rotation or the faces of a condition, so that a click reaches the model.
+  stored - and the mesh does not become out of date - until you press **Apply**. **Esc** cancels a drag; while the preview overlaps another zone the card, the bar and the line in the corner say which one ("Apply will be refused"), and if you press **Apply** anyway the
+  status line keeps the reason and the preview stays for you to change. The bar under the 3D view is one short line (*Not stored: Apply / Cancel*) while something is pending and does not change
+  height during a drag. **The smallest a zone can be**: a few cells of its **Cell size inside** (4 for the radius, 2 for the length) or, without one, 2 %
+  (radius) and 1 % (length) of the model; a drag stops there, a typed smaller radius or length is raised to it and a line says so in plain words (only the number you typed is changed: a speed, a method or a cell size never changes the size of a zone, and a zone that
+  is already smaller than this in an older study is never made larger). A **Cell size inside** that the zone is too small for is refused with *This cell size needs a zone of at least X mm* and the zone is left
+  as it is. The engine refuses a zone smaller than half of the least. The handles are put away while you are choosing a centre of rotation or the faces of a condition, so that a click reaches the model.
 - The settings are headed (**Flow condition**, **Loads**, **Modes and vibration source** ...). A transient external flow with
   sliding zones shows a **Suggested end time** with **Use it**.
 
