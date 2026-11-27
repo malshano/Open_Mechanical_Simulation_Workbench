@@ -16,8 +16,10 @@ import numpy as np
 
 
 def main(argv: list[str]) -> int:
+    from ... import parentwatch
     from . import results_loader as rl
 
+    parentwatch.start()      # (ends with the workbench: nobody is waiting for these frames once it is closed)
     case, out = Path(argv[0]), Path(argv[1])
     meta = json.loads((case / "simwb_case.json").read_text())
     for name in argv[2:]:

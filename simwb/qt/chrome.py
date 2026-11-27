@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QResizeEvent
-from PySide6.QtWidgets import (QApplication, QComboBox, QHBoxLayout, QMenu, QMessageBox, QPushButton, QSizePolicy, QToolButton, QWidget)
+from PySide6.QtWidgets import (QApplication, QComboBox, QHBoxLayout, QMenu, QPushButton, QSizePolicy, QToolButton, QWidget)
 
 from .. import project as P
 from . import mode, theme
@@ -169,11 +169,4 @@ def _fill_jobs(win):
 
 
 def _close(win):
-    n = len(running())
-    if n:
-        r = QMessageBox.question(win, "Close the workbench", f"{n} job(s) are still running and will be stopped. Close anyway?")
-        if r != QMessageBox.Yes:
-            return
-        for j in running():
-            P.JOBS.cancel(j.id)
-    win.close()
+    win.close()       # (the window's close event asks about running jobs and stops them: the same for the X and this button)

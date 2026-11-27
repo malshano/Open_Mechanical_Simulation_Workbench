@@ -17,7 +17,7 @@ from pathlib import Path
 from fastapi import Body, FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 
-from . import __version__, agent, materials, project as P, studies
+from . import __version__, agent, daemonthread, materials, project as P, studies
 
 @asynccontextmanager
 async def _lifespan(app):
@@ -25,7 +25,7 @@ async def _lifespan(app):
     from .solvers.openfoam import installer
 
     try:  # built-in OpenFOAM: set it up in the background on the first start (no separate install)
-        await asyncio.to_thread(installer.auto_start, P.JOBS)
+        await daemonthread.to_thread(installer.auto_start, P.JOBS)
     except Exception as e:  # noqa: BLE001 - never block the server start
         print(f"OpenFOAM auto-setup could not start: {e}")
     yield
@@ -144,7 +144,7 @@ def project_software(pid: str):
 
 @app.get("/api/claude/status")
 async def claude_status():
-    return await asyncio.to_thread(agent.auth_status)
+    return await daemonthread.to_thread(agent.auth_status)
 
 
 @app.post("/api/claude/login")
@@ -201,7 +201,7 @@ async def pick_folder(body: dict = Body(default={})):
         r = subprocess.run([sys.executable, "-c", code, start], capture_output=True, text=True, timeout=300)
         return r.stdout.strip().replace("/", os.sep) if r.returncode == 0 else ""
 
-    return {"path": await asyncio.to_thread(run)}
+    return {"path": await daemonthread.to_thread(run)}
 
 
 terminal_args = agent.terminal_args          # (the rules live in agent.py: the desktop window uses them too)
@@ -611,7 +611,7 @@ async def results_video(pid: str, request: Request):
     for i, f in enumerate(frames):
         (tmp / f"f{i:05d}.jpg").write_bytes(await f.read())
     out = tmp / "video.mp4"
-    r = await asyncio.to_thread(
+    r = await daemonthread.to_thread(
         subprocess.run, [imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error", "-framerate", f"{fps:g}",
                          "-i", str(tmp / "f%05d.jpg"), "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2:out_range=tv,format=yuv420p",  # (H.264: even sizes)
                          "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18", "-movflags", "+faststart", str(out)],

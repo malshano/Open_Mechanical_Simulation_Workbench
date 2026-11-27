@@ -603,6 +603,8 @@ A study is written to its folder after every change, so nothing is lost when the
 | **Export study to one file** | One `.zip`, with or without the solver case and results (much smaller without). |
 | **Import study from a file** | Unpacks an exported `.zip` into a new study. It refuses anything that is not a saved study, anything that would write outside its own folder, and anything unreasonably large; an AI agent's settings files inside the zip (`.claude`, `CLAUDE.md`, `.mcp.json`) are not unpacked. |
 
+**Closing the workbench.** Closing the window (the X, Alt+F4, **File** > quit or the **Close** button) ends the program within a few seconds. If a job is running you are asked once ("N job(s) are still running and will be stopped. Close anyway?"); a yes stops it the way **Cancel** does: a flow run keeps the times it saved and can be resumed when you open the study again. While the running work stops (and the assistant shuts down) a small notice "Closing: stopping the running work ..." shows, and the window title says "Closing"; a quick close shows nothing. The study is saved and the memory of the results is released before the program ends. If something still holds the program after the window is gone, it is ended 8 seconds later and the program's console names what was in the way. The file `.ui/control.json` of the workspace (port and token of the running window) is removed on closing, so a script that edits `project.json` can wait for that file to disappear (or for the process in it to end) before it touches the study.
+
 To give a study to a colleague: **Export study to one file** (leave out the results to keep it small), send the `.zip`, and they use
 **Import study from a file**.
 
