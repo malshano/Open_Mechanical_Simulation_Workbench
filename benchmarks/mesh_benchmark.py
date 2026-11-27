@@ -1,4 +1,4 @@
-﻿"""Mesh benchmark: accuracy against a known answer, cells, time and RAM, for every mesh method and setting.
+"""Mesh benchmark: accuracy against a known answer, cells, time and RAM, for every mesh method and setting.
 
 Case: a flat plate (1.0 x 0.5 m) along the flow in air.
   lam  : laminar flow at 3 m/s (Re_L = 2e5). On a plate with a sharp leading edge the mean friction coefficient has an
@@ -16,6 +16,12 @@ Every case runs in its own fresh process (so the RAM it adds is not mixed with t
     python benchmarks/mesh_benchmark.py <out.jsonl> <spec> [<spec> ...]
     spec = method:preset[:key=value,...]     keys: n (layers, default 5), g (growth, default 1.2),
                                                    mode (lam|turb), shape (sharp|blunt), it (iterations, default 1500),
+                                                   stop (the app's stop rule "Stop when forces settle", % of the total load;
+                                                         default 0.2 = the app's default, 0 = never stop early),
+                                                   solves (solve the SAME mesh this many times; the first fills the row, the others
+                                                         go to `solve_repeats`: the variation of the solver side on one fixed mesh),
+                                                   procs (CPU cores of the solver, default Auto), procs2 / solves2 (after the
+                                                         repeats: solve the same mesh `solves2` more times, default 3, on procs2 cores),
                                                    le (cell size in mm on the faces at the leading edge, sharp plate),
                                                    edge (sharp-edge refinement factor, e.g. 6), tol (1 = tolerant layers)
     e.g.  tet:coarse:n=14,g=1.2   hex:medium:n=10,g=1.3,shape=blunt
@@ -118,6 +124,33 @@ def layers_ok(row: dict) -> bool:
     return row.get("layers_kept_percent") is not None and row["layers_kept_percent"] >= 90.0
 
 
+def cf_history(case: Path, speed: float, every: int = 25):
+    """Cf from the solver's own force output (postProcessing/forces/*/force.dat, the viscous x force column) at every
+    `every`-th iteration and at the last one: {"it": [...], "cf": [...]}, or None when there is no such file."""
+    files = sorted(Path(case).glob("postProcessing/forces/*/force.dat"), key=lambda q: float(q.parent.name))
+    rows = []
+    for f in files:
+        for ln in f.read_text(errors="ignore").splitlines():
+            if ln.strip() and not ln.startswith("#"):
+                v = ln.replace("(", " ").replace(")", " ").split()
+                if len(v) >= 10:
+                    rows.append((int(float(v[0])), abs(float(v[7]))))
+    if not rows:
+        return None
+    q = 0.5 * RHO * speed * speed * 2 * L * B
+    keep = [r for r in rows if r[0] % every == 0 or r is rows[-1]]
+    return {"it": [r[0] for r in keep], "cf": [round(r[1] / q, 7) for r in keep]}
+
+
+def drift_percent(hist: dict, window: int = 100):
+    """Change of Cf over the last `window` iterations of the history, in percent of the final value."""
+    if not hist or len(hist["it"]) < 2:
+        return None
+    last = hist["it"][-1]
+    j = max((i for i, t in enumerate(hist["it"]) if t <= last - window), default=None)
+    return None if j is None else round(100 * (hist["cf"][-1] / hist["cf"][j] - 1), 4)
+
+
 def layer_share(pr, stats: dict):
     """Percent of the wall faces that kept their layers (the last 'Extruding' line of the layer step)."""
     if (stats.get("hex") or {}).get("layers_extruded_percent") is not None:
@@ -147,6 +180,9 @@ def run_one(method: str, preset: str, opts: dict) -> dict:
     j = pr.import_step(plate_step(Path(home) / "plate.step", sharp=(shape == "sharp")), original_name="plate.step")
     assert j.wait(300) and j.status == "done", j.error
     pr.set_settings(speed=U, pitch_deg=0, iterations=iterations, turbulence="laminar" if mode == "lam" else "kOmegaSST")
+    stop = float(opts.get("stop", 0.2))               # the app's stop rule; 0 = off (run to the iteration limit)
+    pr.set_settings(auto_stop_tol=stop)
+    out["stop_tol_percent"] = stop
     pr.set_mesh(preset=preset, layers={"n": layers, "growth": growth, "tolerant": opts.get("tol") == "1"})
     out["tolerant_layers"] = opts.get("tol") == "1"
     if opts.get("edge"):
@@ -172,6 +208,9 @@ def run_one(method: str, preset: str, opts: dict) -> dict:
                nonortho_max=(st.get("foam_quality") or {}).get("non_orthogonality_max"),
                skew_max=(st.get("foam_quality") or {}).get("skewness_max"),
                hex_percent=round(100 * st["cell_types"]["hexahedra"] / st["cells"], 1) if st.get("cell_types") else 0)
+    if opts.get("procs"):
+        pr.set_settings(n_procs=int(opts["procs"]))
+        out["procs"] = int(opts["procs"])
     t0 = time.time()
     j = pr.solve()
     ok = j.wait(7200)
@@ -183,6 +222,9 @@ def run_one(method: str, preset: str, opts: dict) -> dict:
     ram = sm.get("ram") or {}
     out["cells_final"] = final_cells(pr, out["cells"])
     out["layers_kept_percent"] = layer_share(pr, st)
+    hist = cf_history(pr.case_dir, U)
+    if hist:
+        out.update(cf_history=hist, cf_drift_last100_percent=drift_percent(hist), stopped_at=hist["it"][-1])
     lt = layer_table(pr.case_dir)
     if lt:
         out.update(layers_mean=lt["layers_mean"], layers_thickness_percent=lt["thickness_percent"])
@@ -203,6 +245,23 @@ def run_one(method: str, preset: str, opts: dict) -> dict:
         out["ram_kb_per_final_cell"] = round(out["total_ram_mb"] * 1024 / out["cells_final"], 2)
     if out["cf_reference"]:
         out["cf_error_percent"] = round(100 * (out["cf"] / out["cf_reference"] - 1), 2)
+    plan = [out.get("procs", 0)] * (int(opts.get("solves", 1)) - 1)       # the same mesh again: only the solve side can differ now
+    if opts.get("procs2"):                                                # ... and with another number of cores
+        plan += [int(opts["procs2"])] * int(opts.get("solves2", 3))
+    for procs in plan:
+        pr.set_settings(n_procs=procs)
+        t0 = time.time()
+        j = pr.solve()
+        ok = j.wait(7200)
+        sm = (pr.data["solve"].get("summary") or {})
+        if not ok or not sm:
+            out.setdefault("solve_repeats", []).append({"error": str(j.error or pr.data["solve"].get("status"))})
+            continue
+        h = cf_history(pr.case_dir, U)
+        v = sm.get("viscous_force_N") or [0, 0, 0]
+        out.setdefault("solve_repeats", []).append(
+            {"procs": procs, "cf": abs(v[0]) / (q * 2 * L * B), "cells_final": final_cells(pr, out["cells"]), "stopped_at": h["it"][-1] if h else None,
+             "solve_seconds": round(time.time() - t0, 1), "cf_history": h})
     return out
 
 

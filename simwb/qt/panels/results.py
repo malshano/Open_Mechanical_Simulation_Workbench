@@ -1382,6 +1382,9 @@ class ResultsPanel(_Panel):
             return
         if c.get("converged"):
             lay.addWidget(wid(_note(f"✓  Converged after {c.get('iterations', 0):,} iterations. {c.get('note') or ''}", "ok"), "results.convergence"))
+        elif (c.get("monitor") or {}).get("auto_stop_tol_pct") == 0 and not c.get("residuals_converged"):
+            lay.addWidget(wid(_note(f"Ran to the iteration limit ({c.get('iterations', 0):,}) because 'Stop when forces settle' is 0, so this run is "
+                                    "never reported as converged. Judge the numbers from the solver residuals below.", "warn"), "results.convergence"))
         else:
             lay.addWidget(wid(_note(f"Not converged after {c.get('iterations', 0):,} iterations: preliminary numbers. Continue the run in step 4 "
                                     "(Solve) for settled numbers.", "warn"), "results.convergence"))

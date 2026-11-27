@@ -276,6 +276,7 @@ RE_REGION = re.compile(r"Solving for (fluid|solid) region (\w+)")
 RE_MAXT = re.compile(r"min/max\(T\) = ([0-9.eE+-]+) ([0-9.eE+-]+)")
 RE_FMM = re.compile(r"^fieldMinMax (\w+) write:\s*\n\s*min/max\(T\) = ([0-9.eE+-]+) ([0-9.eE+-]+)", re.M)
 RE_FORCE = re.compile(r"Sum of forces\s*\n\s*Total\s*:\s*\(([^)]*)\)")
+RE_VISCOUS = re.compile(r"Sum of forces\s*\n\s*Total\s*:\s*\([^)]*\)\s*\n\s*Pressure\s*:\s*\([^)]*\)\s*\n\s*Viscous\s*:\s*\(([^)]*)\)")
 RE_MOMENT = re.compile(r"Sum of moments\s*\n\s*Total\s*:\s*\(([^)]*)\)")
 
 
@@ -339,7 +340,7 @@ def _monitor_steady(text: str, meta: dict, window: int = 300) -> dict:
     """Engineering convergence: have the quantities the user cares about stopped changing?
 
     CHT : hottest solid temperature changes < 0.1 % of its rise (min 0.01 K) over the last `window` iterations
-    aero: after >= 500 iterations, the 100-iteration mean force and moment change by < 0.2 % of the total load
+    aero: after >= 500 iterations, the 100-iteration mean force and moment change by < auto_stop_tol_pct (default 0.2 %, 0 = off) of the total load
           (frame force + rotor drag; moments scaled by the reference length) over the last 200 iterations"""
     times = [float(t) for t in RE_TIME.findall(text)]
     it = times[-1] if times else 0
@@ -418,7 +419,8 @@ def _monitor_steady(text: str, meta: dict, window: int = 300) -> dict:
             # tolerance relative to the total load the trim has to balance (frame force + modelled rotor drag)
             H = float(np.linalg.norm(sum((np.array(r.get("H_N", [0, 0, 0]), float) for r in meta.get("rotors", [])),
                                          np.zeros(3))))
-            tol = max(0.002 * (float(np.linalg.norm(f1)) + H), 1e-4)
+            frac = float(meta.get("auto_stop_tol_pct", 0.2)) / 100.0   # the setting "Stop when forces settle" (0 = never)
+            tol = max(frac * (float(np.linalg.norm(f1)) + H), 1e-4) if frac > 0 else 0.0
             out.update(dF_window_N=dF, force_N=f1.tolist(), tolerance_N=tol)
             ok_m, txt_m = True, ""
             if len(ms) > win:
@@ -427,10 +429,29 @@ def _monitor_steady(text: str, meta: dict, window: int = 300) -> dict:
                 ok_m = dM < tol * float(meta.get("ref_length") or 1.0)
                 txt_m = f", moment by {dM:.5f} N·m"
                 out["dM_window_Nm"] = dM
-            if dF < tol and ok_m:
+            # the friction (viscous) force must settle too, against its OWN size: a total that is steady can hide a
+            # friction force that is still drifting (a plate: friction is the answer, a small part of the total).
+            # 5 x the total's share, and a floor of 1 % of the total tolerance (a friction force that is negligible
+            # next to the load cannot hold the run back)
+            ok_v, txt_v = True, ""
+            vs = [np.array(m.group(1).split(), float) for m in RE_VISCOUS.finditer(text)]
+            if frac > 0 and len(vs) == len(fs) and len(vs) > win:
+                v1 = np.mean(vs[-win // 2:], axis=0)
+                dV = float(np.linalg.norm(v1 - np.mean(vs[-win:-win // 2], axis=0)))
+                tol_v = max(5 * frac * float(np.linalg.norm(v1)), 0.01 * tol)
+                ok_v = dV < tol_v
+                txt_v = f" and friction force by {dV:.5f} N (limit {tol_v:.5f} N)"
+                out.update(dV_window_N=dV, tolerance_viscous_N=tol_v)
+            elif frac > 0 and len(fs) > win:       # (no Viscous lines, or not one per force block: say that the friction was not checked)
+                txt_v = ""
+                out["viscous_check"] = "skipped: the log has no matching Viscous lines"
+            if frac > 0 and dF < tol and ok_m and ok_v:
                 out["stable"] = True
-                out["reason"] = (f"aerodynamic force (100-iteration average) changed by {dF:.4f} N{txt_m} over the "
-                                 f"last {win} iterations (< 0.2 % of the total load)")
+                checked = "viscous_check" not in out
+                out["reason"] = (f"total force changed by {dF:.4f} N{txt_m}{txt_v} between the last two 100-iteration windows; "
+                                 + (f"both" if checked else "the total force is")
+                                 + f" below the tolerance ({frac * 100:g} % of the total load)"
+                                 + ("" if checked else "; the friction force was not checked (the solver log has no matching Viscous lines)"))
     return out
 
 
