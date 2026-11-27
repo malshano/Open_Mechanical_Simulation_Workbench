@@ -374,6 +374,8 @@ def register(ctl):
     R("solve.load_case", "Join the saved times already in the OpenFOAM case folder and load them as the results, without running the "
                          "solver (a time that cannot be read is left out and named); a job.", {},
       lambda: (sp(), ctl._click("solve.load_case"), {"started": True})[2])
+    R("solve.adopt_setup", "Confirm that the setup is what the case folder was made with (a study run by an older version kept no "
+                           "record), so the old run can be carried on.", {}, lambda: (sp(), ctl._click("solve.adopt_setup"), {"done": True})[2])
     R("solve.advanced", "Advanced OpenFOAM numerics: set some ({key: value}, keys as in the panel: convection, non_orth, relax_p ...) or reset "
                         "all to the defaults.", {"values": ("object", "{key: value}", False), "reset": ("boolean", "reset to defaults first", False)},
       advanced)

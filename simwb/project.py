@@ -232,7 +232,7 @@ def duplicate_project(pid: str, name: str | None = None) -> "Project":
     shutil.copytree(src.dir, d, ignore=shutil.ignore_patterns("case", "results", "videos", "*.tmp", "checks", "_*_job.json"))
     data = json.loads((d / "project.json").read_text())
     data.update(name=name, created=_now(), updated=_now(), solve={"status": "none"})
-    for k in ("mesh_check", "model_check", "hidden", "edited_during_run", "case_setup"):
+    for k in ("mesh_check", "model_check", "hidden", "edited_during_run", "case_setup", "case_run"):
         data.pop(k, None)
     (d / "project.json").write_text(json.dumps(data, indent=1))
     if folder.resolve() != WORKSPACE.resolve():
@@ -272,6 +272,7 @@ def save_project_as(pid: str, location: str, name: str | None = None, keep_resul
     if not keep_results:
         data["solve"] = {"status": "none"}
         data.pop("case_setup", None)
+        data.pop("case_run", None)
     for k in ("hidden", "edited_during_run"):
         data.pop(k, None)
     (d / "project.json").write_text(json.dumps(data, indent=1))
@@ -454,9 +455,11 @@ def delete_project(pid: str):
 # What an OpenFOAM case is made from. A resumed run is only valid while the setup still matches the case on disk, so the
 # case remembers a snapshot of its setup (data["case_setup"]) and the study compares against that, not against a flag
 # that something was touched: a change that is changed back leaves the run resumable.
-# Run controls are not part of the case: the solver limits can be changed for a resume (a later end time is applied
-# to the old case by resuming it; the iteration count and the number of cores are read again at every start).
-RUN_CONTROLS = ("end_time", "n_procs", "max_hours", "iterations")
+# Run controls are not part of the case: the solver limits can be changed for a resume (a changed end time and save
+# interval are applied to the old case by resuming it; the iteration count and the number of cores are read again at
+# every start).
+RUN_CONTROLS = ("end_time", "n_procs", "max_hours", "iterations", "n_frames", "frame_deg")
+# (n_frames / frame_deg: how often a resumed run saves; controlDict's writeInterval can be changed for the continuing run, see _resume_interval)
 _SETUP_PARTS = (("bcs", "Boundary conditions"), ("rotors", "Rotors"), ("moving_zones", "Moving zones"),
                 ("bodies", "Parts and materials"), ("domain", "Air volume (domain)"), ("symmetry", "Symmetry planes"),
                 ("foam_advanced", "Advanced OpenFOAM settings"), ("foam_overrides", "Edited case files"),
@@ -480,7 +483,8 @@ def setup_differences(old: dict, new: dict, labels: dict | None = None) -> list:
     for k in sorted(set(old.get("settings") or {}) | set(new.get("settings") or {})):
         a, b = (old.get("settings") or {}).get(k), (new.get("settings") or {}).get(k)
         if a != b:
-            out.append(f"{labels.get(k, k.replace('_', ' ').capitalize())} ({a} to {b})")
+            label, unit = labels.get(k) or (k.replace("_", " ").capitalize(), "")
+            out.append(f"{label}: {a} to {b}" + (f" {unit}" if unit else ""))
     for k, label in _SETUP_PARTS:
         if old.get(k) != new.get(k):
             out.append(label)
@@ -645,7 +649,9 @@ class Project:
                 self.data[k]["stale"] = True
 
     def _setup_labels(self) -> dict:
-        return {p["key"]: p["label"] for p in self.spec.get("settings", [])}
+        """{setting key: (plain name, unit)}: the hint in brackets of the label ("Time step (0 = auto)") is left off."""
+        return {p["key"]: (re.sub(r"\s*\([^()]*\)\s*$", "", p["label"]), p.get("unit") or "")
+                for p in self.spec.get("settings", [])}
 
     def setup_changes(self) -> list | None:
         """What changed in the setup since the OpenFOAM case on disk was written, as plain phrases ([] = nothing:
@@ -655,6 +661,8 @@ class Project:
         if not isinstance(base, dict):
             return None
         return setup_differences(base, setup_snapshot(self.data), self._setup_labels())
+
+    LOAD_HINT = "The results already in the case folder can be loaded with 'Load results from case' (Solve step)."
 
     def _locked_message(self) -> str:
         """Why an old case cannot be carried on, and what to do."""
@@ -666,10 +674,51 @@ class Project:
         if ch:
             what = "; ".join(ch[:4]) + (f" and {len(ch) - 4} more" if len(ch) > 4 else "")
             return (f"The setup changed since the last run ({what}). Change it back to carry on the old case, or run the "
-                    "simulation again (that starts from the beginning and replaces the old case)")
-        return ("The setup or mesh changed since the last run, and this study cannot say what (it was run by an older "
-                "version). Run the simulation again; the results already in the case folder can be loaded with "
-                "'Load results from case'")
+                    f"simulation again (that starts from the beginning and replaces the old case). {self.LOAD_HINT}")
+        return ("The setup or mesh was changed since the last run, and this study cannot tell what: it was run by an older "
+                "version of the workbench, which did not keep what the case was made from. If you know the setup is still "
+                "what the case folder was made with, say so in the Solve step ('The setup matches the case folder: use "
+                f"it'); otherwise run the simulation again. {self.LOAD_HINT}")
+
+    def lock_state(self) -> dict | None:
+        """When the old run cannot be carried on because of the setup: {message, known (what changed is known),
+        can_adopt (the setup can be confirmed to match the case)}. None when it is not locked, or there is no case."""
+        sv = self.data["solve"]
+        if not (self.case_dir / "simwb_case.json").exists() or sv.get("status") == "none":
+            return None
+        if not (sv.get("status") == "stale" or sv.get("setup_changed")):
+            return None
+        known = self.data.get("case_setup") is not None
+        return {"message": self._locked_message(), "known": known, "can_adopt": not known}
+
+    def adopt_current_setup(self) -> dict:
+        """The user confirms that the current setup is what the case folder was made with (for a study run by a version that
+        kept no record of it): the record is made from the current setup and the old run can be carried on again. The case on
+        disk stays what it is - a resume still runs that case - so a wrong confirmation cannot damage it; the results would
+        only be labelled with settings the case was not made with. The few things the case folder does tell are checked."""
+        if self.busy():
+            raise RuntimeError("Please wait: a job is still running for this project (or cancel it).")
+        if not (self.case_dir / "simwb_case.json").exists():
+            raise ValueError("There is no OpenFOAM case in this study yet: nothing to match")
+        if self.data.get("case_setup") is not None:
+            raise ValueError("This study already knows what its case was made from: change the setup back to match it, or run "
+                             "the simulation again")
+        meta = json.loads((self.case_dir / "simwb_case.json").read_text())
+        s = self.data["settings"]
+        if meta.get("study") and meta["study"] != self.study:
+            raise ValueError("The case folder was made for another kind of study: it cannot be used. Run the simulation again")
+        if bool(meta.get("transient")) != (s.get("analysis") == "transient"):
+            raise ValueError(f"The case folder holds a {'transient' if meta.get('transient') else 'steady'} run but the setup says "
+                             f"{s.get('analysis', 'steady')}: they do not match. Run the simulation again")
+        self.data["case_setup"] = setup_snapshot(self.data)
+        self.data["case_run"] = {k: s.get(k) for k in ("n_frames", "frame_deg")}
+        sv = self.data["solve"]
+        sv.pop("setup_changed", None)
+        if sv.get("status") == "stale":
+            sv["status"] = sv.pop("stale_from", None) or ("done" if sv.get("summary") else "interrupted")
+        self.data.pop("edited_during_run", None)
+        self.save()
+        return self.state()
 
     def mark_stale(self, what=("mesh", "solve")):
         if self.busy():
@@ -711,6 +760,7 @@ class Project:
         d["checks"] = self.check()
         if d["solve"].get("status") in ("stale", "interrupted", "failed", "done") and self.data.get("case_setup"):
             d["setup_changes"] = self.setup_changes()  # what differs from the case on disk (empty: nothing)
+        d["solve_lock"] = self.lock_state()
         jobs = {}
         for kind in ("prepare", "mesh", "solve", "check"):
             j = JOBS.latest(self.id, kind)
@@ -3819,10 +3869,18 @@ class Project:
                     raise ValueError("The interrupted run saved no time step yet: run it again")
                 tr = meta["transient"]
                 want = float(self.data["settings"].get("end_time") or tr["end_time"])
-                if abs(want - tr["end_time"]) > 0.5 * float(tr.get("write_interval") or 0):
-                    # the end time was changed since the run: OpenFOAM can carry on to a new one (earlier or later)
-                    wi = float(tr.get("write_interval") or 0)
-                    return self._extend_transient(want, min(wi, want - t0) if wi > 0 and want > t0 else None)
+                wi0 = float(tr.get("write_interval") or 0)
+                new_wi = self._resume_interval(tr, want)
+                end_changed = abs(want - tr["end_time"]) > 0.5 * wi0
+                if end_changed or (new_wi and t0 < tr["end_time"] * (1 - 1e-6)):
+                    # the end time or the save interval was changed since the run: OpenFOAM can carry on with new ones
+                    # (controlDict is rewritten and the run starts from the latest saved time)
+                    end = want if end_changed else tr["end_time"]
+                    wi = new_wi or wi0
+                    job = self._extend_transient(end, min(wi, end - t0) if wi > 0 and end > t0 else None)
+                    self.data["case_run"] = {k: self.data["settings"].get(k) for k in ("n_frames", "frame_deg")}
+                    self.save()
+                    return job
                 if t0 >= meta["transient"]["end_time"] * (1 - 1e-6):
                     raise ValueError("The interrupted run had already reached its end time: run it again")
                 return JOBS.start("solve", self.id, self._solve_openfoam, False, None, resume_transient=True)
@@ -4223,6 +4281,22 @@ class Project:
             sg[m["tri_surf"] == s] = idx[nm]
         return names, sg
 
+    def _resume_interval(self, tr: dict, end: float) -> float | None:
+        """The save interval a resumed run should use when the save settings (Saved time points, Saved frame every) were
+        changed since the case was written, None when they were not. Sliding-mesh runs save every so many degrees of turn
+        of the fastest zone (the turn per second follows from what the case saved), others every end / (points - 1) s.
+        writeInterval of controlDict may change between runs: OpenFOAM counts the write times from the time it starts at."""
+        s, run = self.data["settings"], self.data.get("case_run")
+        wi0 = float(tr.get("write_interval") or 0)
+        if not run or wi0 <= 0 or all(s.get(k) == run.get(k) for k in ("n_frames", "frame_deg")):
+            return None
+        deg = float(s.get("frame_deg") or 0)
+        if tr.get("frame_deg") and deg > 0:
+            wi = math.radians(deg) / (math.radians(float(tr["frame_deg"])) / wi0)
+        else:
+            wi = end / (max(2, int(s.get("n_frames") or 21)) - 1)
+        return wi if abs(wi - wi0) > 0.01 * wi0 else None
+
     def _extend_transient(self, end_time, write_interval=None) -> Job:
         """Run a finished (or stopped) transient run on from its last saved time to a later end time, saving every
         write_interval seconds from there (default: as before). The saved times so far are kept."""
@@ -4425,6 +4499,7 @@ class Project:
             info = self.data["geometry"]["info"]
             meta = cases.write_case(self.case_dir, data, m, self.faces(), info, self.bodies())
             self.data["case_setup"] = setup_snapshot(self.data)  # what this case is made from (see setup_changes)
+            self.data["case_run"] = {k: self.data["settings"].get(k) for k in ("n_frames", "frame_deg")}  # (how it saves)
             from .solvers.openfoam import advanced
 
             advanced.apply(self.case_dir, data.get("foam_advanced"), data.get("foam_overrides"),
