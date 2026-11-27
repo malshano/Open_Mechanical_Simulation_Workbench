@@ -420,6 +420,20 @@ def mesh_advice(pid: str):
     return P.open_project(pid).mesh_advice()
 
 
+@app.get("/api/projects/{pid}/mesh/estimate")
+def mesh_estimate(pid: str):
+    """The cells and the memory the tetrahedral mesh will need, from the size fields, before meshing (and what the memory budget makes of it)."""
+    return P.open_project(pid).mesh_estimate()
+
+
+@app.post("/api/projects/{pid}/mesh/budget")
+def mesh_budget(pid: str, body: dict = Body(...)):
+    """The memory budget: {mb: 4000} | {percent: 50} | {on: false}; returns the estimate."""
+    pr = P.open_project(pid)
+    pr.set_mesh(budget={k: body[k] for k in ("mb", "percent", "on") if k in body} or body.get("budget"))
+    return pr.mesh_estimate()
+
+
 @app.post("/api/projects/{pid}/mesh/recipe")
 def mesh_recipe(pid: str, body: dict = Body(default={})):
     """Smart sizing on, and the wall layers the recipe recommends; the mesh must be generated again."""

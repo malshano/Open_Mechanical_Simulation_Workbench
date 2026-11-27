@@ -622,6 +622,25 @@ class Control(QObject):
         R("mesh.generate", "Generate (or regenerate) the mesh; a job (use wait).", {}, lambda: (self._click("mesh.generate"), {"started": True})[1])
         R("mesh.advice", "The mesh advisor of a flow study: the analysis of the body and flow, the recipe (cell sizes, layers, reasons) and the scorecard of the mesh.", {},
           lambda: self.engine.project().mesh_advice())
+        def mesh_estimate():
+            card = win.panels["mesh"].memory
+            win.panels["mesh"].refresh(eng.state())
+            card.wait()
+            self._settle()
+            return {"text": card.estimate.property("api_text"), "budget_text": card.state.property("api_text") if card.state.isVisible() else None,
+                    "report": card.last}
+
+        def mesh_budget(mode, value=None):
+            self._click(f"mesh.budget.{mode}")
+            if value is not None and mode != "off":
+                self._set(self._w("mesh.budget.value"), "mesh.budget.value", str(value))
+            self._settle()
+            return mesh_estimate()
+        R("mesh.estimate", "Before meshing: the cells and the memory the mesh will need, as the Mesh step shows them (text and the full report: range, memory of the "
+                           "mesh job and of the run, what the budget makes of it).", {}, mesh_estimate)
+        R("mesh.budget", "The memory budget of the mesh, through its controls: mode off | mb | percent and the value (MB, or percent of the free memory). With a budget on, "
+                         "the bulk of the mesh is coarsened to fit it, or the mesh is refused with a message.",
+          {"mode": (S, "off|mb|percent", True), "value": (N, "MB, or percent of the free memory", False)}, mesh_budget)
         R("mesh.recipe", "Apply the recommended setup of the mesh advisor: smart sizing and the wall layers that fit; then generate the mesh.", {},
           lambda: (self._click("mesh.advisor.apply"), {"applied": True})[1])
         R("mesh.layers", "Make the wall layers again on the mesh that is there (flow study, tetrahedral mesh, OpenFOAM installed); a job (use wait).", {},

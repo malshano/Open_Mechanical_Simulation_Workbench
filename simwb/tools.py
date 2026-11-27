@@ -209,6 +209,20 @@ def mesh_advice(pr, a):
     return pr.mesh_advice()
 
 
+def mesh_estimate(pr, a):
+    return pr.mesh_estimate()
+
+
+def set_memory_budget(pr, a):
+    b = a.get("budget")
+    if b is None:
+        b = {k: a[k] for k in ("mb", "percent", "on") if k in a}
+    if not b:
+        raise ValueError("Give mb (MB), percent (of the free memory) or on: false")
+    pr.set_mesh(budget=b)
+    return pr.mesh_estimate()
+
+
 def mesh_apply_recipe(pr, a):
     return pr.apply_mesh_recipe(preset=a.get("preset"), layers=a.get("layers", True))
 
@@ -591,6 +605,17 @@ TOOLS = [
                           "with a growth of 1.2 to 1.3 and keeps the cell count to what the free memory holds. The mesh is out of date afterwards: call generate_mesh, then "
                           "mesh_advice to see the score.",
      {"type": "object", "properties": {"preset": STR, "layers": {"type": "boolean"}}}, mesh_apply_recipe),
+    ("mesh_estimate", "Before meshing: how many cells and how much memory (MB) the tetrahedral mesh will need for the current mesh settings, worked out from the size fields "
+                      "(no mesh is made, a second or two). Returns estimate {cells, cells_low, cells_high, mesh_mb (the meshing job: about 830 MB fixed plus a share per cell), "
+                      "run_mb (the simulation run, flow studies), peak_mb and its range, the sizes}, free_mb, and - when a memory budget is on - budget {mb, status "
+                      "fits|coarsened|refused, message, changes} and applied (the estimate of the mesh the budget makes). Typically within 15 % of the real cell count (35 % allowed for), "
+                      "see docs/MESHING_GUIDE.md. The hex-dominant mesh is not estimated.",
+     {"type": "object", "properties": {}}, mesh_estimate),
+    ("set_memory_budget", "Set the memory budget of the mesh: mb (a number of MB) or percent (of the free memory now, 5 to 95), or on: false to switch it off. With a budget on, "
+                          "generate_mesh coarsens the bulk (the far field, the cells away from the body, the growth) until the estimate fits and keeps the cells at the walls, "
+                          "thin parts, part sizings, sharp edges and your own regions; when even that does not fit, generate_mesh refuses with a message that says what the "
+                          "smallest mesh is and what to do. Returns the mesh_estimate. Default: off.",
+     {"type": "object", "properties": {"mb": NUM, "percent": NUM, "on": {"type": "boolean"}}}, set_memory_budget),
     ("mesh_metrics", "Inspect the generated tetrahedral mesh: statistics and histograms of cell size, aspect ratio, "
                      "growth (size jump to the neighbours), volume and quality, the cell budget (for each size band "
                      "the share of cells and of the volume: where the cells - and the memory - are spent) and plain "
