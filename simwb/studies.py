@@ -474,12 +474,13 @@ STUDIES = {
             P("iterations", "Max iterations", "", 1500, min=50, max=100000, show_if={"analysis": "steady"},
               help="Upper limit for a steady run; it stops earlier once the forces stop changing. Raise it (or use "
                    "Continue) if the run ends not converged; rotating-zone (MRF) cases often need 500-1000."),
-            P("auto_stop_tol", "Stop when forces settle", "%", 0.2, min=0, max=100, show_if={"analysis": "steady"},
-              help="A steady run stops early when the 100-iteration average of the total force (and moment) changes "
-                   "by less than this share of the total load between two successive 100-iteration windows, after at "
-                   "least 500 iterations. 0 = never stop early: run to Max iterations. Lower it (0.02) when you "
-                   "compare small differences, e.g. the skin friction of a plate: the total force can look settled "
-                   "while a small part of it, such as the friction, is still drifting."),
+            P("auto_stop_tol", "Stop when forces settle", "%", 0.2, min=0, max=10, show_if={"analysis": "steady"},
+              help="A steady run stops early once the 100-iteration average of the total force (and moment) and of the "
+                   "friction (viscous) force has stopped changing: the change between two successive 100-iteration "
+                   "windows must be below this share of the total load (and below 5 times this share of the friction "
+                   "force itself). Checked from iteration 500 on. 0 = never stop early: the run goes to Max iterations "
+                   "and is then reported as not converged by design; judge it from the force and residual plots of the "
+                   "results. Lower it (0.02) to compare small differences."),
             P("max_hours", "Time limit", "h", 0.0, min=0, max=1000,
               help="0 = none. A wall-clock limit for the whole run, counted from its start (preparing the case, "
                    "splitting the mesh and the solver): when it has passed, the solver writes the current solution "

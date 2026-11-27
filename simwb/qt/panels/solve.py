@@ -121,6 +121,17 @@ class SolvePanel(_Panel):
         self.iters.editingFinished.connect(self._iters)
         self.iter_lab.setToolTip(self.iters.toolTip())
         self.iter_row = _row(self.iter_lab, self.iters)
+        self.stoptol_lab = QLabel("Stop when forces settle (%)")
+        self.stoptol = wid(QLineEdit(), "solve.auto_stop_tol")
+        self.stoptol.setValidator(QDoubleValidator(0, 10, 3, self.stoptol))
+        self.stoptol.setToolTip("A steady run stops early when the average force (and the friction force) stops changing by more than this "
+                                "share of the total load between two 100-iteration windows, from iteration 500 on. Default 0.2. Lower it "
+                                "(0.02) to compare small differences. 0 = never stop early: run to Max iterations; the run is then "
+                                "reported as not converged by design.")
+        self.stoptol.editingFinished.connect(self._stoptol)
+        self.stoptol_lab.setToolTip(self.stoptol.toolTip())
+        self.stoptol_hint = wid(_muted("0 = never stop early (the run goes to Max iterations)"), "solve.auto_stop_tol.hint")
+        self.stoptol_row = _row(self.stoptol_lab, self.stoptol)
         self.cores = wid(QComboBox(), "solve.cores")
         self.cores.setToolTip("How many processor cores the solver uses. Auto = about 20,000 cells per core, at most the physical cores. Leave it "
                               "on Auto; set fewer to keep the computer responsive. More than the physical cores gives no speed-up.")
@@ -137,7 +148,7 @@ class SolvePanel(_Panel):
         self.init_lab.setToolTip(self.init.toolTip())
         self.init.activated.connect(lambda i: setattr(self, "init_from", self.init.itemData(i) or ""))
         self.init_row = _row(self.init_lab, self.init)
-        for x in (self.iter_row, self.cores_row, self.serial, self.init_row):
+        for x in (self.iter_row, self.stoptol_row, self.stoptol_hint, self.cores_row, self.serial, self.init_row):
             ol.addWidget(x)
         self.v.addWidget(self.opts)
         self.eta = wid(_muted(""), "solve.eta")
@@ -379,6 +390,18 @@ class SolvePanel(_Panel):
             n = int(self.iters.text())
             if n != int((self.engine.state()["settings"] or {}).get("iterations") or 0):
                 self.engine.project().set_settings(iterations=n)
+                self.engine.changed.emit()
+        except Exception as e:  # noqa: BLE001
+            self._fail(e)
+
+    def _stoptol(self):
+        try:
+            if not self.stoptol.text().strip():
+                return
+            v = float(self.stoptol.text().replace(",", "."))
+            cur = (self.engine.state()["settings"] or {}).get("auto_stop_tol")
+            if v != float(0.2 if cur in (None, "") else cur):
+                self.engine.project().set_settings(auto_stop_tol=v)
                 self.engine.changed.emit()
         except Exception as e:  # noqa: BLE001
             self._fail(e)
@@ -666,6 +689,12 @@ class SolvePanel(_Panel):
         self.iter_row.setVisible(se.get("analysis", "steady") != "transient")
         if not self.iters.hasFocus():
             self.iters.setText(str(int(se["iterations"])) if se.get("iterations") else "")
+        steady_flow = se.get("analysis", "steady") != "transient"
+        self.stoptol_row.setVisible(steady_flow)
+        self.stoptol_hint.setVisible(steady_flow)
+        if not self.stoptol.hasFocus():
+            v = se.get("auto_stop_tol")
+            self.stoptol.setText(f"{0.2 if v in (None, '') else float(v):g}")
         serial = J.serial_only(self.foam)
         self.cores_row.setVisible(not serial)
         self.serial.setVisible(serial)

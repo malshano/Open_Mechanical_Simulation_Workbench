@@ -18,6 +18,10 @@ Every case runs in its own fresh process (so the RAM it adds is not mixed with t
                                                    mode (lam|turb), shape (sharp|blunt), it (iterations, default 1500),
                                                    stop (the app's stop rule "Stop when forces settle", % of the total load;
                                                          default 0.2 = the app's default, 0 = never stop early),
+                                                   solves (solve the SAME mesh this many times; the first fills the row, the others
+                                                         go to `solve_repeats`: the variation of the solver side on one fixed mesh),
+                                                   procs (CPU cores of the solver, default Auto), procs2 / solves2 (after the
+                                                         repeats: solve the same mesh `solves2` more times, default 3, on procs2 cores),
                                                    le (cell size in mm on the faces at the leading edge, sharp plate),
                                                    edge (sharp-edge refinement factor, e.g. 6), tol (1 = tolerant layers)
     e.g.  tet:coarse:n=14,g=1.2   hex:medium:n=10,g=1.3,shape=blunt
@@ -204,6 +208,9 @@ def run_one(method: str, preset: str, opts: dict) -> dict:
                nonortho_max=(st.get("foam_quality") or {}).get("non_orthogonality_max"),
                skew_max=(st.get("foam_quality") or {}).get("skewness_max"),
                hex_percent=round(100 * st["cell_types"]["hexahedra"] / st["cells"], 1) if st.get("cell_types") else 0)
+    if opts.get("procs"):
+        pr.set_settings(n_procs=int(opts["procs"]))
+        out["procs"] = int(opts["procs"])
     t0 = time.time()
     j = pr.solve()
     ok = j.wait(7200)
@@ -238,6 +245,23 @@ def run_one(method: str, preset: str, opts: dict) -> dict:
         out["ram_kb_per_final_cell"] = round(out["total_ram_mb"] * 1024 / out["cells_final"], 2)
     if out["cf_reference"]:
         out["cf_error_percent"] = round(100 * (out["cf"] / out["cf_reference"] - 1), 2)
+    plan = [out.get("procs", 0)] * (int(opts.get("solves", 1)) - 1)       # the same mesh again: only the solve side can differ now
+    if opts.get("procs2"):                                                # ... and with another number of cores
+        plan += [int(opts["procs2"])] * int(opts.get("solves2", 3))
+    for procs in plan:
+        pr.set_settings(n_procs=procs)
+        t0 = time.time()
+        j = pr.solve()
+        ok = j.wait(7200)
+        sm = (pr.data["solve"].get("summary") or {})
+        if not ok or not sm:
+            out.setdefault("solve_repeats", []).append({"error": str(j.error or pr.data["solve"].get("status"))})
+            continue
+        h = cf_history(pr.case_dir, U)
+        v = sm.get("viscous_force_N") or [0, 0, 0]
+        out.setdefault("solve_repeats", []).append(
+            {"procs": procs, "cf": abs(v[0]) / (q * 2 * L * B), "cells_final": final_cells(pr, out["cells"]), "stopped_at": h["it"][-1] if h else None,
+             "solve_seconds": round(time.time() - t0, 1), "cf_history": h})
     return out
 
 

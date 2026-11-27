@@ -74,3 +74,21 @@ def test_note_of_a_run_with_the_rule_off_does_not_say_still_changing(P, tmp_path
     assert off["converged"] is False and "does not stop early" in off["note"] and "still changing" not in off["note"]
     on = P._convergence(log, 600, dict(META, auto_stop_tol_pct=0.2))
     assert on["converged"] is True and "0.2 % of the total load" in on["note"]
+
+
+def _log_split(total_of_it, visc_of_it, n=1500):
+    return "".join(f"Time = {i}\n\nforces forces write:\n    Sum of forces\n        Total    : ({total_of_it(i):.8f} 0 0)\n"
+                   f"        Pressure : ({total_of_it(i) - visc_of_it(i):.8f} 0 0)\n        Viscous  : ({visc_of_it(i):.8f} 0 0)\n"
+                   for i in range(1, n + 1))
+
+
+def test_a_drifting_friction_force_holds_the_run_back_even_when_the_total_is_steady():
+    """Total steady, friction 1 % of it and decaying with a 600-iteration time constant: it still changes 1.4 % between the last
+    two windows. The rule used to stop at 0.2 % and at 0.02 % (only 0 prevented it)."""
+    visc = lambda i: 0.01 * (1.0 + 0.5 * math.exp(-i / 600))        # noqa: E731
+    txt = _log_split(lambda i: 1.0 + 0.0 * i + (visc(i) - 0.01), visc, 600)   # total = pressure 0.99 + friction
+    for tol in (0.2, 0.02):
+        mon = monitor_outputs(txt, dict(META, auto_stop_tol_pct=tol))
+        assert mon["stable"] is False and mon["dV_window_N"] > mon["tolerance_viscous_N"]
+    settled = _log_split(lambda i: 1.0, lambda i: 0.01, 600)
+    assert monitor_outputs(settled, META)["stable"] is True               # a steady friction force does not hold it back
