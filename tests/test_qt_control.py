@@ -343,10 +343,10 @@ def test_import_mesh_and_inspect_through_the_window(ctl):
 def test_start_screen_has_a_card_per_study_type(ctl):
     s = ctl.state()
     assert s["window"]["screen"] == "home" and s["docks"] == {"outline": False, "step": False, "assistant": False, "log": False}
-    assert ctl.widgets("home.new.")["count"] == 6 and ctl.widgets("home.example.")["count"] == 7
+    assert ctl.widgets("home.new.")["count"] == 7 and ctl.widgets("home.example.")["count"] == 8      # (topology optimisation adds a study type and an example)
     assert {w["id"] for w in ctl.widgets("home.")["widgets"]} >= {"home.open_folder", "home.import", "home.new.static_structural"}
     types = ctl.do("study.types")["result"]["types"]
-    assert len(types) == 6 and any(t["multiphysics"] for t in types)
+    assert len(types) == 7 and any(t["multiphysics"] for t in types)
     with pytest.raises(ValueError, match="study.new"):
         ctl.widget_do("home.new.static_structural", "click")        # opens the new-study dialog: not drivable
     with pytest.raises(ValueError, match="Unknown study type"):
