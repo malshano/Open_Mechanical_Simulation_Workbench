@@ -240,7 +240,9 @@ def test_a_zone_cannot_be_made_smaller_than_a_few_cells_or_a_share_of_the_model(
     said = c.win.panels["setup"].status.text()
     assert "smallest this zone can be" in said and "2 % of the model" in said
     assert any("smallest this zone can be" in t["text"] for t in c.win.toasts.listing())
+    c.widget_do("setup.zone.0.radius", "set", "30")
     c.widget_do("setup.zone.0.cell_size", "set", "6")                         # (a cell size inside: the least is 4 cells)
+    assert zone(c)["radius"] == pytest.approx(0.03)
     c.widget_do("setup.zone.0.radius", "set", "10")
     assert zone(c)["radius"] == pytest.approx(0.024) and "4 cells" in c.win.panels["setup"].status.text()
     with pytest.raises(Exception, match="too small"):                         # (the engine: refuses half of it, with the reason)
@@ -355,3 +357,51 @@ def test_leaving_the_step_drops_a_draft(aero):
     c.do("step.go", {"step": "mesh"})
     c.do("step.go", {"step": "setup"})
     assert rot(c).draft is None and zone(c) == z0
+
+
+# ---------------------------------------------------------------- an edit of one number never changes another (round 2)
+def test_a_typed_cell_size_never_changes_the_size_of_the_zone(aero):
+    c = aero
+    z0 = zone(c)                                                               # (radius 30 mm, length 15 mm on the 100 mm box)
+    c.widget_do("setup.zone.0.cell_size", "set", "10")                         # (4 cells would be 40 mm: the radius must stay what it was)
+    z1 = zone(c)
+    assert z1["cell_size"] == pytest.approx(0.01)
+    assert z1["radius"] == z0["radius"] and z1["length"] == z0["length"] and z1["center"] == z0["center"]
+    c.widget_do("setup.zone.0.cell_size", "set", "30")                         # (a cell the zone is far too small for: refused, nothing changes)
+    z2 = zone(c)
+    assert z2["cell_size"] == pytest.approx(0.01) and z2["radius"] == z0["radius"] and z2["length"] == z0["length"]
+    said = [t["text"] for t in c.win.toasts.listing()]
+    assert any("This cell size needs a zone of at least" in t and "make the zone larger or the cell size smaller" in t for t in said)
+    assert float(c.widget_do("setup.zone.0.radius")["value"]) == pytest.approx(z0["radius"] * 1000, abs=0.01)
+
+
+def test_a_speed_or_method_edit_never_changes_the_geometry_of_an_older_small_zone(aero):
+    """An older study's zone of 2.5 mm radius (the engine accepts it) must not be grown by editing its speed, its method, or by dragging another face."""
+    c = aero
+    pr = c.engine.project()
+    pr.set_moving_zones([dict(zone(c), radius=0.0025, length=0.002)])
+    c.win.panels["setup"].redo()
+    z0 = zone(c)
+    assert z0["radius"] == 0.0025 and z0["length"] == pytest.approx(0.002, rel=1e-9)
+    c.widget_do("setup.zone.0.rpm", "set", "1200")
+    z1 = zone(c)
+    assert z1["rpm"] == 1200 and z1["radius"] == z0["radius"] and z1["length"] == pytest.approx(z0["length"], rel=1e-9)
+    c.widget_do("setup.zone.0.method", "set", "sliding")
+    z2 = zone(c)
+    assert z2["method"] == "sliding" and z2["radius"] == z0["radius"] and z2["length"] == pytest.approx(z0["length"], rel=1e-9)
+    c.win.view.iren.setFixedSize(900, 700)
+    drag(c, "face.length.1", 0.001)                                            # (a drag of the length handle must not raise the radius either)
+    assert rot(c).current(0)["radius"] == z0["radius"] and rot(c).current(0)["length"] == pytest.approx(0.003, rel=1e-6)
+    drag(c, "face.radius", -0.01)                                              # (shrinking stops at the least, 2 mm; it is never raised)
+    assert 0.002 <= rot(c).current(0)["radius"] <= z0["radius"] and rot(c).current(0)["radius"] == pytest.approx(0.002, rel=1e-3)
+    assert Z.grown(z0, np.zeros((3, 2)), size=1.0)["radius"] == z0["radius"] and Z.grown(z0, np.zeros((3, 2)), size=1.0)["length"] == pytest.approx(z0["length"], rel=1e-9)
+
+
+def test_a_typed_radius_is_still_raised_to_the_least_but_the_length_is_left_alone(aero):
+    c = aero
+    pr = c.engine.project()
+    pr.set_moving_zones([dict(zone(c), radius=0.0025, length=0.002)])
+    c.win.panels["setup"].redo()
+    c.widget_do("setup.zone.0.radius", "set", "1.5")                           # (typed below the least, 2 mm: raised; the short length is not touched)
+    z = zone(c)
+    assert z["radius"] == pytest.approx(0.002, rel=1e-3) and z["length"] == 0.002

@@ -70,11 +70,11 @@ class ZoneHandles:
             k = h["key"]
             start = 0.0
             if k[0] == "length":
-                room = float(z["length"]) - lmin
+                room = float(z["length"]) - min(lmin, float(z["length"]))
                 start = max(MOVE_ARROW * r0 - float(z["length"]) / 2, 0.0) + GAP * r0          # (the arrow starts beyond the move arrow that lies on the same line)
                 reach = BEYOND * r0
             else:
-                room = float(z["radius"]) - rmin
+                room = float(z["radius"]) - min(rmin, float(z["radius"]))
                 reach = RADIUS_ARROW * r0
             out.append({"key": face_key(k), "kind": "face", "axis": 0 if k[0] == "length" else 1, "point": np.asarray(h["pos"], float).tolist(),
                         "dir": np.asarray(h["dir"], float).tolist(), "length": reach, "start": start, "fit": True, "value": 0.0, "limits": [-max(room, 0.0), None], "snap_m": snap,

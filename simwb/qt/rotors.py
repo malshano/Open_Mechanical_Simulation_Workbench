@@ -174,14 +174,15 @@ class Rotors:
         if toasts is not None:
             toasts.warn(text)
 
-    def clamp(self, z: dict) -> dict:
-        """The zone with a radius and a length of at least zone_tools.min_sizes; says so when it had to be changed."""
+    def clamp(self, z: dict, only=("radius", "length")) -> dict:
+        """The zone with the radius and / or length that the user just typed or dragged (`only`) raised to zone_tools.min_sizes, and a plain line when it had to be.
+        Nothing else is touched: a zone that is smaller than that already (an older study) is never grown by an edit of something else."""
         rmin, lmin, why = self.min_for(z)
         said = []
-        if z["radius"] < rmin * (1 - 1e-9):
+        if "radius" in only and z["radius"] < rmin * (1 - 1e-9):
             z["radius"] = rmin
             said.append(f"radius {fmt_num(round(rmin * 1000, 3))} mm")
-        if z["length"] < lmin * (1 - 1e-9):
+        if "length" in only and z["length"] < lmin * (1 - 1e-9):
             z["length"] = lmin
             said.append(f"length {fmt_num(round(lmin * 1000, 3))} mm")
         if said:
@@ -214,7 +215,12 @@ class Rotors:
                 z[k] = float(v)
             else:
                 z[k] = v
-        self.clamp(z)
+        if "cell_size" in kw and z.get("cell_size"):                 # (a cell size the zone is too small for: refused, the zone is not changed)
+            rmin, lmin, _why = zone_tools.min_sizes(z, self.size(), hard=True)
+            if z["radius"] < rmin * (1 - 1e-9) or z["length"] < lmin * (1 - 1e-9):
+                return self.panel._fail(ValueError(f"This cell size needs a zone of at least {fmt_num(round(rmin * 1000, 3))} mm radius and {fmt_num(round(lmin * 1000, 3))} mm length "
+                                                   f"(the zone is {fmt_num(round(z['radius'] * 1000, 3))} mm and {fmt_num(round(z['length'] * 1000, 3))} mm): make the zone larger or the cell size smaller"))
+        self.clamp(z, tuple(k for k in ("radius", "length") if k in kw))
         return self._save_zones(zs)
 
     GEOMETRY = ("cx", "cy", "cz", "radius", "length", "axis")
@@ -233,7 +239,7 @@ class Rotors:
             z["axis"] = val
         else:
             z[key] = float(val) / 1000
-        self.clamp(z)
+        self.clamp(z, (key,))
         self.set_draft(i, z)
         self.show_numbers(i, self.current(i), force=True)
         self.draw_zones(i, live=True)

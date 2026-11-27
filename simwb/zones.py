@@ -182,6 +182,7 @@ def grown(z: dict, g, size: float = 0.0) -> dict:
     u = axis_of(z)
     length = float(z["length"])
     rmin, lmin, _why = min_sizes(z, size)
+    rmin, lmin = min(rmin, float(z["radius"])), min(lmin, length)       # (a zone that is smaller than the least already - an older study - is never grown by a drag)
     gs, ge = float(g[0, 0]), float(g[0, 1])
     if length + gs + ge < lmin:
         over = lmin - (length + gs + ge)
