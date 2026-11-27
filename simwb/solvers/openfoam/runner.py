@@ -339,7 +339,7 @@ def _monitor_steady(text: str, meta: dict, window: int = 300) -> dict:
     """Engineering convergence: have the quantities the user cares about stopped changing?
 
     CHT : hottest solid temperature changes < 0.1 % of its rise (min 0.01 K) over the last `window` iterations
-    aero: after >= 500 iterations, the 100-iteration mean force and moment change by < 0.2 % of the total load
+    aero: after >= 500 iterations, the 100-iteration mean force and moment change by < auto_stop_tol_pct (default 0.2 %, 0 = off) of the total load
           (frame force + rotor drag; moments scaled by the reference length) over the last 200 iterations"""
     times = [float(t) for t in RE_TIME.findall(text)]
     it = times[-1] if times else 0
@@ -418,7 +418,8 @@ def _monitor_steady(text: str, meta: dict, window: int = 300) -> dict:
             # tolerance relative to the total load the trim has to balance (frame force + modelled rotor drag)
             H = float(np.linalg.norm(sum((np.array(r.get("H_N", [0, 0, 0]), float) for r in meta.get("rotors", [])),
                                          np.zeros(3))))
-            tol = max(0.002 * (float(np.linalg.norm(f1)) + H), 1e-4)
+            frac = float(meta.get("auto_stop_tol_pct", 0.2)) / 100.0   # the setting "Stop when forces settle" (0 = never)
+            tol = max(frac * (float(np.linalg.norm(f1)) + H), 1e-4) if frac > 0 else 0.0
             out.update(dF_window_N=dF, force_N=f1.tolist(), tolerance_N=tol)
             ok_m, txt_m = True, ""
             if len(ms) > win:
@@ -427,10 +428,10 @@ def _monitor_steady(text: str, meta: dict, window: int = 300) -> dict:
                 ok_m = dM < tol * float(meta.get("ref_length") or 1.0)
                 txt_m = f", moment by {dM:.5f} N·m"
                 out["dM_window_Nm"] = dM
-            if dF < tol and ok_m:
+            if frac > 0 and dF < tol and ok_m:
                 out["stable"] = True
                 out["reason"] = (f"aerodynamic force (100-iteration average) changed by {dF:.4f} N{txt_m} over the "
-                                 f"last {win} iterations (< 0.2 % of the total load)")
+                                 f"last {win} iterations (< {frac * 100:g} % of the total load)")
     return out
 
 

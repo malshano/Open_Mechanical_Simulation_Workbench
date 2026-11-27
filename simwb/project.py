@@ -459,7 +459,7 @@ def delete_project(pid: str):
 # Run controls are not part of the case: the solver limits can be changed for a resume (a changed end time and save
 # interval are applied to the old case by resuming it; the iteration count and the number of cores are read again at
 # every start).
-RUN_CONTROLS = ("end_time", "n_procs", "max_hours", "iterations", "n_frames", "frame_deg")
+RUN_CONTROLS = ("end_time", "n_procs", "max_hours", "iterations", "auto_stop_tol", "n_frames", "frame_deg")
 # (n_frames / frame_deg: how often a resumed run saves; controlDict's writeInterval can be changed for the continuing run, see _resume_interval)
 _SETUP_PARTS = (("bcs", "Boundary conditions"), ("rotors", "Rotors"), ("moving_zones", "Moving zones"),
                 ("bodies", "Parts and materials"), ("domain", "Air volume (domain)"), ("symmetry", "Symmetry planes"),
@@ -5020,6 +5020,7 @@ class Project:
         self.save()
         it_target = (end if continue_iterations else
                      it_from + int(self.data["settings"].get("iterations", 1000)))
+        meta = self._stop_rule(meta)
         app_log = self.case_dir / f"log.{meta['app']}"
         state = {"running": True}
 
@@ -5210,7 +5211,7 @@ class Project:
         from .solvers.openfoam import results_loader, runner
 
         case = self.case_dir
-        meta = json.loads((case / "simwb_case.json").read_text())
+        meta = self._stop_rule(json.loads((case / "simwb_case.json").read_text()))
         det = runner.detect(refresh=True)
         rep: dict = {}
         region = meta["regions"][0] if meta.get("regions") else None
@@ -5277,6 +5278,11 @@ class Project:
         self.save()
         return summary
 
+    def _stop_rule(self, meta: dict) -> dict:
+        """The case's meta with the stop rule of the study settings (a run control: read again at every start)."""
+        tol = self.data["settings"].get("auto_stop_tol")
+        return dict(meta, auto_stop_tol_pct=0.2 if tol in (None, "") else float(tol))
+
     # ------------------------------------------------------------------ results
     def reload_results(self) -> dict:
         """Re-read the OpenFOAM results from the case directory (e.g. after updating post-processing)."""
@@ -5284,7 +5290,7 @@ class Project:
 
         if self.spec["solver"] == "builtin_fem" or not (self.case_dir / "case.done").exists():
             raise ValueError("No finished OpenFOAM run to reload")
-        meta = json.loads((self.case_dir / "simwb_case.json").read_text())
+        meta = self._stop_rule(json.loads((self.case_dir / "simwb_case.json").read_text()))
         rs, summary = results_loader.load(self.case_dir, self.data)
         self._adopted_warning(summary)
         app_log = self.case_dir / f"log.{meta['app']}"
