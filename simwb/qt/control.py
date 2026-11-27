@@ -713,22 +713,31 @@ class Control(QObject):
                                 "(its name, e.g. 'body', or its text in the list), 'air', 'zones' (outline of the moving zones) or 'regions' (refinement regions); "
                                 "all: tick every surface; only_moving: just the parts that move with the mesh and their zone outline. Works while the time bar plays.",
           {"show": ("object", "{name: bool}", False), "all": (B, "tick every surface", False), "only_moving": (B, "only what moves", False)}, visibility)
-        def handle(key, value, shift=False):
+        def handle(key, value, shift=False, part=None):
             hs = win.view.handles
             if key not in hs.specs:
-                raise ValueError(f"There is no handle {key!r} now. Handles: {', '.join(hs.specs) or 'none (they show with the tab of the control: Flow, Probe, or a section)'}")
+                raise ValueError(f"There is no handle {key!r} now. Handles: {', '.join(hs.specs) or 'none (they show with the tab of the control: Flow, Probe, or a section; in the Mesh step with Move / turn... of a region; in Setup with a rotating zone)'}")
+            kind = hs.specs[key]["kind"]
+            if kind == "ring":                                    # (degrees: the angle to turn by)
+                if isinstance(value, (list, tuple)):
+                    raise ValueError("A ring takes one number: the angle in degrees to turn by")
+                hs.simulate_move(key, float(value), shift=bool(shift))
+                return {"handle": hs.describe()["handles"][key]}
             v = [float(x) / 1000.0 for x in value] if isinstance(value, (list, tuple)) else float(value) / 1000.0
-            if hs.specs[key]["kind"] == "plane" and isinstance(v, list):
-                raise ValueError("A plane's handle takes one number (mm along its axis)")
-            if hs.specs[key]["kind"] == "point" and not isinstance(v, list):
+            if kind in ("plane", "face") and isinstance(v, list):
+                raise ValueError("A plane's or a face handle takes one number in mm" + (" along its axis" if kind == "plane" else ": how far to move the face outwards"))
+            if kind == "point" and not isinstance(v, list):
                 raise ValueError("A point's handle takes [x, y, z] in mm")
-            hs.simulate_move(key, v, shift=bool(shift))
+            hs.simulate_move(key, v, shift=bool(shift), **({"part": part} if part else {}))
             return {"handle": hs.describe()["handles"][key]}
         R("view.handle", "Drag a handle in the 3D view by its name (see ui_state: view.handles) to a position: a plane's handle (contour plane 'plane1', the arrows' "
                          "plane 'vectors', the section 'section') to one number in mm along its axis; a point's handle (the particle seed disk 'seeds', a pinned point "
-                         "'pin1', the ends of the line 'lineA' and 'lineB') to [x, y, z] in mm (a pin or line end lands on the nearest place on the model). It is the same "
-                         "press-drag-release as the mouse: the controls follow and the real work is done on release.",
-          {"key": (S, "handle name", True), "value": ("array", "mm (a plane: one number; a point: [x, y, z])", True), "shift": (B, "snap to round steps", False)}, handle)
+                         "'pin1', the ends of the line 'lineA' and 'lineB', 'move' of a region or a zone) to [x, y, z] in mm (a pin or line end lands on the nearest place on the "
+                         "model; part 'axis0' / 'axis1' / 'axis2' drags the arrow along x / y / z instead of the ball); a ring ('turn.x', 'turn.y', 'turn.z' of a region, "
+                         "'tilt.x' ... of a zone) to one number: the degrees to turn by; a face handle ('face.0.1' ... of a region, 'face.length.0', 'face.radius' of a zone) to "
+                         "one number: mm to move the face outwards. It is the same press-drag-release as the mouse: the controls follow and the real work is done on release.",
+          {"key": (S, "handle name", True), "value": ("array", "mm (a plane: one number; a point: [x, y, z]; a ring: degrees; a face: mm)", True), "shift": (B, "snap to round steps", False),
+           "part": (S, "a point's arrow: axis0 | axis1 | axis2 (default: the ball)", False)}, handle)
         R("results.temperature_limit", "Set the allowed temperature (°C) the parts bars compare against; omit or null to clear it.",
           {"value": (N, "°C", False)}, lambda value=None: {"limit": rp().set_tlimit(value)})
         R("results.mesh_check", "Start the mesh-sensitivity check: levels 1 (one preset finer) or 2 (three levels, grid-convergence index); a job.",

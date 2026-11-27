@@ -1,8 +1,10 @@
-"""Moving and turning a refinement region (the Mesh step), the way the model is moved and turned in the Geometry step: a gizmo at the region's middle
-(arrows move it along x, y, z, the ball moves it freely, rings turn it about x, y, z) or typed numbers (move by dx dy dz in mm, turn about x y z
-in degrees). The region is previewed as it goes; Apply stores it (a box keeps its turn, a cylinder moves its end points), Cancel puts it back.
+"""Moving, turning and resizing a refinement region (the Mesh step), the way the model is moved and turned in the Geometry step: handles at the
+region's middle (arrows move it along x, y, z, the ball moves it freely, rings turn it about x, y, z), a square-ended arrow on each face (resize) or typed
+numbers (move by dx dy dz in mm, turn about x y z in degrees, the size). The handles are the shared ones of the 3D view (handles.py, the same as in the
+Results step and for the rotating zones); regionhandles.py says which a region gets. The region is previewed as it goes; Apply stores it (a box keeps its
+turn, a cylinder moves its end points), Cancel puts it back.
 
-The change is one thing: x' = R (x - c) + c + shift, with c the region's middle; the gizmo, the numbers and Apply all work on it."""
+The change is one thing: x' = R (x - c) + c + shift, with c the region's middle; the handles, the numbers and Apply all work on it."""
 from __future__ import annotations
 
 import math
@@ -13,7 +15,8 @@ from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QLineEdit, QPushBu
 
 from .. import regions as region_tools
 from .forms import fmt_num
-from .gizmo import nice_step_mm, rot_about
+from .gizmo import rot_about
+from .regionhandles import RegionHandles
 from .ids import wid
 
 M = 1000.0
@@ -44,6 +47,7 @@ class RegionTransform:
         self.scaling = False
         self.fields: dict = {}                              # "mx" ... "tz" -> the line edit (updated while a handle is dragged)
         self.readout: QLabel | None = None
+        self.handles = RegionHandles(self)                  # what the 3D view shows for the session (regionhandles.py)
         self.aligning = False                               # waiting for a click on the face to line the region up with
         self.align_move = False                             # ... and to put the region's middle on that face too
 
@@ -65,7 +69,6 @@ class RegionTransform:
         self.R, self.shift, self.live = np.eye(3), np.zeros(3), False
         self.grow, self.scaling = np.zeros((3, 2)), False
         self.adv.active_region = i
-        self._gizmo()
         self._preview()
         self.adv.panel.win.shell.sync()
 
@@ -76,10 +79,9 @@ class RegionTransform:
         self.R, self.shift, self.live = np.eye(3), np.zeros(3), False
         self.grow, self.scaling = np.zeros((3, 2)), False
         self.fields = {}
-        g = self.view.region_gizmo
-        if g.on or was:
-            g.clear()
-        self.view.scale_handles.clear()
+        if was:
+            self.view.handles.clear()
+            self.view.handles.label(None)
         self.view.region_view.clear()
         if was:
             self.adv._sig = None
@@ -111,17 +113,6 @@ class RegionTransform:
             self.adv.panel._fail(e)
 
     # ------------------------------------------------------------------ what the 3D view shows
-    def _gizmo(self):
-        r = self.region()
-        if r is None:
-            return
-        lo, hi = region_tools.bounds(r)
-        size = float(max(np.asarray(hi) - np.asarray(lo))) or 0.1
-        g = self.view.region_gizmo
-        g.set(region_tools.centre(r), size, self.on_handle, None, 0.5 * float(np.linalg.norm(np.asarray(hi) - np.asarray(lo))) or size)
-        g.shift = self.shift.copy()
-        g._draw()
-
     def _preview(self):
         """Draw the region as it would be after Apply, in place of the stored one; put the numbers in the fields."""
         regs = self.adv._regions_state()
@@ -131,59 +122,49 @@ class RegionTransform:
         grown = region_tools.grown(r0, self.grow)
         regs[self.index] = region_tools.moved_and_turned(grown, self.R, self.shift)
         self.view.region_view.set(regs, self.index)
-        g = self.view.region_gizmo
-        g.center = region_tools.centre(grown)
-        g.shift = self.shift.copy()
-        if g.on and g.drag is None:
-            g._draw()
-        lo, hi = region_tools.bounds(regs[self.index])
-        size = float(max(np.asarray(hi) - np.asarray(lo))) or 0.1
-        self.view.scale_handles.set(region_tools.face_handles(regs[self.index]), 0.1 * size, self.on_scale, nice_step_mm(size) / M)
+        self.handles.show(regs[self.index])
         self._fill_fields()
         self.view.render()
 
-    def on_handle(self, kind: str, axis: int, value, final: bool):
-        """A ring or an arrow is dragged (called by the gizmo); the first call (zero, not final) starts the drag."""
+    def _text(self, text: str):
+        self.view.handles.label(text)
+        if self.readout is not None:
+            self.readout.setText(text)
+
+    def on_move(self, key: str, point, final: bool):
+        """The ball or an arrow is dragged (called by the handles): the region's middle is where the handle is."""
+        c = region_tools.centre(region_tools.grown(self.region(), self.grow))
+        self.shift = np.asarray(point, float) - c
+        d = self.shift
+        self._preview()
+        self._text(f"Moving: ({d[0] * M:+.1f}, {d[1] * M:+.1f}, {d[2] * M:+.1f}) mm")
+        if final:
+            self.view.handles.label(None)
+
+    def on_turn(self, axis: int, key: str, angle: float, final: bool):
+        """A ring is dragged; the first call (zero, not final) starts the drag and remembers where the region was."""
         if not final and not self.live:
             self.base = (self.R.copy(), self.shift.copy())
             self.live = True
         R0, s0 = self.base
-        if kind == "rot":
-            self.R, self.shift = rot_about(axis, float(value)) @ R0, s0.copy()
-            text = f"Turning about {'xyz'[axis]}: {math.degrees(float(value)):+.1f}°"
-        elif kind == "move":
-            e = np.zeros(3)
-            e[axis] = 1.0
-            self.R, self.shift = R0.copy(), s0 + e * float(value)
-            text = f"Moving along {'xyz'[axis]}: {float(value) * M:+.1f} mm"
-        else:
-            d = np.asarray(value, float)
-            self.R, self.shift = R0.copy(), s0 + d
-            text = f"Moving: ({d[0] * M:+.1f}, {d[1] * M:+.1f}, {d[2] * M:+.1f}) mm"
+        self.R, self.shift = rot_about(axis, float(angle)) @ R0, s0.copy()
         self._preview()
-        g = self.view.region_gizmo
-        g.show_angle(text)
-        if self.readout is not None:
-            self.readout.setText(text)
+        self._text(f"Turning about {'xyz'[axis]}: {math.degrees(float(angle)):+.1f}°")
         if final:
-            g.show_angle(None)
+            self.view.handles.label(None)
             self.live = False
-            self._preview()
 
     def on_scale(self, key, delta: float, final: bool):
-        """A resize handle is dragged: its face moves out by `delta` (called by the handles); the first call (zero, not final) starts the drag."""
+        """A face handle is dragged: its face moves out by `delta` (called by the handles); the first call (zero, not final) starts the drag."""
         if not final and not self.scaling:
             self.grow_base = self.grow.copy()
             self.scaling = True
         self.grow = self.grow_base.copy()
         self.grow[region_tools.growth_index(key)] += float(delta)
-        text = f"Moving this face {float(delta) * M:+.1f} mm"
         self._preview()
-        self.view.region_gizmo.show_angle(text)
-        if self.readout is not None:
-            self.readout.setText(text)
+        self._text(f"Moving this face {float(delta) * M:+.1f} mm")
         if final:
-            self.view.region_gizmo.show_angle(None)
+            self.view.handles.label(None)
             self.scaling = False
 
     # ------------------------------------------------------------------ typed numbers
@@ -234,8 +215,6 @@ class RegionTransform:
         self.shift = np.array([v["mx"], v["my"], v["mz"]]) / M
         self.R = rotation_from_euler(v["tx"], v["ty"], v["tz"])
         self.live = False
-        g = self.view.region_gizmo
-        g.shift = self.shift.copy()
         self._preview()
 
     # ------------------------------------------------------------------ lining the region up with a face of the model
@@ -247,6 +226,7 @@ class RegionTransform:
         p.set_picking_part(False)
         p.set_picking_faces(False)
         self.aligning = True
+        self.view.handles.clear()                           # (the handles run over the model: a click on a face would take one instead)
         self.view.set_pick_mode("face")
         self.view.set_selection([])
         self._sync_align_button()
@@ -260,6 +240,8 @@ class RegionTransform:
         self.view.set_pick_mode(None)
         self.view.set_selection([])
         self._sync_align_button()
+        if self.index is not None:
+            self._preview()                                 # (the handles come back)
         if sync and self.adv.panel.win is not None:
             self.adv.panel.win.shell.sync()
 

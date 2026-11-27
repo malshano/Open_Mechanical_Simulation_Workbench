@@ -35,7 +35,6 @@ from .planehandle import PlaneHandle
 from .layerview import LayerView
 from .regionview import RegionView
 from .zoneview import ZoneView
-from .scalehandles import ScaleHandles
 from .gizmo import RotateGizmo
 from .legend import Legend
 from .picking import FaceIndex, locator_for, long_segment
@@ -146,10 +145,8 @@ class Viewport(QWidget):
         self.region_view = RegionView(self)         # the refinement regions of the Mesh step (regionview.py)
         self.zone_view = ZoneView(self)             # the rotating zones of the Setup and Mesh steps (zoneview.py)
         self.plane_handle = PlaneHandle(self)      # the preview of a symmetry plane and its handle (planehandle.py)
-        self.scale_handles = ScaleHandles(self)  # the resize handles of a refinement region (scalehandles.py)
-        self.handles = HandleSet(self)          # the drag handles of the Results step's positioning controls (handles.py)
+        self.handles = HandleSet(self)          # the drag handles of the 3D view: the Results step's positioning controls, the refinement regions, the rotating zones (handles.py)
         self._hset_drag = False
-        self.region_gizmo = RotateGizmo(self)    # moves and turns a refinement region (its own: the model is not previewed with it)
         self.gizmo = RotateGizmo(self)      # the rings that turn the model, its preview and the align arrow (gizmo.py)
         self._gizmo_drag = False
         self._gz = self.gizmo                # the gizmo that took the press
@@ -643,7 +640,7 @@ class Viewport(QWidget):
     # (the mouse: a press and release that hardly moved is a click, anything else is the camera being turned)
     def _on_press(self, obj, event):
         self._press = tuple(self.iren.GetEventPosition())
-        for g in (self.scale_handles, self.gizmo, self.region_gizmo):
+        for g in (self.gizmo,):
             if g.press(self._press[0], self.gizmo._size()[1] - 1 - self._press[1]):         # a ring is taken: it turns the model, the camera stays
                 self._gz = g
                 self._gizmo_drag = True
@@ -719,7 +716,7 @@ class Viewport(QWidget):
         if now - self._hover_t < 0.05:
             return
         self._hover_t = now
-        if any(g.on and g.hover_at(q[0], self.gizmo._size()[1] - 1 - q[1]) is not None for g in (self.scale_handles, self.gizmo, self.region_gizmo)):
+        if any(g.on and g.hover_at(q[0], self.gizmo._size()[1] - 1 - q[1]) is not None for g in (self.gizmo,)):
             return                                          # (over a ring: the cursor is a hand, no face is hovered)
         if self.plane_handle.on and self.plane_handle.hover_at(q[0], self.gizmo._size()[1] - 1 - q[1]):
             return                                          # (over the plane's arrow: the cursor is a hand)

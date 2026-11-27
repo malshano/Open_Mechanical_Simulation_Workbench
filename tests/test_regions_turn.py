@@ -93,14 +93,14 @@ def test_move_and_turn_session_previews_applies_and_cancels(aero):
     c.do("mesh.region_add", {"kind": "box"})
     before = c.engine.state()["mesh"]["regions"][0]
     c.widget_do("mesh.region.0.xform", "set", True)
-    assert c.win.view.region_gizmo.on and c.win.panels["mesh"].adv.xform.active
+    assert c.win.view.handles.on and c.win.panels["mesh"].adv.xform.active
     c.widget_do("mesh.region.0.xf.mx", "set", "25")
     c.widget_do("mesh.region.0.xf.tz", "set", "40")
     x = c.win.panels["mesh"].adv.xform
     assert x.shift[0] == pytest.approx(0.025) and euler_deg(x.R)[2] == pytest.approx(40.0)
     assert c.engine.state()["mesh"]["regions"][0]["min"] == before["min"]                         # (nothing stored yet)
     c.widget_do("mesh.region.0.xf.cancel", "click")
-    assert not x.active and not c.win.view.region_gizmo.on
+    assert not x.active and not c.win.view.handles.on
     assert c.engine.state()["mesh"]["regions"][0] == before
     c.widget_do("mesh.region.0.xform", "set", True)
     c.widget_do("mesh.region.0.xf.mx", "set", "25")
@@ -110,17 +110,23 @@ def test_move_and_turn_session_previews_applies_and_cancels(aero):
     assert got["min"][0] == pytest.approx(before["min"][0] + 0.025) and euler_deg(np.array(got["rotation"]))[2] == pytest.approx(40.0)
 
 
-def test_a_dragged_gizmo_changes_the_preview(aero):
+def test_the_handles_of_a_region_are_the_shared_ones_and_a_drag_of_each_kind_changes_the_preview(aero):
     c = aero
     c.do("mesh.region_add", {"kind": "cylinder"})
     c.widget_do("mesh.region.0.xform", "set", True)
-    g, x = c.win.view.region_gizmo, c.win.panels["mesh"].adv.xform
-    a, b = np.array(g.project(g.c)[:2]), np.array(g.project(g.arrow_tip(0))[:2])
-    start = (a + b) / 2
-    assert g.press(*start)
-    g.drag_to(*(start + (b - a) * 0.3))
-    g.release(*(start + (b - a) * 0.3))
-    assert abs(x.shift[0]) > 1e-6 and abs(x.shift[1]) < 1e-9
+    hs, x = c.win.view.handles, c.win.panels["mesh"].adv.xform
+    kinds = {k: s["kind"] for k, s in hs.specs.items()}
+    assert kinds == {"move": "point", "turn.x": "ring", "turn.y": "ring", "turn.z": "ring", "face.len.0": "face", "face.len.1": "face", "face.rad.0": "face"}
+    p0 = np.array(hs.specs["move"]["point"])
+    hs.simulate_move("move", p0 + [0.01, 0, 0], part="axis0")                       # (the arrow along x: only x changes)
+    assert x.shift[0] == pytest.approx(0.01, abs=1e-6) and abs(x.shift[1]) < 1e-9 and abs(x.shift[2]) < 1e-9
+    assert np.allclose(hs.specs["move"]["point"], p0 + [0.01, 0, 0])               # (the handle went with the region)
+    got = hs.simulate_move("turn.z", 30.0)                                            # (a ring: 30 degrees about z)
+    assert got == pytest.approx(30.0, abs=0.05) and euler_deg(x.R)[2] == pytest.approx(30.0, abs=0.05)
+    before = regions.size_of(x.preview())
+    hs.simulate_move("face.len.1", 0.02)                                              # (the face at the end of the axis: 20 mm longer)
+    assert regions.size_of(x.preview())[0] == pytest.approx(before[0] + 0.02, abs=1e-6)
+    assert x.shift[0] == pytest.approx(0.01, abs=1e-6)                                # (the move is kept)
 
 
 # ------------------------------------------------------------------------------------------------------------ resizing a region
@@ -160,15 +166,10 @@ def test_resizing_in_the_session_by_handle_by_size_and_by_percentage(aero):
     c.do("mesh.region_add", {"kind": "box"})
     before = c.engine.state()["mesh"]["regions"][0]
     c.widget_do("mesh.region.0.xform", "set", True)
-    x, sh = c.win.panels["mesh"].adv.xform, c.win.view.scale_handles
-    assert sh.on and len(sh.handles) == 6
-    h = next(h for h in sh.handles if h["key"] == (0, 1))
-    a, b = np.array(sh._px(h["pos"])), np.array(sh._px(h["pos"] + h["dir"] * sh.length))
-    start = (a + b) / 2
-    assert sh.press(*start)
-    sh.drag_to(*(start + (b - a) * 0.5))
-    sh.release(*(start + (b - a) * 0.5))
-    assert x.grow[0, 1] > 1e-6 and not x.grow[0, 0] and not x.grow[1].any()                      # (only that face moved)
+    x, hs = c.win.panels["mesh"].adv.xform, c.win.view.handles
+    assert sum(1 for sp in hs.specs.values() if sp["kind"] == "face") == 6
+    hs.simulate_move("face.0.1", 0.05)
+    assert x.grow[0, 1] == pytest.approx(0.05, abs=1e-6) and not x.grow[0, 0] and not x.grow[1].any()          # (only that face moved)
     assert c.engine.state()["mesh"]["regions"][0] == before                                       # (nothing stored yet)
     old = regions.size_of(before)
     c.widget_do("mesh.region.0.xf.sy", "set", "500")
@@ -178,16 +179,16 @@ def test_resizing_in_the_session_by_handle_by_size_and_by_percentage(aero):
     assert regions.size_of(x.preview()) == pytest.approx([2 * s for s in old])
     c.widget_do("mesh.region.0.xf.apply", "click")
     assert regions.size_of(c.engine.state()["mesh"]["regions"][0]) == pytest.approx([2 * s for s in old])
-    assert not sh.on
+    assert not hs.on
 
 
 def test_the_resize_handles_go_when_the_session_ends(aero):
     c = aero
     c.do("mesh.region_add", {"kind": "cylinder"})
     c.widget_do("mesh.region.0.xform", "set", True)
-    assert [h["key"] for h in c.win.view.scale_handles.handles] == [("len", 0), ("len", 1), ("rad", 0)]
+    assert [k for k in c.win.view.handles.specs if k.startswith("face")] == ["face.len.0", "face.len.1", "face.rad.0"]
     c.widget_do("mesh.region.0.xf.cancel", "click")
-    assert not c.win.view.scale_handles.on
+    assert not c.win.view.handles.on
 
 
 def test_gmsh_makes_small_cells_in_the_turned_box_and_not_in_the_box_round_it():
