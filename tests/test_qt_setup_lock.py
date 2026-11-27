@@ -42,8 +42,8 @@ def test_the_solve_step_names_what_changed_and_the_way_back(ctl):
     pr = _study(ctl, pieces=1)
     pr.set_settings(speed=45)
     note = _show(ctl)
-    assert "The setup changed since the last run" in note and "Flow speed: 30.0 to 45.0 m/s" in note and "Change it back" in note
-    assert "1 saved time(s) that are not loaded yet" in note and "Load results from case" in note
+    assert "The setup changed since the last run (Flow speed: 30.0 to 45.0 m/s)" in note and "Change it back" in note
+    assert "1 saved time(s) are not loaded yet" in note and "Load results from case" in note
     assert ctl.widget_do("solve.resume")["visible"] is False and ctl.widget_do("solve.adopt_setup")["visible"] is False
     assert ctl.widget_do("solve.load_case")["visible"] and ctl.widget_do("solve.load_case")["enabled"]
     pr.set_settings(speed=30)  # changed back: the old run can be resumed again
@@ -54,7 +54,8 @@ def test_the_solve_step_names_what_changed_and_the_way_back(ctl):
 def test_an_old_study_gets_a_note_and_a_way_out(ctl, monkeypatch):
     pr = _study(ctl, snapshot=False)
     note = _show(ctl)
-    assert "cannot tell what" in note and "older version" in note and "run the simulation again" in note
+    assert "cannot tell if the setup changed" in note and "older version" in note and "otherwise run again" in note
+    assert "Solve step" not in note and "say so" not in note
     assert ctl.widget_do("solve.resume")["visible"] is False
     assert ctl.widget_do("solve.adopt_setup")["visible"] is True
     assert "cannot check" in ctl._index()["solve.adopt_setup"].toolTip()          # the risk is said where the button is
@@ -124,7 +125,7 @@ def test_load_results_needs_openfoam_only_when_times_are_still_split(ctl):
     note = _show(ctl, foam=False)
     assert ctl.widget_do("solve.load_case")["enabled"] is False
     assert "needs OpenFOAM" in ctl._index()["solve.load_case"].toolTip()
-    assert "2 saved time(s) that are not loaded yet" in note
+    assert "2 saved time(s) are not loaded yet" in note
     _show(ctl, foam=True)
     assert ctl.widget_do("solve.load_case")["enabled"] is True
 
@@ -146,7 +147,7 @@ def test_times_set_aside_after_a_failed_join_are_counted_and_named(ctl):
     assert runner.unjoined_times(pr.case_dir) == 2 and runner.unjoined_times(pr.case_dir, aside=False) == 0
     assert runner.set_aside_count(pr.case_dir) == 2
     note = _show(ctl)
-    assert "2 saved time(s) could not be joined and were set aside in case/unjoined/" in note and "deletes them" in note
+    assert "2 saved time(s) could not be joined and were set aside in case/unjoined/; running again deletes them" in note
 
 
 def test_the_load_control_command_starts_the_load(ctl, monkeypatch):
@@ -175,3 +176,34 @@ def test_the_load_control_command_starts_the_load(ctl, monkeypatch):
     job = P.JOBS.latest(pr.id, "solve")
     assert job.wait(60) and job.status == "done", (job.error, job.log[-5:])
     assert seen["t"] == "0.015" and (pr.case_dir / "0.015" / "U").exists()
+
+
+def test_the_note_is_one_block_without_contradictions(ctl):
+    pr = _study(ctl, status="interrupted", pieces=2)
+    pr.set_settings(speed=45)                                  # stopped AND locked: only the lock is said, not "continue it below"
+    note = _show(ctl, foam=True)
+    assert "stopped before it finished" not in note and "Continue it below" not in note
+    assert note.startswith("The setup changed since the last run") and note.count("<br>") <= 4
+    assert "2 saved time(s) are not loaded yet; running again deletes them. Load them with 'Load results from case'." in note
+    pr.set_settings(speed=30)                                  # not locked any more: the interrupted note comes back
+    note = _show(ctl, foam=True)
+    assert "stopped before it finished" in note and "setup changed" not in note
+
+
+def test_the_advice_follows_what_the_button_can_do(ctl):
+    pr = _study(ctl, snapshot=False, pieces=1)
+    note = _show(ctl, foam=False)
+    assert ctl.widget_do("solve.load_case")["enabled"] is False
+    assert "Load them with" not in note and "'Load results from case'" not in note              # never point at a greyed button
+    assert "Joining the saved times needs OpenFOAM: it is not installed (install it below)." in note
+    note = _show(ctl, foam=True)
+    assert ctl.widget_do("solve.load_case")["enabled"] is True and "Load them with 'Load results from case'." in note
+    assert "OpenFOAM" not in note.replace("Load results", "")
+
+
+def test_the_adopt_row_is_the_button_alone(ctl):
+    _study(ctl, snapshot=False)
+    _show(ctl)
+    row = ctl.win.panels["solve"].adopt_row
+    assert ctl.widget_do("solve.adopt_setup")["visible"] and row.layout().count() == 1      # (the note above explains it)
+    assert row.layout().itemAt(0).widget() is ctl.win.panels["solve"].adopt

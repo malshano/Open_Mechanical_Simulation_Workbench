@@ -665,8 +665,9 @@ class Project:
 
     LOAD_HINT = "The results already in the case folder can be loaded with 'Load results from case' (Solve step)."
 
-    def _locked_message(self) -> str:
-        """Why an old case cannot be carried on, and what to do."""
+    def _locked_message(self, panel: bool = False) -> str:
+        """Why an old case cannot be carried on, and what to do. panel: the short form for the Solve step (which adds its own advice
+        about loading the saved results, since that depends on OpenFOAM being there)."""
         sv = self.data["solve"]
         ch = self.setup_changes()
         if sv.get("status") == "none":
@@ -674,11 +675,17 @@ class Project:
                     "case does not apply): run the simulation again")
         if ch:
             what = "; ".join(ch[:4]) + (f" and {len(ch) - 4} more" if len(ch) > 4 else "")
+            if panel:
+                return (f"The setup changed since the last run ({what}). Change it back to carry on the old run, or run "
+                        "again (that replaces the old case).")
             return (f"The setup changed since the last run ({what}). Change it back to carry on the old case, or run the "
                     f"simulation again (that starts from the beginning and replaces the old case). {self.LOAD_HINT}")
+        if panel:
+            return ("This study was run by an older version of the workbench, so it cannot tell if the setup changed since. "
+                    "If you know it did not, press 'The setup matches the case folder: use it' below; otherwise run again.")
         return ("The setup or mesh was changed since the last run, and this study cannot tell what: it was run by an older "
                 "version of the workbench, which did not keep what the case was made from. If you know the setup is still "
-                "what the case folder was made with, say so in the Solve step ('The setup matches the case folder: use "
+                "what the case folder was made with, confirm it in the Solve step ('The setup matches the case folder: use "
                 f"it'); otherwise run the simulation again. {self.LOAD_HINT}")
 
     def lock_state(self) -> dict | None:
@@ -690,7 +697,7 @@ class Project:
         if not (sv.get("status") == "stale" or sv.get("setup_changed")):
             return None
         known = self.data.get("case_setup") is not None
-        return {"message": self._locked_message(), "known": known, "can_adopt": not known}
+        return {"message": self._locked_message(panel=True), "known": known, "can_adopt": not known}
 
     def case_mismatches(self, meta: dict) -> list:
         """What the case folder records (simwb_case.json) that the current setup disagrees with, as plain sentences: the kind of

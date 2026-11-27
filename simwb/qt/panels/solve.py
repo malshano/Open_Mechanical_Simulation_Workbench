@@ -186,8 +186,7 @@ class SolvePanel(_Panel):
                           "version that kept no record). A resume still runs the case as it is on disk; if the setup did differ, the "
                           "results are shown with settings the case was not made with.")
         self.adopt.clicked.connect(self._adopt)
-        self.adopt_row = _row(_muted("This study was run by an older version of the workbench: it cannot tell if the setup changed. "
-                                     "If you know it did not, you can confirm it (nothing in the case folder is changed)."), self.adopt)
+        self.adopt_row = _row(self.adopt, stretch=False)
         self.cont_row = QWidget()
         fl = FlowLayout(self.cont_row)
         for x in (QLabel("Continue the last run for"), self.cont_n, QLabel("more iterations"), self.cont):
@@ -274,6 +273,26 @@ class SolvePanel(_Panel):
             self.engine.changed.emit()
         except Exception as e:  # noqa: BLE001
             self._fail(e)
+
+    @staticmethod
+    def _saved_times_note(pieces: int, aside: int, can_load: bool, needs_foam: bool, locked: bool) -> str:
+        """One short line about the saved times of the old case: what is not loaded yet, what is set aside, and the way to
+        load them (or that OpenFOAM is needed for it)."""
+        bits = []
+        if pieces:
+            bits.append(f"{pieces} saved time(s) are not loaded yet")
+        if aside:
+            bits.append(f"{aside} {'' if pieces else 'saved time(s) '}could not be joined and {'were' if pieces or aside > 1 else 'was'} set aside in case/unjoined/")
+        text = " and ".join(bits)
+        if text:
+            text += "; running again deletes them."
+        if pieces or locked:
+            if needs_foam:
+                text += " Joining the saved times needs OpenFOAM: it is not installed (install it below)."
+            elif can_load:
+                text += (" Load them with 'Load results from case'." if pieces else
+                         " The results in the case folder can be loaded with 'Load results from case'.")
+        return text.strip()
 
     def _adopt(self):
         try:
@@ -717,18 +736,30 @@ class SolvePanel(_Panel):
         self.btn.setToolTip(why)
         t = theme.tokens()
         st = self.st
-        notes = []
+        case_dir = P.open_project(self.engine.pid).case_dir if (self.engine.pid and st and self.flow) else None
+        has_case = bool(case_dir is not None and case_dir.exists())
+        pieces = aside = 0
+        if has_case and not self.running:
+            from ...solvers.openfoam import runner
+
+            pieces, aside = runner.unjoined_times(case_dir, aside=False), runner.set_aside_count(case_dir)
+        needs_foam = bool(pieces) and no_foam              # (joining the saved times is done by OpenFOAM)
+        can_load = has_case and not self.running and not needs_foam
+        notes = []                                          # one block, in the order of what to do: the old run first, then the setup
         if st:
+            lock = st.get("solve_lock")
+            if lock and not self.running:
+                notes.append(lock["message"])
+            elif st["solve"].get("status") == "interrupted" and not self.running:
+                notes.append("The last run was stopped before it finished. Continue it below, or run again.")
+            saved = self._saved_times_note(pieces, aside, can_load, needs_foam, bool(lock))
+            if saved:
+                notes.append(saved)
             mstat = st["mesh"].get("status")
             if mstat != "ready":
                 notes.append("The mesh is out of date: regenerate it (step 3, Mesh)." if mstat == "stale" else "Generate a mesh first (step 3, Mesh).")
             if blockers:
                 notes.append("Fix before solving:<br>" + "<br>".join("• " + b for b in blockers))
-            if st["solve"].get("status") == "interrupted" and not self.running:
-                notes.append("The last run was stopped before it finished. Continue it below, or run again.")
-            lock = st.get("solve_lock")
-            if lock and not self.running:
-                notes.append(lock["message"])
         if blockers and meshed and not self.running and not getattr(self, "done", False):
             self.state.setText("Before it can run: " + blockers[0] + (f" (and {len(blockers) - 1} more: see above)" if len(blockers) > 1 else ""))
         self.note.setText("<br>".join(notes))
@@ -747,25 +778,7 @@ class SolvePanel(_Panel):
         self.case.setEnabled(getattr(self, "mesh_ready", False) and not self.running and not blockers)
         self.case.setToolTip("Write the solver's case files without running it (to run it yourself)" if self.case.isEnabled()
                              else "A run is in progress" if self.running else "Not yet: generate the mesh and complete the setup first")
-        case_dir = P.open_project(self.engine.pid).case_dir if (self.engine.pid and st and self.flow) else None
-        has_case = bool(case_dir is not None and case_dir.exists())
-        pieces = aside = 0
-        if has_case and not self.running:
-            from ...solvers.openfoam import runner
-
-            pieces, aside = runner.unjoined_times(case_dir, aside=False), runner.set_aside_count(case_dir)
-            more = []
-            if pieces:   # (a new run deletes the old case: say so before, not after)
-                more.append(f"The case folder holds {pieces} saved time(s) that are not loaded yet. Running again deletes them: "
-                            "use 'Load results from case' first to keep what you can.")
-            if aside:
-                more.append(f"{aside} saved time(s) could not be joined and were set aside in case/unjoined/; running again deletes "
-                            "them. Repair the damaged file and join them by hand first if you need them.")
-            if more:
-                self.note.setText((self.note.text() + "<br>" if self.note.text() else "") + "<br>".join(more))
-                self.note.setVisible(True)
-        needs_foam = bool(pieces) and self._no_foam()           # (joining the saved times is done by OpenFOAM)
-        self.load_case.setEnabled(has_case and not self.running and not needs_foam)
+        self.load_case.setEnabled(can_load)
         self.load_case.setToolTip("Join the saved times in the case folder and load them as the results, without running the solver "
                                   "(a time that cannot be read is left out and named)" if self.load_case.isEnabled()
                                   else "A run is in progress" if self.running

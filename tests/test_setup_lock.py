@@ -128,9 +128,11 @@ def test_an_old_study_shows_why_it_is_locked_and_what_can_be_done(P, tmp_path):
     pr = _old_study(P, tmp_path)
     lock = pr.state()["solve_lock"]
     assert lock["can_adopt"] and not lock["known"]
-    m = lock["message"]
-    assert "older version" in m and "The setup matches the case folder: use it" in m and "Load results from case" in m
-    assert "run the simulation again" in m
+    m = lock["message"]                                         # (the short form of the Solve step: the button is right below it)
+    assert "older version" in m and "cannot tell if the setup changed" in m and "otherwise run again" in m
+    assert "Solve step" not in m and "say so" not in m
+    full = pr._locked_message()                                 # (the refusal of a resume: may be read away from the panel)
+    assert "The setup matches the case folder: use it" in full and "Load results from case" in full and "run the simulation again" in full
     pr.set_settings(speed=45)                                  # (nothing to compare with: still locked)
     assert pr.state()["solve_lock"] is not None
 
