@@ -49,11 +49,37 @@ def richardson(rows):
 
 
 def usable(r):
-    return bool(r.get("converged")) and layers_ok(r)
+    """Converged by the app, or (stop rule off: the app never calls such a run converged) Cf steady by its own history:
+    changed by less than 0.1 % over the last 100 iterations."""
+    drift = r.get("cf_drift_last100_percent")
+    steady_by_history = r.get("stop_tol_percent") == 0 and drift is not None and abs(drift) < 0.1
+    return (bool(r.get("converged")) or steady_by_history) and layers_ok(r)
+
+
+def stopping_table(rows):
+    """Rows that carry stop_tol_percent: per mesh preset and stop rule, where the runs stopped, Cf and its spread
+    between the repeats, and how much Cf still changed over the last 100 iterations. The spread of the runs with the
+    rule off is the part that is not the stop rule (mesher / parallel-run noise)."""
+    g = defaultdict(list)
+    for r in rows:
+        if "stop_tol_percent" in r and not r.get("error") and r.get("cf"):
+            g[(r["method"], r["preset"], r["stop_tol_percent"])].append(r)
+    if not g:
+        return
+    print("\nstop rule: spread of Cf between repeats (percent of the mean)")
+    print(f"  {'method':<7}{'preset':<8}{'stop %':>7}{'n':>3}{'stopped at':>14}{'cf mean':>10}{'spread %':>10}{'drift last 100 it %':>21}{'cells':>9}")
+    for (m, pr, tol), rs in sorted(g.items(), key=lambda kv: (kv[0][0], kv[0][1], -kv[0][2])):
+        cf = [r["cf"] for r in rs]
+        mean = sum(cf) / len(cf)
+        its = sorted(r.get("stopped_at") or r.get("iterations") or 0 for r in rs)
+        dr = [r.get("cf_drift_last100_percent") for r in rs if r.get("cf_drift_last100_percent") is not None]
+        print(f"  {m:<7}{pr:<8}{tol:>7g}{len(rs):>3}{its[0]:>8}..{its[-1]:<4}{mean:>10.6f}{100 * (max(cf) - min(cf)) / mean:>10.3f}"
+              f"{(max(dr, key=abs) if dr else float('nan')):>21.4f}{min(r['cells_final'] for r in rs):>9,}-{max(r['cells_final'] for r in rs):,}")
 
 
 def main(paths):
     rows = load(paths)
+    stopping_table(rows)
     groups = defaultdict(lambda: defaultdict(list))
     for r in rows:
         if str(r.get("edge_field", "")).endswith("superseded"):      # made by code that no longer exists (see results/README.md)
