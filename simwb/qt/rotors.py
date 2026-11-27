@@ -11,7 +11,7 @@ axis_info / rotate_geometry)."""
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSlider, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSlider, QVBoxLayout, QWidget
 
 from .. import orient, studies
 from .. import zones as zone_tools
@@ -19,6 +19,7 @@ from . import theme
 from .forms import ParamForm, fmt_num
 from .ids import wid
 from .panels.common import FlowLayout, _h, _muted
+from .zonehandles import ZoneHandles
 
 MZ_HELP = {
     "mrf": "MRF (moving reference frame): use with Analysis = steady. The mesh does NOT rotate: the air inside the zone is solved in a frame "
@@ -72,6 +73,9 @@ class Rotors:
         self._timer.timeout.connect(self._tick)
         self._where: dict = {}                     # classification of the parts of each zone, kept while nothing changes
         self.sliders: dict = {}
+        self.handle_zone: int | None = 0           # the zone whose handles are drawn in the 3D view (its "Show handles" box is ticked)
+        self.forms: dict = {}                      # zone index -> the ParamForm of its card (the numbers follow a handle that is being dragged)
+        self.handles = ZoneHandles(self)           # move / resize / turn the axis of a zone by dragging (zonehandles.py)
 
     @property
     def pr(self):
@@ -136,7 +140,8 @@ class Rotors:
             z = self.pr.new_moving_zone()
         except Exception as e:  # noqa: BLE001
             return self.panel._fail(e)
-        return self._save_zones(self.zones() + [z], "Zone added: set its size and speed, or fit it around the rotating part")
+        self.handle_zone = len(self.zones())                        # (the new zone shows its handles: drag it where it belongs)
+        return self._save_zones(self.zones() + [z], "Zone added: drag it into place, set its size and speed, or fit it around the rotating part")
 
     def set_zone(self, i: int, **kw):
         zs = self.zones()
@@ -156,6 +161,13 @@ class Rotors:
                 z[k] = v
         return self._save_zones(zs)
 
+    def set_handle_zone(self, i: int, on: bool):
+        if on:
+            self.handle_zone = i
+        elif self.handle_zone == i:
+            self.handle_zone = None
+        self.panel.redo()
+
     def fit_zone(self, i: int, part: str):
         zs = self.zones()
         try:
@@ -167,6 +179,10 @@ class Rotors:
     def delete_zone(self, i: int):
         zs = self.zones()
         z = zs.pop(i)
+        if self.handle_zone is not None and self.handle_zone >= i:
+            self.handle_zone = (self.handle_zone - 1 if self.handle_zone > i else i) if zs else None
+            if self.handle_zone is not None and self.handle_zone >= len(zs):
+                self.handle_zone = len(zs) - 1
         return self._save_zones(zs, f"Moving zone {z['name']} deleted")
 
     # ------------------------------------------------------------------ the zones in the 3D view, and the turn preview
@@ -179,19 +195,34 @@ class Rotors:
             self._where[i] = hit
         return hit[1]
 
-    def draw_zones(self, active=None):
-        """The cylinders of the zones in the 3D view, and for a zone the preview has turned a ghost of what is inside it, turned."""
+    def draw_zones(self, active=None, override: dict | None = None):
+        """The cylinders of the zones in the 3D view, and for a zone the preview has turned a ghost of what is inside it, turned. `override`: {index: zone}
+        drawn in place of the stored one (a handle is being dragged: where the zone would be)."""
         v = self.panel.view
         if v is None:
             return
-        zs = self.panel.engine.state().get("moving_zones") or []
+        zs = list(self.panel.engine.state().get("moving_zones") or [])
+        for k, z in (override or {}).items():
+            if 0 <= k < len(zs):
+                zs[k] = z
         ghosts = {}
         for i, z in enumerate(zs):
-            if self.turn.get(i):
+            if self.turn.get(i) and not (override and i in override):
                 ids = [fid for b in self.where(i, z) if b["where"] == zone_tools.INSIDE for fid in b["faces"]]
                 if ids:
                     ghosts[i] = zone_tools.triangles_of(self.pr.faces(), ids)
-        v.zone_view.set(zs, active, self.turn, ghosts)
+        v.zone_view.set(zs, active if active is not None else (self.handle_zone if self.handles.showing else None), self.turn, ghosts)
+        if override is None:
+            self.handles.sync()
+
+    def show_numbers(self, i: int, z: dict):
+        """The numbers of the zone's card, as the zone would be (a handle is being dragged): nothing is stored."""
+        f = self.forms.get(i)
+        if f is None:
+            return
+        for k, v in (("cx", z["center"][0] * 1000), ("cy", z["center"][1] * 1000), ("cz", z["center"][2] * 1000), ("radius", z["radius"] * 1000),
+                     ("length", z["length"] * 1000), ("axis", z["axis"])):
+            f.show_value(k, round(v, 3) if not isinstance(v, str) else v)
 
     def set_turn(self, i: int, deg: float):
         """Preview the zone turned by deg degrees: the parts inside it turn about its axis in the 3D view (nothing is stored)."""
@@ -244,6 +275,7 @@ class Rotors:
         self.playing = None
         self.turn = {}
         self.sliders = {}
+        self.handles.hide()
         v = self.panel.view
         if v is not None:
             v.zone_view.clear()
@@ -493,6 +525,13 @@ class Rotors:
             f.setEnabled(not busy)
             f.changed.connect(lambda k, val, i=i: self.set_zone(i, **{k: val}))
             v.addWidget(f)
+            self.forms[i] = f
+            hb = wid(QCheckBox("Show handles in the 3D view"), f"setup.zone.{i}.handles")
+            hb.setChecked(self.handle_zone == i)
+            hb.setToolTip("Drag this zone in the 3D view: the arrows and the ball move it, the square-ended arrows resize it, the rings turn its axis "
+                          "(a quarter turn at a time: a zone lies along x, y or z). The numbers above follow the handles and the handles follow the numbers")
+            hb.toggled.connect(lambda on, i=i: self.set_handle_zone(i, on))
+            v.addWidget(hb)
             row = QHBoxLayout()
             row.addWidget(QLabel("Fit around part"))
             fit = wid(QComboBox(), f"setup.zone.{i}.fit")

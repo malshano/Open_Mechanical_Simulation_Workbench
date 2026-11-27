@@ -160,7 +160,7 @@ class SetupPanel(_Panel):
         sig = json.dumps([st["study"], st.get("bcs"), [(b["id"], b["name"], b.get("material"), b.get("material_is_default"), b.get("heat_W"))
                           for b in st["body_list"]], st.get("settings"), st.get("checks"), self.active, theme.effective(), hidden,
                           st.get("symmetry"), st.get("rotors"), st.get("moving_zones"), (st.get("domain") or {}).get("enclosure_mode"),
-                          st["geometry"].get("updated"), busy, self.sym.draft, self.sym.picking, self.axis_pick, self.rot.oblique, materials.VERSION],
+                          st["geometry"].get("updated"), busy, self.sym.draft, self.sym.picking, self.axis_pick, self.rot.oblique, self.rot.handle_zone, materials.VERSION],
                          default=str, sort_keys=True) + str(mode.simple())
         if sig == self._sig:
             self.draw_marks()

@@ -110,3 +110,50 @@ def label_point(z: dict) -> list:
     a = axis_of(z)
     perp = np.array([0.0, 0.0, 1.0]) if abs(a[2]) < 0.9 else np.array([1.0, 0.0, 0.0])
     return (np.asarray(z["center"], float) + a * float(z["length"]) / 2 + perp * float(z["radius"])).tolist()
+
+
+# ---------------------------------------------------------------------------------------------------- moving, resizing and tilting a zone with handles
+AXIS_NAMES = {v: k for k, v in AXIS_VEC.items()}
+
+
+def as_cylinder(z: dict) -> dict:
+    """The zone as a refinement-region cylinder (start, end, radius): the handles and the resize maths of regions.py work on it."""
+    a, b = ends(z)
+    return {"shape": "cylinder", "start": a.tolist(), "end": b.tolist(), "radius": float(z["radius"])}
+
+
+def moved(z: dict, point) -> dict:
+    """The zone with its centre at `point` (m)."""
+    return {**z, "center": [float(x) for x in point]}
+
+
+def grown(z: dict, g) -> dict:
+    """The zone with its faces moved outwards by g = [[start, end], [radius, 0], ...] (m, as regions.grown: g[0] the two flat faces along the axis, g[1][0] the
+    radius). The opposite face stays; nothing gets smaller than regions.MIN_SIZE, and the radius stays above the cell size inside the zone (the engine
+    wants the cell smaller than the radius)."""
+    from . import regions as region_tools
+    c = region_tools.grown(as_cylinder(z), g)
+    a, b = np.asarray(c["start"], float), np.asarray(c["end"], float)
+    radius = float(c["radius"])
+    if z.get("cell_size"):
+        radius = max(radius, float(z["cell_size"]) * 1.01)
+    return {**z, "center": ((a + b) / 2).tolist(), "length": float(np.linalg.norm(b - a)), "radius": radius}
+
+
+def face_handles(z: dict) -> list:
+    """The places to grab a zone to resize it: [{key, pos, dir}] with key ("length", 0 | 1) for the two flat faces and ("radius", 0) for its side."""
+    from . import regions as region_tools
+    names = {"len": "length", "rad": "radius"}
+    return [{**h, "key": (names[h["key"][0]], h["key"][1])} for h in region_tools.face_handles(as_cylinder(z))]
+
+
+def tilted_axis(z: dict, about: int, deg: float) -> str:
+    """The axis name ('+x' ... '-z') the zone's axis points along after it is turned by `deg` degrees about the world axis `about` (0, 1, 2). A zone has to
+    lie along x, y or z, so a turn that is not a multiple of 90 degrees is rounded to the nearest axis."""
+    t = math.radians(deg)
+    i, j = ((1, 2), (2, 0), (0, 1))[int(about)]
+    R = np.eye(3)
+    R[i, i], R[i, j], R[j, i], R[j, j] = math.cos(t), -math.sin(t), math.sin(t), math.cos(t)       # (the right-handed turn about that axis)
+    v = R @ axis_of(z)
+    k = int(np.argmax(np.abs(v)))
+    return ("+" if v[k] > 0 else "-") + "xyz"[k]

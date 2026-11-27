@@ -119,6 +119,26 @@ class ParamForm(QWidget):
         self._visibility()
         self.changed.emit(key, val)
 
+    def show_value(self, key: str, value):
+        """Show a value that did not come from typing (a handle in the 3D view is being dragged): nothing is emitted, the typed number and the handle agree."""
+        row = self.rows.get(key)
+        if row is None:
+            return
+        c = row[1]
+        self.vals[key] = value
+        try:
+            if hasattr(c, "setText"):
+                if not c.hasFocus():
+                    c.setText(fmt_num(value) if value not in (None, "") else "")
+            else:
+                i = c.findData(value)
+                if i >= 0 and i != c.currentIndex():
+                    c.blockSignals(True)
+                    c.setCurrentIndex(i)
+                    c.blockSignals(False)
+        except RuntimeError:
+            self.rows.pop(key, None)
+
     def _show_help(self):
         for k, (lab, c, expl, col) in self.rows.items():
             p = self.params[k]

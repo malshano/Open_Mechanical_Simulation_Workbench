@@ -431,6 +431,9 @@ class Shell(QObject):
                     n = len(bc.get("faces") or [])
                     return ("pick", f"Click faces to add or remove them from {bc['name']} ({n} selected). Ctrl-click adds more faces", 0, "Done",
                             lambda: (setattr(sp, "active", None), sp.redo()), "Finish picking faces for this condition")
+            if sp.rot.handles.showing:
+                return ("pick", "Drag an arrow to move the rotating zone, a square-ended arrow to resize it, a ring to turn its axis a quarter turn (Shift: round steps), "
+                                "or type the numbers. Click a face to select it", 0, None, None, None)
         if w.step == "mesh" and w.panels["mesh"].adv.xform.active:
             xf = w.panels["mesh"].adv.xform
             if xf.aligning:
