@@ -508,7 +508,7 @@ class Control(QObject):
             "docks": {d.objectName().removeprefix("dock."): d.isVisible() for d in win.findChildren(QDockWidget)},
             "jobs_running": jobs,
             "shell": {"toasts": win.toasts.listing(), "section": win.shell.section_state(), "hover": win.shell.hover_text,
-                      "hint": win.view.banner.text(), "visibility": win.panels["results"].vis.state(), "recording": (win.panels["results"].recording.state() if win.panels["results"].recording else None),
+                      "hint": win.view.banner.text(), "visibility": win.panels["results"].vis.state(), "mirror": win.engine.mirror_info() if win.engine.pid else None, "recording": (win.panels["results"].recording.state() if win.panels["results"].recording else None),
                       "status_job": win.shell.job_msg.full if win.shell.current else "",
                       "probe": {"checked": win.view.viewbar.probe.isChecked(), "enabled": win.view.viewbar.probe.isEnabled()}},
             "assistant": {"busy": a.busy, "login": a.who.text(), "status": a.status.text(),
@@ -661,6 +661,7 @@ class Control(QObject):
            "contour_labels": (B, "write the value on each contour line", False),
            "opacity": (N, "0.1..1: see-through surfaces (1 = solid)", False), "outline": (B, "outline of the undeformed part", False),
            "hide_air": (B, "cooling studies: hide the air box", False),
+           "mirror": (B, "studies with a symmetry plane: draw the whole model (the solved part mirrored); false: the solved part only", False),
            "time": (N, "index of the saved time to show (transient results; -1 = the last)", False)},
           lambda **kw: self._results(**kw))
 
@@ -1071,7 +1072,7 @@ class Control(QObject):
 
     def _results(self, field=None, colormap=None, reverse=None, bands=None, deform=None, edges=None, animate=None, scale=None, range=None,
                  minmax=None, section=None, section_pos=None, contours=None, contour_lines=None, contour_levels=None, contour_labels=None,
-                 opacity=None, outline=None, hide_air=None, time=None):
+                 opacity=None, outline=None, hide_air=None, mirror=None, time=None):
         panel = self.win.panels["results"]
         if time is not None:
             panel.timebar.set_index(int(time))
@@ -1083,6 +1084,10 @@ class Control(QObject):
             if not panel.hide_air.isVisibleTo(panel):
                 raise ValueError("Hide the air is for cooling studies (they have an air box)")
             self._set(self._w("results.hide_air"), "results.hide_air", bool(hide_air))
+        if mirror is not None:
+            if not panel.mirror.isEnabled():
+                raise ValueError("This study has no symmetry plane: the whole model was solved")
+            self._set(self._w("results.mirror"), "results.mirror", bool(mirror))
         if section_pos is not None:
             self._set(self._w("results.section.pos"), "results.section.pos", int(round(float(section_pos) * 1000)))
         if section is not None:
@@ -1114,7 +1119,7 @@ class Control(QObject):
             else:
                 self._set(self._w("results.range.auto"), "results.range.auto", True)
         out = {k: self._value(self._w(f"results.{k}")) for k in ("field", "colormap", "reverse", "bands", "deform", "edges", "minmax")}
-        out.update(opacity=panel.opacity.value() / 100.0, outline=panel.outline.isChecked(), time_index=panel.timebar.time_index(),
+        out.update(mirror=self.engine.mirror_info() if self.engine.pid else None, opacity=panel.opacity.value() / 100.0, outline=panel.outline.isChecked(), time_index=panel.timebar.time_index(),
                    times=len(panel.timebar.times), hidden=panel.hidden_regions())
         return out
 

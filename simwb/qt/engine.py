@@ -11,6 +11,7 @@ from PySide6.QtCore import QObject, QSettings, Signal
 
 from .. import project as P
 from .. import resample
+from .. import mirrorview
 from ..results import merge_payloads
 
 MAX_RECENT = 10
@@ -28,6 +29,7 @@ class Engine(QObject):
         super().__init__(parent)
         self.pid: str | None = None
         self.settings = settings or QSettings("SimWorkbench", "Workbench")   # (tests pass a file of their own)
+        self.mirror_view = True        # Results step: draw the whole model from the solved part (a viewing choice of the session, not saved with the study)
         P.JOBS.listeners.append(self._on_event)   # (called from job threads: Qt queues the signals to the window's thread)
 
     # ------------------------------------------------------------------ events from job threads
@@ -210,7 +212,33 @@ class Engine(QObject):
         keep = d >= self.topopt_threshold()
         return tview.subset(base, keep).surface("Density") if keep.any() else None
 
+    # ------------------------------------------------------------------ the whole model from the solved part (simwb/mirrorview.py)
+    def symmetry_planes(self) -> list:
+        """The symmetry planes the open study's result was solved with: the ones the run recorded (flow studies), else the study's own planes. [] without."""
+        if not self.pid:
+            return []
+        rec = (self._flow_summary().get("symmetry") or {}).get("definition")
+        return [dict(pl) for pl in (rec if rec is not None else (self.project().data.get("symmetry") or []))]
+
+    def mirror_planes(self) -> list:
+        """The planes the Results step mirrors across now: none when the switch is off or the study has no plane."""
+        return self.symmetry_planes() if self.mirror_view else []
+
+    def mirror_surface(self, payload):
+        """A surface payload of the solved part with its mirror images added (the payload itself without a plane or with the switch off)."""
+        return mirrorview.whole_surface(payload, self.mirror_planes())
+
+    def mirror_info(self) -> dict:
+        """What the window says about the mirror: planes the study has, whether they are drawn, how many images."""
+        pl = self.symmetry_planes()
+        on = bool(pl) and self.mirror_view
+        return {"available": bool(pl), "on": on, "planes": [pl_.get("name") or pl_.get("id") for pl_ in pl],
+                "copies": 2 ** len(pl) if on else 1}
+
     def result_surface(self, field: str, time_index: int = -1, section=None, hide=None, groups=None):
+        return self.mirror_surface(self._result_surface(field, time_index, section, hide, groups))
+
+    def _result_surface(self, field: str, time_index: int = -1, section=None, hide=None, groups=None):
         """The result field on the part's surface; with section=(axis 'x'|'y'|'z', fraction 0..1 of the part's extent) the part is cut there
         and the cells on the low side are shown with the cut faces open (the inside of the part). hide: result regions (parts) not drawn
         (None: the study's own choice - the air of a cooling study is hidden). groups: the surface groups of a flow result to draw (None: the study's own
@@ -276,6 +304,9 @@ class Engine(QObject):
         dom_lo, dom_hi = rs.nodes.min(0), rs.nodes.max(0)
         return np.concatenate([np.maximum(lo, dom_lo), np.minimum(hi, dom_hi)]).tolist()
 
+    def _mirror_box(self, box):
+        return mirrorview.mirror_box(box, self.mirror_planes())
+
     def flow_focus(self, section=None):
         """The region the camera looks at when an external flow is cut open along axis: close around the object, measured in its size within
         the cut plane (the plane drawn reaches further, so that the large cells at its edge fall outside the picture)."""
@@ -283,15 +314,15 @@ class Engine(QObject):
             return None
         rs = self.project().results()
         if not section:
-            return self._flow_box(rs, 0.3, 0.8)
+            return self._mirror_box(self._flow_box(rs, 0.3, 0.8))
         ax, pos = self._section_pos(rs, section, self._flow_box(rs))
-        return self._flow_box(rs, 0.3, 0.8, section[0], pos)
+        return self._mirror_box(self._flow_box(rs, 0.3, 0.8, section[0], pos))
 
     def flow_focus_at(self, axis: str, pos: float):
         """The camera's box for a contour plane across axis at pos (metres): close round the object, in its size at the plane."""
         if self.project().study not in FLOW_STUDIES:
             return None
-        return self._flow_box(self.project().results(), 0.3, 0.8, axis, pos)
+        return self._mirror_box(self._flow_box(self.project().results(), 0.3, 0.8, axis, pos))
 
     def _flow_surface(self, rs, field: str, ax, pos, box, hide=None, groups=None):
         """A flow or cooling result: the outside of the air box would hide everything, so draw the object (what the solver says to show:
@@ -307,13 +338,15 @@ class Engine(QObject):
         return merge_payloads(plane, obj)
 
     # ------------------------------------------------------------------ flow tools: vortex surfaces, volume, arrows, particle paths
-    def flow_object(self, field: str, time_index: int = -1, cut=None, groups=None):
+    def flow_object(self, field: str, time_index: int = -1, cut=None, groups=None, mirror: bool = True):
         """The object (or the solid parts) of a flow result coloured by a field: whole, or with cut=(axis index, position) only the part on the
-        low side of that plane, cut open there. groups: the surface groups to draw (None: the study's own choice)."""
+        low side of that plane, cut open there. groups: the surface groups to draw (None: the study's own choice). mirror: with the whole-model
+        switch on, the mirror images are added (False: the solved part only, for a caller that merges and mirrors afterwards)."""
         rs = self.project().results().at(time_index)
         s = self._flow_summary()
-        return rs.surface(field, groups=(s.get("default_groups") or None) if groups is None else list(groups),
-                          hide_regions=tuple(s.get("default_hidden_regions") or ()), below=cut)
+        p = rs.surface(field, groups=(s.get("default_groups") or None) if groups is None else list(groups),
+                       hide_regions=tuple(s.get("default_hidden_regions") or ()), below=cut)
+        return self.mirror_surface(p) if mirror else p
 
     def seed_disk_default(self) -> dict | None:
         """Where a seed disk for the particle paths starts: across the flow, just upstream of the object (its centre in m, its radius in m)."""
@@ -425,6 +458,17 @@ class Engine(QObject):
                                 lambda: resample.particle_paths(rs, box, min(res, 96), int(st.get("n", 800)), int(st.get("steps", 160)),
                                                                 "box" if seed_box else seed, (u / (np.linalg.norm(u) or 1.0)).tolist(), hide_regions=hide,
                                                                 seed_box=seed_box))
+        mp = self.mirror_planes()
+        if mp:                    # (the whole model: the drawn tools get their mirror images; the cached payloads are the solved part's, untouched. The vortex surface
+            #                      is mirrored by the window after it is smoothed and merged with the object, so that the smoothing does not cross the plane.)
+            for pl in out.get("planes", []):
+                pl["payload"] = mirrorview.whole_surface(pl["payload"], mp)
+            if "vectors" in out:
+                out["vectors"] = mirrorview.mirror_vectors(out["vectors"], mp)
+            if "paths" in out:
+                out["paths"] = mirrorview.mirror_paths(out["paths"], mp)
+            if "volume" in out:
+                out["volume_mirrors"], out["volume_skipped"] = mirrorview.mirror_volumes(out["volume"], mp)
         return out
 
     def summary_text(self) -> str:
