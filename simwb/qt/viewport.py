@@ -34,6 +34,7 @@ from .handles import HandleSet
 from .planehandle import PlaneHandle
 from .layerview import LayerView
 from .regionview import RegionView
+from .edgeview import EdgeView
 from .zoneview import ZoneView
 from .gizmo import RotateGizmo
 from .legend import Legend
@@ -143,6 +144,7 @@ class Viewport(QWidget):
         self.mark_actors: list = []         # selection, hover and tint highlights
         self.layer_view = LayerView(self)           # the wall layers as a shell round the object (layerview.py)
         self.region_view = RegionView(self)         # the refinement regions of the Mesh step (regionview.py)
+        self.sharp_view = EdgeView(self)            # the sharp edges the edge refinement will make finer (edgeview.py)
         self.zone_view = ZoneView(self)             # the rotating zones of the Setup and Mesh steps (zoneview.py)
         self.plane_handle = PlaneHandle(self)      # the preview of a symmetry plane and its handle (planehandle.py)
         self.handles = HandleSet(self)          # the drag handles of the 3D view: the Results step's positioning controls, the refinement regions, the rotating zones (handles.py)

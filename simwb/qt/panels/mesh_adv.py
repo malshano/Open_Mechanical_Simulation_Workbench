@@ -11,6 +11,7 @@ from ..forms import ParamForm, fmt_num
 from ..ids import wid
 from ..meshtools import fit_box, region_cells, tip_rings, wake_regions
 from ..regionxform import RegionTransform
+from . import mesh_edges
 from .common import Section, _h, _muted, clear_layout
 
 M = 1000.0         # metres -> mm
@@ -44,9 +45,16 @@ class MeshAdvanced(QWidget):
         self._open: dict = {}               # which sections the user has open (kept when the content is rebuilt)
         self.show_regions = True            # the refinement regions are drawn in the 3D view
         self.show_layers = True             # the wall layers are drawn in the 3D view (a shell of their total thickness)
+        self.show_edges = False             # the sharp edges that get finer cells are drawn in the 3D view (mesh_edges.py)
+        self.edge_pv = None
         self.active_region: int | None = None   # the one being edited or looked at: drawn stronger
         self.pick_btn = None
         self.xform = RegionTransform(self)   # moving and turning a region (regionxform.py)
+
+    def rebuild(self):
+        """Build the options again (a group was opened that needs something looked up, or the like)."""
+        self._sig = None
+        self.engine.changed.emit()
 
     def _sec(self, title, prefix, default):
         s = Section(title, prefix, expanded=self._open.get(prefix, default))
@@ -64,7 +72,7 @@ class MeshAdvanced(QWidget):
                     self.show_regions, self.show_layers, self.active_region, self.xform.index, st.get("settings"), getattr(self.panel, "picking_part", False),
                     self.panel.picking_faces, list(self.panel.picked),
                     [(b["id"], b["name"]) for b in st["body_list"]], st.get("moving_zones"), st.get("flow_dir"), m.get("method"),
-                    theme.effective()])
+                    theme.effective(), mesh_edges.signature(self, st)])
         if sig == self._sig:
             return
         self._sig = sig
@@ -72,7 +80,8 @@ class MeshAdvanced(QWidget):
         self._sizes(m)
         self._parts(st, m)
         self._regions(st, m)
-        if st["study"] == "external_aero":
+        if st["study"] == "external_aero":                  # (like the wall layers: a flow study's option, not shown in the others)
+            self.v.addWidget(mesh_edges.section(self, st, m))
             self._layers(st, m)
 
     def _num(self, text, prefix, value_m, tip, auto=True):
@@ -545,6 +554,8 @@ class MeshAdvanced(QWidget):
                       "mesh.layers")
         f.changed.connect(lambda k, v, f=f: self._layers_set(f.values()))
         s.body.addWidget(f)
+        for w in mesh_edges.tolerant_widgets(self, st, m):
+            s.body.addWidget(w)
         from ..meshtools import layer_numbers
         ln = layer_numbers(st)
         if ln:

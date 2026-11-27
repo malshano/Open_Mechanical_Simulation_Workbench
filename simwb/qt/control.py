@@ -622,6 +622,13 @@ class Control(QObject):
         R("mesh.generate", "Generate (or regenerate) the mesh; a job (use wait).", {}, lambda: (self._click("mesh.generate"), {"started": True})[1])
         R("mesh.advice", "The mesh advisor of a flow study: the analysis of the body and flow, the recipe (cell sizes, layers, reasons) and the scorecard of the mesh.", {},
           lambda: self.engine.project().mesh_advice())
+        def mesh_edges():
+            from .. import edgepreview
+            pv = edgepreview.preview(self.engine.project(), scan=True, wait=True)
+            return {k: v for k, v in pv.items() if k != "lines"} | {"edges_drawn": win.view.sharp_view.count}
+        R("mesh.edges", "The sharp-edge refinement of the open flow study: whether it is on (and whether smart sizing switched it on), its factor, angle and cap, the sharp edges "
+          "found, the wall and edge cell sizes, the estimate of the extra cells, and (after meshing) what the mesh holds at the edges. The controls are mesh.edges.on, "
+          "mesh.edges.factor, mesh.edges.angle, mesh.edges.cap and mesh.edges.show; the tolerant layer limits are mesh.layers.tolerant.", {}, mesh_edges)
         R("mesh.recipe", "Apply the recommended setup of the mesh advisor: smart sizing and the wall layers that fit; then generate the mesh.", {},
           lambda: (self._click("mesh.advisor.apply"), {"applied": True})[1])
         R("mesh.layers", "Make the wall layers again on the mesh that is there (flow study, tetrahedral mesh, OpenFOAM installed); a job (use wait).", {},

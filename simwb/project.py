@@ -3005,13 +3005,16 @@ class Project:
             if lst and m["layers"] != old_layers:
                 lst["stale"] = True            # (the layered mesh in the view was made with the old settings: "Make the layers" again)
         if edge_refinement is not None:  # fine cells along sharp edges (leading / trailing edges): off | True | factor
-            if edge_refinement in (False, 0, "off"):
+            # (also a dictionary {factor, max_cells, max_angle}, or {enabled: false}; with smart sizing on, 'off' is remembered: smart sizing refines the
+            # edges by itself otherwise - see edgepreview.settings)
+            if edge_refinement in (False, 0, "off") or (isinstance(edge_refinement, dict) and edge_refinement.get("enabled") is False):
                 m.pop("edge_refine", None)
+                m["no_edge_refine"] = True                         # (stays off until switched on: smart sizing, now or later, does not turn it on)
             else:
-                f = 6.0 if edge_refinement is True else studies.finite(edge_refinement, "Edge refinement factor")
-                if not 2.0 <= f <= 20.0:
-                    raise ValueError("Edge refinement factor must be 2..20 (cells at the edge are the wall size / factor)")
-                m["edge_refine"] = {"factor": f}
+                from . import edgepreview
+
+                m["edge_refine"] = edgepreview.check_options(edge_refinement, base=m.get("edge_refine"))
+                m.pop("no_edge_refine", None)
         if defeature_mm is not False:  # small-face groups merged into the face they sit on: None / 0 = off
             d = studies.finite(defeature_mm or 0, "Defeature size")
             if not 0 <= d <= 50:
@@ -3352,7 +3355,7 @@ class Project:
             an = meshadvisor.analyse(self.data, self.faces(), self.data["geometry"]["info"])
             recipe = meshadvisor.recipe(an, mesh_ms.get("preset", "medium"), mesh_ms.get("growth"))
             mesh_ms = dict(mesh_ms, recipe=recipe)
-            if not mesh_ms.get("edge_refine") and recipe.get("edge_refinement"):
+            if not mesh_ms.get("edge_refine") and recipe.get("edge_refinement") and not mesh_ms.get("no_edge_refine"):
                 mesh_ms["edge_refine"] = {"factor": recipe["edge_refinement"]}      # (leading and trailing edges resolved: part of the recipe)
         payload = {
             "study": self.study, "out_dir": str(self.mesh_dir), "brep": str(self.geo_dir / "domain.brep"),

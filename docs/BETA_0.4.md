@@ -20,6 +20,13 @@ Beta 3 was the first without the browser version; this beta adds a much better m
   y+ 30 came out at about 15 (the buffer layer, where wall functions are least accurate). The default first layer is now twice as thick; the card and the advisor tell you when that leaves room for fewer layers.
 - The statistics table, the layer card and the advisor wrap their text instead of making the panel wider than its dock (the right edge of buttons and text was clipped).
 
+## Edge refinement (after beta 5, in staging)
+
+- New Mesh step controls (Expert mode): **Edge refinement** (on/off, factor, angle, cap, a live estimate of the extra cells, the sharp edges in the 3D view) and **Tolerant layers**.
+- **Changed behaviour:** turning edge refinement on now lets the edge cells have their own size (a factor of 6 used to give about the cells of 3) and no longer spreads the fine size over the whole faces next to the edges. A mesh that was made earlier with edge refinement set comes out different when it is generated again
+  (`set_mesh` marks it out of date); a mesh made without edge refinement is unchanged. With Smart sizing off the whole mesh can be smaller than without edge refinement.
+- `edge_refinement` accepts `{factor, max_cells, max_angle}`; switching it off stays off (also under Smart sizing).
+
 ## Known limits of this beta
 - Windows only. The first install is about 1.1 GB (Python, solvers, Qt and VTK) plus OpenFOAM and CalculiX.
 - **Smart sizing is off by default**, and it needs more cells and more time than the old sizing; the layers need OpenFOAM at meshing time (without it the run adds them as before).
