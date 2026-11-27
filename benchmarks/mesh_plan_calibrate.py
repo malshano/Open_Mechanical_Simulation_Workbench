@@ -28,7 +28,8 @@ def main(argv):
     pr = P.create_project("calib", study)
     j = pr.import_step(step, original_name=step.name)
     assert j.wait(600) and j.status == "done", j.error
-    pr.set_settings(speed=float(kv.get("speed", 10)))
+    if study in ("external_aero", "cht_enclosure"):
+        pr.set_settings(speed=float(kv.get("speed", 10))) if study == "external_aero" else None
     kw = {"preset": kv.get("preset", "quick")}
     if kv.get("smart") == "1":
         kw["smart"] = True

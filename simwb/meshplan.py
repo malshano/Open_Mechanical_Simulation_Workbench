@@ -24,10 +24,12 @@ import numpy as np
 TET_VOLUME = 1.0 / (6.0 * math.sqrt(2.0))       # volume of a regular tetrahedron of edge 1
 
 # --- calibration: measured on real meshes with the gmsh worker (benchmarks/mesh_plan_calibrate.py, results in benchmarks/results/mesh_plan_*.jsonl) ---
-CELLS_CALIBRATION = 0.55    # real cells / the integral of regular tetrahedra (see the measurement table in docs/MESHING_GUIDE.md)
-CELLS_SPREAD = 0.35         # the estimate is within this share of the real cells in those measurements (kept with a margin)
-RAM_FIXED_MB = 830.0        # what a mesh job holds before the first cell: Python, numpy, gmsh and the OpenCASCADE kernel
-RAM_PER_CELL_KB = 1.6       # the memory of the mesh job per cell (the slope), kilobytes
+CELLS_CALIBRATION = 0.45    # real cells / the integral of regular tetrahedra, fitted on 22 real meshes of 3 example geometries (benchmarks/mesh_plan_fit.py; docs/MESHING_GUIDE.md)
+SURFACE_CELLS_SOLID = 3.0   # the same for a solid study (5 real meshes: heated plate, bracket; the flow value over-counts there)
+SURFACE_CELLS = 8.0         # cells on the walls per (area / wall size^2), same fit: the surface triangles and the tetrahedra under them, which the volume integral misses
+CELLS_SPREAD = 0.45         # the estimate is within this share of the real cells in those measurements (kept with a margin)
+RAM_FIXED_MB = 800.0        # what a mesh job holds before the first cell: Python, numpy, gmsh and the OpenCASCADE kernel (fit: 794 MB)
+RAM_PER_CELL_KB = 0.5       # the memory of the mesh job per cell (the slope), kilobytes (fit: 0.46 KB over 22 meshes, 55,000 to 1.4 million cells)
 RAM_SPREAD = 0.25           # share of the memory estimate for what the slope does not capture (surface mesh, the sizes, the system)
 SOLVE_BYTES_PER_CELL = 4200.0   # peak of the solver run per cell, measured on a 845,000-cell run (3.4 GB): docs/MESHING_GUIDE.md; the same constant as meshadvisor.BYTES_PER_CELL
 
@@ -469,10 +471,22 @@ def sizing(study: str, faces: list, info: dict, ms: dict, rc: dict | None = None
             src.append(lambda P, c=c, half=half, R=R, cs=cs: np.where(cylinder_distance(P, c - half, c + half, R) <= 0, cs, far))
     if study not in SOLID_STUDIES and study != "external_aero":
         src.append(lambda P: np.full(len(P), h_body))
+    # the cells that sit on the walls: one or more per surface triangle of the mesh, whatever the volume field says (the surface of a body at the wall size h has
+    # about area / h^2 triangles, and the mesher makes finer ones where the surface curves)
+    local = dict(thin)
+    local.update(small)
+    for r in ms.get("refinements", []):
+        for i in r["faces"]:
+            local[int(i)] = min(local.get(int(i), 1e30), float(r["size"]))
+    units = 0.0
+    if len(surf.T):
+        for fid in np.unique(surf.tri_face):
+            a = float(surf.area[surf.tri_face == fid].sum())
+            units += a / min(local.get(int(fid), h_wall), h_wall) ** 2
     if study == "cht_enclosure":
         notes.append("Narrow air gaps between parts are refined by the mesher and are not in this estimate: it can be a little low for finned parts.")
     return {"field": Field(far, floor, src, notes), "region": region, "h_wall": h_wall, "h_body": h_body, "far": far, "growth": growth, "notes": notes,
-            "n_curv": n_curv, "surface": surf}
+            "n_curv": n_curv, "surface": surf, "surface_units": units}
 
 
 # ---------------------------------------------------------------------------------------------------------------------------------- the memory model
@@ -532,7 +546,7 @@ def estimate_sizing(sz: dict, extra: dict | None = None) -> dict:
         if len(surf.T):
             keep = (lambda P: ~surf.inside(P)) if r["mode"] == "outside" else surf.inside
     out = integrate(r["lo"], r["hi"], sz["field"], keep)
-    base = out["cells"] * CELLS_CALIBRATION
+    base = CELLS_CALIBRATION * out["cells"] + (SURFACE_CELLS_SOLID if r["mode"] == "inside" else SURFACE_CELLS) * sz.get("surface_units", 0.0)
     ex = extra or {"cells": 0.0, "low": 0.0, "high": 0.0}
     cells = base + ex["cells"]
     low = base * (1 - CELLS_SPREAD) + ex["low"]
@@ -541,7 +555,7 @@ def estimate_sizing(sz: dict, extra: dict | None = None) -> dict:
     lo_mb = ram_model(low)["mesh_mb"] * (1 - RAM_SPREAD / 2)
     hi_mb = ram_model(high)["mesh_mb"] * (1 + RAM_SPREAD / 2)
     return {"cells": cells, "cells_low": low, "cells_high": high, "volume_m3": out["volume"], "leaves": out["leaves"], "truncated": out["truncated"],
-            "edge_cells": ex["cells"], "edge_source": ex.get("source"),
+            "edge_cells": ex["cells"], "edge_source": ex.get("source"), "integral": out["cells"], "surface_units": sz.get("surface_units", 0.0),
             "ram": {**m, "mesh_low_mb": lo_mb, "mesh_high_mb": hi_mb, "solve_mb": solve_mb(cells), "solve_low_mb": solve_mb(low), "solve_high_mb": solve_mb(high)}}
 
 

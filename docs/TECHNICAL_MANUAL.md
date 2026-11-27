@@ -294,6 +294,21 @@ An optional mesher for `external_aero` (`mesh.method == "hex"`, set with `set_me
   neighbour size ratio) and every check has an `ok | warn | bad | info` band; the score is the share of passing checks, warnings counting half. `Project._score_mesh` stores it in `stats.advice` at the end of the mesh job
   and when the layers are made again (never fails a job).
 - **Interfaces**: `Project.mesh_advice()` (`GET /mesh/advice`, tool `mesh_advice`, action `mesh.advice`), `Project.apply_mesh_recipe(preset, layers)` (`POST /mesh/recipe`, tool `mesh_apply_recipe`, action `mesh.recipe`).
+
+### Memory planner (`simwb/meshplan.py`, Mesh step card `qt/panels/mesh_ram.py`)
+- **Estimate** (`Project.mesh_estimate()` -> `meshplan.report`): `base_inputs` gives the mesh settings the mesher gets (stored settings, the recipe of smart sizing, its edge refinement; `Project._mesh_inputs` calls the same
+  function, so estimate and mesher cannot differ). `sizing` rebuilds the size field of `gmsh_worker.task_mesh` (wall Threshold, thin and small faces, part sizings, curvature, recipe boxes, regions, rotors, zone boundaries,
+  far size); `integrate` is an adaptive octree over the meshed region (air box without the bodies, found by the nearest facet's normal; the solid for solid studies) that sums 1 / (volume of a regular tetrahedron of the local
+  size). cells = `CELLS_CALIBRATION` x integral + `SURFACE_CELLS` x sum(face area / wall size^2) + the edge term. Memory: `RAM_FIXED_MB` + `RAM_PER_CELL_KB` x cells for the mesh job (measured with `memwatch` around the gmsh
+  worker), and `SOLVE_BYTES_PER_CELL` for the run (flow studies; the earlier 845,000-cell measurement, not re-measured). Constants and their fits: `benchmarks/mesh_plan_calibrate.py`, `benchmarks/mesh_plan_fit.py`,
+  `benchmarks/results/mesh_plan_*.jsonl`, `docs/MESHING_GUIDE.md` section 6. The sizing logic is a second copy of the worker's: change both (the tests compare estimate and real mesh).
+- **Budget** (`mesh["budget"] = {mode: "mb" | "percent", value, on}`, `Project.set_mesh(budget=...)`): `fit` bisects a coarsening fraction t (0..1) in `bulk_settings` (far size x4^t, body / near / wake sizes x3^t, growth up to 1.45) until
+  the larger of the mesh job and the run fits. The worker reads `ms["far_size"]` (new). `Project._mesh_inputs` applies it for the job; `generate_mesh` raises the refusal before a job starts. The job stores `stats.budget`.
+- **Edge term, the plug**: `meshplan.edge_extra_cells(pr, sz, ms, rc)`. Without the edge plan it is 0 to the cap of the edge refinement (taken as half). When `feature/edge-layer-controls` (#50) is merged: the `try` block of that
+  function already calls `edgepreview.preview(pr)["plan"]["estimated_extra_cells"]` and `gmsh_worker.EDGE_ESTIMATE_SPREAD`, so nothing else is needed for the edge term; also replace `meshplan.smallest_feature` and
+  `meshplan.wall_size` by that branch's `gmsh_worker.smallest_feature` and `gmsh_worker.aero_wall_size`. Interfaces: tools `mesh_estimate`, `set_memory_budget`; `GET /mesh/estimate`, `POST /mesh/budget`; actions `mesh.estimate`,
+  `mesh.budget`; widget ids `mesh.budget.off|mb|percent|value|unit|switch_off|state|changes`, `mesh.estimate`, `mesh.estimate.bar`, `mesh.estimate.detail`.
+
 - **First-cell y+**: `cases.layer_first_thickness` returns the thickness whose centre has the target y+ (2 x y+ x nu / u_tau).
 - **Known limits**: external aerodynamics only; the domain is not changed; resolved boundary layers (y+ about 1) are not recommended (about a million extra prisms on the example wing); isotropic tetrahedra cost about a million cells for a thin 0.8 m wing.
 

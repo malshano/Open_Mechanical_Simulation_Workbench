@@ -253,6 +253,21 @@ Heat sources are set on parts (body settings), not on faces, in the heat and coo
      and their first-layer y+ (5 or less, or 30 or more), the non-orthogonality and skewness of the mesh the solver runs, and the poorest cell. ✓ is ok, ⚠ is to look at, ✗ failed; each
      ⚠ and ✗ says what to change. The limits are practical targets (the research grids ask for much more); the reasons are in `docs/MESHING_GUIDE.md`.
    - The assistant has the same tools (`mesh_advice`, `mesh_apply_recipe`).
+
+6b. **Memory budget and the estimate** (every study, tetrahedral mesh; under the advanced options, above **Generate mesh**): how many cells and how much memory the mesh will need, before you make it.
+   - The line **About 1.2 million cells (0.8 to 1.7 million), about 3.4 GB of memory (range 2.5 to 4.6 GB)** is worked out from the sizes the mesher will use (the cells at the walls, thin parts, part sizings,
+     refinement regions, rotors, the near field and wake of smart sizing, the growth and the far field). It is not a mesh: it takes a second or two and follows every change of the settings. The range is
+     how far the estimate was from the real mesh in our measurements (cells: up to 45 %); it is not a guarantee. The line under it says how much of the memory is the mesh job (about 0.8 GB for Python and Gmsh,
+     plus about 0.5 kB a cell) and how much the run needs (flow studies: about 4.2 kB a cell, from earlier runs). The bar shows the estimate (the pale part is the range) against the **budget** (the dark mark)
+     and the memory that is free now (the length of the bar); it turns orange over the budget and red over the free memory.
+   - **Memory budget**: **Off** (the default: nothing changes), **MB** (the most the mesh and the run may need) or **% of free memory** (counted when you press Generate mesh, so closing other programs gives a finer mesh).
+     With a budget on and an estimate above it, the mesher **coarsens the bulk**: the far field, the cells away from the body (and the near field and wake of smart sizing) and the growth (at most 1.45). It keeps the
+     cells at the walls, thin parts, part sizings, sharp edges and the refinement regions you drew. The card says what it did ("Coarsened the far field from 1630 mm to 3260 mm ... to fit 4.0 GB: about 800,000 cells"),
+     lists the changes, and **Switch the budget off** puts everything back (your own sizes are never changed: the budget only acts when the mesh is made).
+   - **Refused**: when even the coarsest bulk does not fit, Generate mesh does not start and the card (and the message) says what the smallest mesh is ("... the smallest it can reach is about 410,000 cells and about 1.9 GB ...") and what to do:
+     raise the budget to at least that, choose the resolution that fits (it is named when there is one), or switch the budget off.
+   - Not estimated: the hex-dominant mesh (the card says why), the narrow air gaps of a finned heat sink (can make the estimate a little low), and the run of finite element studies (only the mesh job is shown).
+   - The assistant and scripts: `mesh_estimate`, `set_memory_budget` (`mesh.estimate`, `mesh.budget` for the window controls; `GET /mesh/estimate`, `POST /mesh/budget`).
 7. **Mesh type** (external aerodynamics): **Tetrahedral** (the default, made by Gmsh) or **Hex-dominant** (made by OpenFOAM's snappyHexMesh). The hex-dominant mesh is mostly hexahedral cells that change size in octree steps, with a finer wake behind the body and wall layers made together with it. It usually has fewer, more orthogonal cells for the same wall resolution. It takes about a minute per 100,000 cells and needs OpenFOAM.
    - It is for **a body in the automatic box of air**, with its wall faces as the only boundary conditions. **Rotors, moving zones, symmetry planes and a custom air volume need the tetrahedral mesh**; the button explains which one stops it.
    - The preset, *Near-wall size*, *Face sizing* (thin faces get finer cells), *Refinement regions* and the *Wall layers* settings work as for the tetrahedral mesh.
