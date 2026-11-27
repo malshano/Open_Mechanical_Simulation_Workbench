@@ -40,21 +40,28 @@ One JSON line per case (see benchmarks/mesh_benchmark.py). Read them with `pytho
   same settings (`solves=`; rows with `solve_repeats`): mesh 1 solved 4 times on the automatic core count and 3 more
   times on 2 cores (`procs2=`), mesh 2 solved 4 times. (b) The issue's own configuration: 12 layers, edge refinement
   factor 6 (`n=12,edge=6` through the existing `edge_refinement` mesh setting), quick preset, default rule, 4 runs that
-  rebuild the mesh. `git` is 28cb12e+uncommitted for the first row (the working tree of the monitor change) and 53094ec
-  for the others (same `simwb/` code as that commit).
+  rebuild the mesh. `git` is 28cb12e+uncommitted for the first row (it started before the friction-force check of the monitor was
+  committed: it ran with that check in the working tree) and 53094ec for the later rows (the same `simwb/` code as that check).
 
-  Result. Fixed mesh: Cf is the same to 6 digits in every solve: max-min over the mean 0.0001 % (mesh 1, 4 solves),
-  0.0000 % (mesh 1 on 2 cores), 0.0001 % (mesh 2); auto against 2 cores differ by 0.0004 %. The solves are not
-  bit-identical (the 7th-8th digit changes) but the solver and the decomposition add about 1e-6 of Cf. The final cell
-  count is identical in every solve of one mesh (182,225 and 181,860). Each solve of this pipeline rewrites the case and runs
-  the layer step again (I did not verify this from the logs), so the layer step is reproducible on a given mesh too.
-  The two meshes differ from each other by 1.4 % in Cf (0.0023638 and 0.0023964). Rebuilding the mesh each time, the
-  quick 5-layer runs span 5.5 % in Cf (14 runs, -22.5 % to -18.0 % against Blasius) and the base (gmsh) cell count
-  alone varies 98,921-100,275. So the run to run variation of the earlier replicate files lives in the building of the
-  mesh, not in the stop rule, the solver or the number of cores: it is at least 3 orders of magnitude larger than the
-  fixed-mesh solver variation. Which property of the mesh drives Cf is not identified: correlations of Cf with the base
-  cell count, the final cell count, the largest non-orthogonality, the largest skewness, the layer thickness share and
-  the mean number of layers (14 runs) are all between -0.09 and +0.09. Issue configuration (12 layers, edge x6, 4 runs): the
+  Result. What is fixed here is the gmsh tetrahedral mesh only: each solve rewrites the case and runs the layer step
+  (snappyHexMesh), the decomposition and the solver again, so case writing, the layer step and the solver TOGETHER vary
+  by about 1e-6 of Cf on one gmsh mesh. This experiment does not isolate the solver. Cf is the same to 6 digits in every
+  solve: max-min over the mean 0.0001 % (mesh 1, 4 solves), 0.0000 % (mesh 1 on 2 cores), 0.0001 % (mesh 2); auto against
+  2 cores differ by 0.0004 %. The solves are not bit-identical (the 7th-8th digit changes). The final cell count is
+  identical in every solve of one mesh (182,225 and 181,860). The two meshes differ from each other by 1.4 % in Cf
+  (0.0023638 and 0.0023964). Rebuilding the mesh each time, the quick 5-layer runs span 5.6 % in Cf (14 runs, -22.5 % to
+  -18.0 % against Blasius) and the base (gmsh) cell count alone varies 98,921-100,275. So the run to run variation of the
+  earlier replicate files appears only when the mesh is rebuilt: it is larger than the variation with the gmsh mesh fixed
+  by 3 to 4 orders of magnitude, and it is not the stop rule or the number of cores. The rebuild variation cannot be split
+  between gmsh and the layer step applied to different gmsh meshes (the final mesh differs between rebuilds because the
+  gmsh mesh differs and the layer step runs on each). Which property of the mesh drives Cf is not identified: correlations
+  of Cf with the base cell count, the final cell count, the largest non-orthogonality, the largest skewness, the layer
+  thickness share and the mean number of layers (14 runs) are all between -0.09 and +0.09; n = 14 is too few to exclude a
+  correlation (|r| below about 0.53 cannot be told from zero), so this says no strong simple dependence, not independence. Issue configuration (12 layers, edge x6, 4 runs): the
   stop is at iteration 501-507, converged, 93.5 % of the layer thickness, 310,405-313,972 final cells, Cf error
   -4.3 % to -3.6 % (mean -4.1 %), spread of the 4 rebuilds 0.73 % (max-min over the mean). Here too the stop is not the
   limit; the spread is smaller than with 5 layers but 4 runs cannot say whether that is real.
+
+  Note on the monitor version: the 18 rows of flat_plate_stopping_rule_2026-11-27.jsonl were made by the stop rule before the
+  friction-force check was added (total force and moment only); the rows of the second file used the rule with the friction-force
+  check. On this plate the stops are unchanged (501-512 before, 501-511 after), as the friction force is steady by iteration 300.

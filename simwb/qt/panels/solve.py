@@ -121,7 +121,7 @@ class SolvePanel(_Panel):
         self.iters.editingFinished.connect(self._iters)
         self.iter_lab.setToolTip(self.iters.toolTip())
         self.iter_row = _row(self.iter_lab, self.iters)
-        self.stoptol_lab = QLabel("Stop when forces settle (%)")
+        self.stoptol_lab = QLabel("Stop when forces settle [%]")
         self.stoptol = wid(QLineEdit(), "solve.auto_stop_tol")
         self.stoptol.setValidator(QDoubleValidator(0, 10, 3, self.stoptol))
         self.stoptol.setToolTip("A steady run stops early when the average force (and the friction force) stops changing by more than this "
@@ -394,11 +394,18 @@ class SolvePanel(_Panel):
         except Exception as e:  # noqa: BLE001
             self._fail(e)
 
+    def _stoptol_shown(self):
+        v = (self.engine.state()["settings"] or {}).get("auto_stop_tol")
+        return f"{0.2 if v in (None, '') else float(v):g}"
+
     def _stoptol(self):
         try:
             if not self.stoptol.text().strip():
                 return
             v = float(self.stoptol.text().replace(",", "."))
+            if not 0 <= v <= 10:                  # (a typed value the validator did not stop, e.g. through setText): back to the last valid one
+                self.stoptol.setText(self._stoptol_shown())
+                raise ValueError("Stop when forces settle must be between 0 and 10 %")
             cur = (self.engine.state()["settings"] or {}).get("auto_stop_tol")
             if v != float(0.2 if cur in (None, "") else cur):
                 self.engine.project().set_settings(auto_stop_tol=v)
@@ -693,8 +700,7 @@ class SolvePanel(_Panel):
         self.stoptol_row.setVisible(steady_flow)
         self.stoptol_hint.setVisible(steady_flow)
         if not self.stoptol.hasFocus():
-            v = se.get("auto_stop_tol")
-            self.stoptol.setText(f"{0.2 if v in (None, '') else float(v):g}")
+            self.stoptol.setText(self._stoptol_shown())
         serial = J.serial_only(self.foam)
         self.cores_row.setVisible(not serial)
         self.serial.setVisible(serial)

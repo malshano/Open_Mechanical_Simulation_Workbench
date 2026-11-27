@@ -35,3 +35,16 @@ def test_value_above_the_cap_is_refused(ctl):
     import pytest
     with pytest.raises(ValueError):
         pr.set_settings(auto_stop_tol=100)
+
+
+def test_a_bad_typed_value_is_replaced_by_the_last_valid_one(ctl):
+    ctl.do("study.new", {"name": "Plate", "study": "external_aero"})
+    _show(ctl)
+    panel = ctl.win.panels["solve"]
+    errors = []
+    panel._fail = errors.append                                   # (the toast would only be shown)
+    ctl.widget_do("solve.auto_stop_tol", "set", "0.05")
+    panel.stoptol.setText("50")                                   # (setText skips the validator)
+    panel._stoptol()
+    assert errors and panel.stoptol.text() == "0.05"
+    assert float(ctl.engine.project().data["settings"]["auto_stop_tol"]) == 0.05
