@@ -758,6 +758,64 @@ def sharp_edges(gmsh, face_ids, min_length: float, max_face_angle: float = 140.0
     return found[:limit]
 
 
+def smallest_feature(faces, L) -> float:
+    """The smallest geometric feature (fin thickness, gap) of the parts, from the faces' middle extents."""
+    feat = []
+    for f in faces:
+        if f["kind"] in ("farfield", "enclosure"):
+            continue
+        ext = face_width(f)
+        if ext > L * 2e-3:
+            feat.append(ext)
+    return min(feat) if feat else L / 20
+
+
+def aero_wall_size(ms: dict, feature: float, L: float, h_body: float, rc: dict | None) -> float:
+    """The cell size on the walls in external aerodynamics (what the mesher uses; the edge refinement is sized from it): the smallest cell set by hand,
+    else the recipe's wall size (smart sizing), else the thinnest feature over the cells asked for it by the preset, never finer than L / (4 n)."""
+    n_per, _n_curv = PRESETS.get(ms.get("preset", "medium"), PRESETS["medium"])
+    n_feat = FEATURE_CELLS.get(ms.get("preset", "medium"), 4)
+    h_wall = float(ms.get("size_min") or min(max(feature / n_feat, L / (4 * n_per)), h_body / 2))
+    if rc:
+        h_wall = float(ms.get("size_min") or rc["h_surf"])
+    return h_wall
+
+
+EDGE_ANGLE = 140.0            # edges whose two faces meet at less than this are 'sharp' (degrees; 180 = smooth)
+EDGE_CAP = 150_000            # the most extra cells the edge refinement may add
+
+
+def edge_refine_plan(edges, h_wall: float, L: float, growth: float, factor: float, cap: float = EDGE_CAP,
+                     max_angle: float = EDGE_ANGLE, limit: int = 200) -> dict:
+    """What the sharp-edge refinement does: from every edge (tag, face angle, length, ...) found across the flow (longest first) choose the sharp ones
+    that are long enough, size the cells at them (the wall size / factor, never finer than L / 3000) and coarsen that size until the estimated extra
+    cells fit the cap. {applied, reason, edges, total_length, h_edge, factor_used, estimated_extra_cells, capped}. The mesher and the Mesh step's
+    estimate both use this, so what the panel shows before meshing is what the mesher does."""
+    h_edge = max(h_wall / factor, L / 3000.0)
+    out = {"applied": False, "reason": None, "edges": [], "total_length": 0.0, "h_edge": h_edge, "factor_used": h_wall / h_edge,
+           "estimated_extra_cells": 0.0, "capped": False, "cap_cells": float(cap)}
+    if h_edge >= 0.9 * h_wall:
+        out["reason"] = "finer_than_floor"          # the wall cells are already as fine as the edge cells could be (L / 3000)
+        return out
+    min_len = max(0.03 * L, 8 * h_edge)
+    sel = [e for e in edges if e[1] < max_angle and e[2] >= min_len][:limit]
+    if not sel:
+        out["reason"] = "no_edges"
+        return out
+    total = float(sum(e[2] for e in sel))
+    est = edge_cells_estimate(total, h_edge, h_wall, growth)
+    h0 = h_edge
+    while est > cap and h_edge < 0.9 * h_wall:
+        h_edge *= 1.15
+        est = edge_cells_estimate(total, h_edge, h_wall, growth)
+    out.update(edges=sel, total_length=total, h_edge=h_edge, factor_used=h_wall / h_edge, estimated_extra_cells=est, capped=h_edge > h0 * 1.0001)
+    if h_edge >= 0.9 * h_wall:
+        out["reason"] = "cap_too_low"               # even the coarsest edge cells would add more than the cap: nothing is refined
+        return out
+    out["applied"] = True
+    return out
+
+
 def face_width(f) -> float:
     """Width of a face: middle principal extent (for a cylinder this is its diameter, for a fin top its
     thickness)."""
@@ -961,23 +1019,14 @@ def task_mesh(job: dict) -> dict:
         n_curv = int(rc.get("n_curv", n_curv))
 
     # smallest geometric feature (fin thickness, gap) from face extents
-    feat = []
-    for f in faces:
-        if f["kind"] in ("farfield", "enclosure"):
-            continue
-        ext = face_width(f)
-        if ext > L * 2e-3:
-            feat.append(ext)
-    feature = min(feat) if feat else L / 20
+    feature = smallest_feature(faces, L)
     # near-wall size: resolve thin features (fins) but never finer than L/(3n)
     thin_faces = []  # (face ids, size): local refinement of thin parts (aero)
     if study == "external_aero":
         # the near-wall size follows the body size; thin parts (a tail, an arm) are refined locally, not on
         # every wall of the body (a thin tail used to set 2.7 mm on all walls of a 1.2 m airframe)
         n_feat = FEATURE_CELLS.get(ms.get("preset", "medium"), 4)
-        h_wall = float(ms.get("size_min") or min(max(feature / n_feat, L / (4 * n_per)), h_body / 2))
-        if rc:
-            h_wall = float(ms.get("size_min") or rc["h_surf"])
+        h_wall = aero_wall_size(ms, feature, L, h_body, rc)
         if not ms.get("size_min"):
             h_thin_min = h_wall / 3 if rc else L / (12 * n_per)  # coarse 1.2 m UAV: 10 mm (L/25n gave 0.9M cells)
             by_size = {}
@@ -1294,37 +1343,37 @@ def task_mesh(job: dict) -> dict:
     # Only edges that cross the flow matter (a leading or trailing edge; an edge along the flow does not), and the cells
     # this adds are estimated before meshing and capped (default 150,000): where the estimate is over the cap the edge
     # cells are made coarser until it fits, so the option can never run the mesher out of memory by itself.
-    edge_info = None
-    if study == "external_aero" and ms.get("edge_refine") and (not ms.get("size_min") or rc):
+    edge_info, edge_skipped = None, None
+    if study == "external_aero" and ms.get("edge_refine") and not (ms.get("size_min") and not rc):
         er = ms["edge_refine"]
         factor = float(er.get("factor", 6.0))
-        cap = float(er.get("max_cells", 150_000))
+        cap = float(er.get("max_cells", EDGE_CAP))
+        angle = float(er.get("max_angle", EDGE_ANGLE))
         flow_axis = ((info.get("domain") or {}).get("spec") or {}).get("flow_axis")
-        h_edge = max(h_wall / factor, L / 3000.0)
-        if h_edge < 0.9 * h_wall:
-            edges = sharp_edges(gmsh, wall_faces, max(0.03 * L, 8 * h_edge), flow_axis=flow_axis)
-            total_len = sum(e[2] for e in edges)
-            est = edge_cells_estimate(total_len, h_edge, h_wall, growth)
-            while edges and est > cap and h_edge < 0.9 * h_wall:
-                h_edge *= 1.15
-                est = edge_cells_estimate(total_len, h_edge, h_wall, growth)
-            if edges and h_edge < 0.9 * h_wall:
-                fe = fields.add("Distance")
-                fields.setNumbers(fe, "CurvesList", [e[0] for e in edges])
-                fields.setNumber(fe, "Sampling", int(min(20000, max(50, 2 * max(e[2] for e in edges) / h_edge))))
-                # size = h_edge + (growth - 1) x distance: the mesh growth ratio exactly, and no ceiling. (A Threshold
-                # field returns its SizeMax everywhere beyond DistMax, so a SizeMax of h_wall made the whole air box
-                # wall-sized, about 12 million cells; the far field keeps its own size from the other fields.)
-                fte = fields.add("MathEval")
-                fields.setString(fte, "F", f"{h_edge!r} + {growth - 1.0!r} * F{fe}")
-                dist_max = (h_wall - h_edge) / (growth - 1.0)             # where it reaches the wall size
-                use.append(fte)
-                edge_info = {"edges": len(edges), "size": h_edge, "factor": factor, "size_far_of_edge_field": h_wall,
-                             "factor_used": h_wall / h_edge, "growth": growth, "dist_max": dist_max,
-                             "estimated_extra_cells": est, "cap_cells": cap,
-                             "min_face_angle": min(e[1] for e in edges), "total_length": total_len}
-                progress(0.09, f"Sharp edges refined: {len(edges)} edge(s) across the flow, {total_len:.3g} m long, "
-                               f"cells of {h_edge * 1e3:.2f} mm, about {est:,.0f} extra cells")
+        found = sharp_edges(gmsh, wall_faces, 0.03 * L, max_face_angle=angle, limit=10 ** 6, flow_axis=flow_axis)
+        plan = edge_refine_plan(found, h_wall, L, growth, factor, cap, angle)
+        edges, h_edge, est, total_len = plan["edges"], plan["h_edge"], plan["estimated_extra_cells"], plan["total_length"]
+        if plan["applied"]:
+            fe = fields.add("Distance")
+            fields.setNumbers(fe, "CurvesList", [e[0] for e in edges])
+            fields.setNumber(fe, "Sampling", int(min(20000, max(50, 2 * max(e[2] for e in edges) / h_edge))))
+            # size = h_edge + (growth - 1) x distance: the mesh growth ratio exactly, and no ceiling. (A Threshold
+            # field returns its SizeMax everywhere beyond DistMax, so a SizeMax of h_wall made the whole air box
+            # wall-sized, about 12 million cells; the far field keeps its own size from the other fields.)
+            fte = fields.add("MathEval")
+            fields.setString(fte, "F", f"{h_edge!r} + {growth - 1.0!r} * F{fe}")
+            dist_max = (h_wall - h_edge) / (growth - 1.0)             # where it reaches the wall size
+            use.append(fte)
+            edge_info = {"edges": len(edges), "size": h_edge, "factor": factor, "size_far_of_edge_field": h_wall,
+                         "factor_used": plan["factor_used"], "growth": growth, "dist_max": dist_max,
+                         "estimated_extra_cells": est, "cap_cells": cap, "angle_limit": angle, "capped": plan["capped"],
+                         "min_face_angle": min(e[1] for e in edges), "total_length": total_len}
+            progress(0.09, f"Sharp edges refined: {len(edges)} edge(s) across the flow, {total_len:.3g} m long, "
+                           f"cells of {h_edge * 1e3:.2f} mm, about {est:,.0f} extra cells")
+        else:
+            edge_skipped = plan["reason"]
+    elif study == "external_aero" and ms.get("edge_refine"):
+        edge_skipped = "size_min"                                     # (a smallest cell set by hand, without smart sizing: the old rule)
 
     mn = fields.add("Min")
     fields.setNumbers(mn, "FieldsList", use)
@@ -1513,6 +1562,7 @@ def task_mesh(job: dict) -> dict:
         },
         "defeatured_faces": sum(len(g) - 1 for g in merged),
         "edge_refine": edge_info,
+        "edge_refine_skipped": edge_skipped,
         "collapsed_cells_repaired": int(n_collapsed),
         "sizes": {"near_wall": h_wall, "body": h_body, "far": size_far, "feature": feature,
                   "min_gap": min_gap,
@@ -1643,7 +1693,34 @@ def _tet_quality(p, t):
     return np.clip(6 * math.sqrt(2) * vol / np.maximum(l2, 1e-300) ** 1.5, 0, 1)
 
 
-TASKS = {"prepare": task_prepare, "mesh": task_mesh}
+def task_edges(job: dict) -> dict:
+    """The sharp edges across the flow of the geometry, for the Mesh step's estimate and its 3D marking (no meshing): {edges: [{angle, length, points}], count}
+    - every edge where two wall faces meet at less than 175 degrees and that is at least 3 % of the body length, longest first (at most 600), each with a
+    polyline of points along it. The choice of the edges that a given setting refines is edge_refine_plan's."""
+    gmsh = _gmsh()
+    disc = Path(job["brep"]).with_name("discrete.json")
+    if disc.exists():
+        from . import meshgeom
+
+        meshgeom.build(gmsh, Path(job["brep"]).with_name("source.step"), **json.loads(disc.read_text()))
+    else:
+        _load_brep(gmsh, Path(job["brep"]))
+    faces = json.loads(Path(job["faces_json"]).read_text())
+    info = json.loads(Path(job["domain_info"]).read_text())
+    L = info["ref_length"]
+    wall = [f["id"] for f in faces if f["kind"] not in ("farfield", "enclosure")]
+    flow_axis = ((info.get("domain") or {}).get("spec") or {}).get("flow_axis")
+    found = sharp_edges(gmsh, wall, 0.03 * L, max_face_angle=175.0, limit=600, flow_axis=flow_axis)
+    out = []
+    for tag, angle, length in found:
+        lo, hi = gmsh.model.getParametrizationBounds(1, tag)
+        ts = np.linspace(lo[0], hi[0], 25)
+        pts = np.asarray(gmsh.model.getValue(1, tag, ts.tolist()), float).reshape(-1, 3)
+        out.append({"tag": int(tag), "angle": float(angle), "length": float(length), "points": np.round(pts, 7).tolist()})
+    return {"edges": out, "count": len(out), "ref_length": L, "flow_axis": flow_axis}
+
+
+TASKS = {"prepare": task_prepare, "mesh": task_mesh, "edges": task_edges}
 
 
 def main(argv):
