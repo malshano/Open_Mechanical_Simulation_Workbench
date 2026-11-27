@@ -127,7 +127,7 @@ class SolvePanel(_Panel):
         self.stoptol.setToolTip("A steady run stops early when the average force (and the friction force) stops changing by more than this "
                                 "share of the total load between two 100-iteration windows, from iteration 500 on. Default 0.2. Lower it "
                                 "(0.02) to compare small differences. 0 = never stop early: run to Max iterations; the run is then "
-                                "reported as not converged by design.")
+                                "never reported as converged (by design); judge it from the solver residuals.")
         self.stoptol.editingFinished.connect(self._stoptol)
         self.stoptol_lab.setToolTip(self.stoptol.toolTip())
         self.stoptol_hint = wid(_muted("0 = never stop early (the run goes to Max iterations)"), "solve.auto_stop_tol.hint")

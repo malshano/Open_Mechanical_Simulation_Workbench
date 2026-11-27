@@ -49,8 +49,10 @@ def richardson(rows):
 
 
 def usable(r):
-    """Converged by the app, or (stop rule off: the app never calls such a run converged) Cf steady by its own history:
-    changed by less than 0.1 % over the last 100 iterations."""
+    """Converged by the app, or (stop rule off: the app never calls such a run converged, by design) Cf steady by its own history:
+    changed by less than 0.1 % over the last 100 iterations. This is partly circular: the Cf series that qualifies the run is the
+    one reported as steady, so for rule-off rows 'steady' is a consistency check, not independent proof. Precision: Cf is stored
+    every 25 iterations to 7 digits, so many drifts read exactly 0.0."""
     drift = r.get("cf_drift_last100_percent")
     steady_by_history = r.get("stop_tol_percent") == 0 and drift is not None and abs(drift) < 0.1
     return (bool(r.get("converged")) or steady_by_history) and layers_ok(r)
@@ -77,9 +79,39 @@ def stopping_table(rows):
               f"{(max(dr, key=abs) if dr else float('nan')):>21.4f}{min(r['cells_final'] for r in rs):>9,}-{max(r['cells_final'] for r in rs):,}")
 
 
+def _spread(v):
+    return 100 * (max(v) - min(v)) / (sum(v) / len(v))
+
+
+def fixed_mesh_table(rows):
+    """Rows made with `solves=N`: the same mesh solved again. Per mesh: Cf of every solve (spread, max-min over the mean, on the
+    same number of cores and on the other one), the final cell count of each solve (does the layer step repeat?), and next to it
+    the spread of the repeats that rebuilt the mesh each time (same spec, rows without solve_repeats)."""
+    fixed = [r for r in rows if r.get("solve_repeats") and not r.get("error")]
+    if not fixed:
+        return
+    print("\nsame mesh solved again (solver side only) against a rebuilt mesh each time")
+    for i, r in enumerate(fixed, 1):
+        reps = [r] + [x for x in r["solve_repeats"] if x.get("cf")]
+        for procs in sorted({x.get("procs", r.get("procs", 0)) for x in reps}):
+            sel = [x for x in reps if x.get("procs", r.get("procs", 0)) == procs]
+            cf = [x["cf"] for x in sel]
+            cells = sorted({x.get("cells_final", r["cells_final"]) for x in sel})
+            print(f"  mesh {i} ({r['preset']}, {r['layers']} layers) cores {procs or 'auto'}: {len(sel)} solves, Cf "
+                  + " ".join(f"{c:.7f}" for c in cf) + f"  spread {_spread(cf):.4f} %, final cells {cells}, bit-identical: {len(set(cf)) == 1}")
+    rebuilt = defaultdict(list)
+    for r in rows:
+        if not r.get("solve_repeats") and "stop_tol_percent" in r and r.get("cf") and not r.get("error"):
+            rebuilt[(r["preset"], r["layers"], r.get("edge_factor"), r["stop_tol_percent"])].append(r["cf"])
+    for k, cf in sorted(rebuilt.items(), key=str):
+        if len(cf) > 1:
+            print(f"  mesh rebuilt each time: {k[0]} {k[1]} layers edge {k[2]} stop {k[3]}: {len(cf)} runs, spread {_spread(cf):.3f} %")
+
+
 def main(paths):
     rows = load(paths)
     stopping_table(rows)
+    fixed_mesh_table(rows)
     groups = defaultdict(lambda: defaultdict(list))
     for r in rows:
         if str(r.get("edge_field", "")).endswith("superseded"):      # made by code that no longer exists (see results/README.md)

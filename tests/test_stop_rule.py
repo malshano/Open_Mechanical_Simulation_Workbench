@@ -72,6 +72,7 @@ def test_note_of_a_run_with_the_rule_off_does_not_say_still_changing(P, tmp_path
     log.write_text(_log(lambda i: 1.0, 600))
     off = P._convergence(log, 600, dict(META, auto_stop_tol_pct=0))
     assert off["converged"] is False and "does not stop early" in off["note"] and "still changing" not in off["note"]
+    assert off["monitor"]["auto_stop_tol_pct"] == 0                       # (the Results step words its note from this)
     on = P._convergence(log, 600, dict(META, auto_stop_tol_pct=0.2))
     assert on["converged"] is True and "0.2 % of the total load" in on["note"]
 

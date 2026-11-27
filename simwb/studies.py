@@ -479,7 +479,7 @@ STUDIES = {
                    "friction (viscous) force has stopped changing: the change between two successive 100-iteration "
                    "windows must be below this share of the total load (and below 5 times this share of the friction "
                    "force itself). Checked from iteration 500 on. 0 = never stop early: the run goes to Max iterations "
-                   "and is then reported as not converged by design; judge it from the force and residual plots of the "
+                   "and is then never reported as converged (by design); judge it from the solver residuals of the "
                    "results. Lower it (0.02) to compare small differences."),
             P("max_hours", "Time limit", "h", 0.0, min=0, max=1000,
               help="0 = none. A wall-clock limit for the whole run, counted from its start (preparing the case, "

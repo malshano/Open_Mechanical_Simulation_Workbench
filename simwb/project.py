@@ -5361,6 +5361,8 @@ def _convergence(app_log: Path, it_target: int, meta: dict | None = None, auto_s
     last = {k: v[-1] for k, v in h["residuals"].items() if v and v[-1] is not None}
     res_conv = bool(re.search(r"converged in \d+ iterations", txt))
     mon = runner.monitor_outputs(txt, meta or {}) if meta else {}
+    if meta and "auto_stop_tol_pct" in meta:
+        mon = dict(mon, auto_stop_tol_pct=meta["auto_stop_tol_pct"])      # (so the results can say the rule was off)
     if auto_stop and not mon.get("stable"):
         mon = dict(mon, stable=True, reason=auto_stop)
     converged = res_conv or bool(mon.get("stable"))
@@ -5370,7 +5372,7 @@ def _convergence(app_log: Path, it_target: int, meta: dict | None = None, auto_s
             f"Key outputs stable: {mon.get('reason')}." if mon.get("stable") else
             "Stopped by you before the results settled - continue the run for final numbers." if user_stop else
             ("Ran to the iteration limit: the setting 'Stop when forces settle' is 0, so the run does not stop early "
-             "(check the force history before you use the numbers)."
+             "(it is not called converged by design; judge it from the solver residuals)."
              if meta and meta.get("auto_stop_tol_pct") == 0 and h["iters"] and h["iters"][-1] >= it_target - 1 else
              "Stopped at the iteration limit while the results were still changing - continue the run."
              if h["iters"] and h["iters"][-1] >= it_target - 1 else
