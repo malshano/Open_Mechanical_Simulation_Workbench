@@ -243,6 +243,7 @@ def register(ctl):
     win, eng, R = ctl.win, ctl.engine, ctl._reg
     S, N = "string", "number"
     control.MODAL.setdefault("solve.case_zip", "solve.case_zip")
+    control.MODAL.setdefault("solve.adopt_setup", "solve.adopt_setup")        # (the button asks "use it?": the action carries the answer)
 
     def sp():
         if not eng.pid:
@@ -371,6 +372,22 @@ def register(ctl):
     R("solve.cancel", "Cancel the running job of the study (nothing new is kept).", {}, lambda: (sp(), ctl._click("solve.cancel"), {"cancelled": True})[2])
     R("solve.write_case", "Write the OpenFOAM case files without running the solver; a job.", {},
       lambda: (sp(), ctl._click("solve.case"), {"started": True})[2])
+    R("solve.load_case", "Join the saved times already in the OpenFOAM case folder and load them as the results, without running the "
+                         "solver (a time that cannot be read is left out and named); a job.", {},
+      lambda: (sp(), ctl._click("solve.load_case"), {"started": True})[2])
+    def adopt(confirm=False):
+        if not confirm:
+            raise ValueError("This takes the current setup as the one the case folder was made with (the study was run by an older "
+                             "version that kept no record). Results would be worked out with today's settings, with a warning. "
+                             "Pass confirm=true only if you know the setup was not changed since the run")
+        ctl.engine.project().adopt_current_setup()
+        ctl.engine.changed.emit()
+        return {"adopted": True}
+
+    R("solve.adopt_setup", "Confirm that the setup is what the case folder was made with (a study run by an older version kept no "
+                           "record), so the old run can be carried on. The workbench refuses when the case folder records something "
+                           "else (speed, fluid, mesh size, rotors, zones); results of an adopted study carry a warning.",
+      {"confirm": ("boolean", "true: you know the setup was not changed since the run", False)}, adopt)
     R("solve.advanced", "Advanced OpenFOAM numerics: set some ({key: value}, keys as in the panel: convection, non_orth, relax_p ...) or reset "
                         "all to the defaults.", {"values": ("object", "{key: value}", False), "reset": ("boolean", "reset to defaults first", False)},
       advanced)

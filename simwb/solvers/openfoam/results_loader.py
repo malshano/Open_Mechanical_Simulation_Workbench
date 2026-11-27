@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 from pathlib import Path
 
@@ -416,6 +417,7 @@ def _read_frames(case, meta, names):
             lf = open(out / f"worker{i}.log", "w")
             procs.append((subprocess.Popen([sys.executable, "-u", "-m", "simwb.solvers.openfoam.frame_worker", str(case),
                                             str(out), *share], cwd=root, stdout=lf, stderr=subprocess.STDOUT,
+                                           env={**os.environ, "SIMWB_PARENT_PID": str(os.getpid())},
                                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)), lf))
         for pr, lf in procs:
             pr.wait()

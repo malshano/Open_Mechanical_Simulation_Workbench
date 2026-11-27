@@ -232,7 +232,7 @@ def duplicate_project(pid: str, name: str | None = None) -> "Project":
     shutil.copytree(src.dir, d, ignore=shutil.ignore_patterns("case", "results", "videos", "*.tmp", "checks", "_*_job.json"))
     data = json.loads((d / "project.json").read_text())
     data.update(name=name, created=_now(), updated=_now(), solve={"status": "none"})
-    for k in ("mesh_check", "model_check", "hidden", "edited_during_run"):
+    for k in ("mesh_check", "model_check", "hidden", "edited_during_run", "case_setup", "case_run", "case_setup_adopted"):
         data.pop(k, None)
     (d / "project.json").write_text(json.dumps(data, indent=1))
     if folder.resolve() != WORKSPACE.resolve():
@@ -271,6 +271,9 @@ def save_project_as(pid: str, location: str, name: str | None = None, keep_resul
     data.update(name=name, created=_now(), updated=_now())
     if not keep_results:
         data["solve"] = {"status": "none"}
+        data.pop("case_setup", None)
+        data.pop("case_run", None)
+        data.pop("case_setup_adopted", None)
     for k in ("hidden", "edited_during_run"):
         data.pop(k, None)
     (d / "project.json").write_text(json.dumps(data, indent=1))
@@ -450,6 +453,48 @@ def delete_project(pid: str):
     shutil.rmtree(WORKSPACE / ".checks" / pid, ignore_errors=True)
 
 
+# What an OpenFOAM case is made from. A resumed run is only valid while the setup still matches the case on disk, so the
+# case remembers a snapshot of its setup (data["case_setup"]) and the study compares against that, not against a flag
+# that something was touched: a change that is changed back leaves the run resumable.
+# Run controls are not part of the case: the solver limits can be changed for a resume (a changed end time and save
+# interval are applied to the old case by resuming it; the iteration count and the number of cores are read again at
+# every start).
+RUN_CONTROLS = ("end_time", "n_procs", "max_hours", "iterations", "n_frames", "frame_deg")
+# (n_frames / frame_deg: how often a resumed run saves; controlDict's writeInterval can be changed for the continuing run, see _resume_interval)
+_SETUP_PARTS = (("bcs", "Boundary conditions"), ("rotors", "Rotors"), ("moving_zones", "Moving zones"),
+                ("bodies", "Parts and materials"), ("domain", "Air volume (domain)"), ("symmetry", "Symmetry planes"),
+                ("foam_advanced", "Advanced OpenFOAM settings"), ("foam_overrides", "Edited case files"),
+                ("custom_materials", "Custom materials"), ("study", "Study type"))
+
+
+def setup_snapshot(data: dict) -> dict:
+    """The part of a study's setup that the OpenFOAM case is made from (JSON-clean, so it compares and saves)."""
+    snap = {k: data.get(k) or None for k, _ in _SETUP_PARTS}  # (nothing, {} and [] are the same)
+    snap["settings"] = {k: v for k, v in (data.get("settings") or {}).items() if k not in RUN_CONTROLS}
+    m = data.get("mesh") or {}
+    snap["mesh"] = {**{k: v for k, v in m.items() if k not in ("status", "stats")},
+                    "cells": (m.get("stats") or {}).get("cells")}
+    return json.loads(json.dumps(snap, sort_keys=True, default=str))
+
+
+def setup_differences(old: dict, new: dict, labels: dict | None = None) -> list:
+    """Plain phrases for what differs between two setup snapshots ([] when they are the same)."""
+    labels = labels or {}
+    out = []
+    for k in sorted(set(old.get("settings") or {}) | set(new.get("settings") or {})):
+        a, b = (old.get("settings") or {}).get(k), (new.get("settings") or {}).get(k)
+        if a != b:
+            label, unit = labels.get(k) or (k.replace("_", " ").capitalize(), "")
+            out.append(f"{label}: {a} to {b}" + (f" {unit}" if unit else ""))
+    for k, label in _SETUP_PARTS:
+        if old.get(k) != new.get(k):
+            out.append(label)
+    if old.get("mesh") != new.get("mesh"):
+        out.append("Mesh settings" if (old.get("mesh") or {}).get("cells") == (new.get("mesh") or {}).get("cells")
+                   else "The mesh (made again)")
+    return out
+
+
 class Project:
     def __init__(self, path: Path):
         self.dir = Path(path)
@@ -604,6 +649,150 @@ class Project:
             if self.data.get(k) and not self.data[k].get("running"):
                 self.data[k]["stale"] = True
 
+    def _setup_labels(self) -> dict:
+        """{setting key: (plain name, unit)}: the hint in brackets of the label ("Time step (0 = auto)") is left off."""
+        return {p["key"]: (re.sub(r"\s*\([^()]*\)\s*$", "", p["label"]), p.get("unit") or "")
+                for p in self.spec.get("settings", [])}
+
+    def setup_changes(self) -> list | None:
+        """What changed in the setup since the OpenFOAM case on disk was written, as plain phrases ([] = nothing:
+        the case still matches the setup). None when the case does not remember its setup (written by an older
+        version)."""
+        base = self.data.get("case_setup")
+        if not isinstance(base, dict):
+            return None
+        return setup_differences(base, setup_snapshot(self.data), self._setup_labels())
+
+    LOAD_HINT = "The results already in the case folder can be loaded with 'Load results from case' (Solve step)."
+
+    def _locked_message(self, panel: bool = False) -> str:
+        """Why an old case cannot be carried on, and what to do. panel: the short form for the Solve step (which adds its own advice
+        about loading the saved results, since that depends on OpenFOAM being there)."""
+        sv = self.data["solve"]
+        ch = self.setup_changes()
+        if sv.get("status") == "none":
+            return ("There is no run to carry on (the mesh was made again, or the study was changed so much that the old "
+                    "case does not apply): run the simulation again")
+        if ch:
+            what = "; ".join(ch[:4]) + (f" and {len(ch) - 4} more" if len(ch) > 4 else "")
+            if panel:
+                return (f"The setup changed since the last run ({what}). Change it back to carry on the old run, or run "
+                        "again (that replaces the old case).")
+            return (f"The setup changed since the last run ({what}). Change it back to carry on the old case, or run the "
+                    f"simulation again (that starts from the beginning and replaces the old case). {self.LOAD_HINT}")
+        if panel:
+            return ("This study was run by an older version of the workbench, so it cannot tell if the setup changed since. "
+                    "If you know it did not, press 'The setup matches the case folder: use it' below; otherwise run again.")
+        return ("The setup or mesh was changed since the last run, and this study cannot tell what: it was run by an older "
+                "version of the workbench, which did not keep what the case was made from. If you know the setup is still "
+                "what the case folder was made with, confirm it in the Solve step ('The setup matches the case folder: use "
+                f"it'); otherwise run the simulation again. {self.LOAD_HINT}")
+
+    def lock_state(self) -> dict | None:
+        """When the old run cannot be carried on because of the setup: {message, known (what changed is known),
+        can_adopt (the setup can be confirmed to match the case)}. None when it is not locked, or there is no case."""
+        sv = self.data["solve"]
+        if not (self.case_dir / "simwb_case.json").exists() or sv.get("status") == "none":
+            return None
+        if not (sv.get("status") == "stale" or sv.get("setup_changed")):
+            return None
+        known = self.data.get("case_setup") is not None
+        return {"message": self._locked_message(panel=True), "known": known, "can_adopt": not known}
+
+    def case_mismatches(self, meta: dict) -> list:
+        """What the case folder records (simwb_case.json) that the current setup disagrees with, as plain sentences: the kind of
+        study, steady or transient, the flow (speed and direction), the fluid, the number of cells, rotors, moving zones and
+        symmetry planes. Empty: nothing the case records is different."""
+        from .solvers.openfoam import cases
+
+        s = self.data["settings"]
+        out = []
+        if meta.get("study") and meta["study"] != self.study:
+            out.append("the case folder was made for another kind of study")
+        if bool(meta.get("transient")) != (s.get("analysis") == "transient"):
+            out.append(f"the case folder holds a {'transient' if meta.get('transient') else 'steady'} run but the setup says "
+                       f"{s.get('analysis', 'steady')}")
+        try:
+            fl = materials.get_fluid(s.get("fluid", "air"))
+        except Exception:  # noqa: BLE001
+            fl = None
+        if self.study == "external_aero":
+            try:
+                u = cases.freestream_velocity(s)
+            except Exception:  # noqa: BLE001
+                u = None
+            if u is not None and meta.get("U_inf") is not None:
+                v0 = float(np.linalg.norm(meta["U_inf"]))
+                v1 = float(np.linalg.norm(u))
+                if abs(v1 - v0) > 1e-6 * max(1.0, v0):
+                    out.append(f"the case was made for a flow speed of {v0:g} m/s but the setup says {v1:g} m/s")
+                elif float(np.linalg.norm(np.asarray(meta["U_inf"], float) - u)) > 1e-6 * max(1.0, v0):
+                    out.append("the case was made for another flow direction (pitch, yaw, forward or up axis)")
+            if fl and meta.get("rho") and abs(fl["rho"] - float(meta["rho"])) > 1e-6 * float(meta["rho"]):
+                out.append(f"the case was made for a fluid of density {float(meta['rho']):g} kg/m3 but the setup's fluid has "
+                           f"{fl['rho']:g}")
+        elif fl and isinstance(meta.get("fluid"), dict) and meta["fluid"].get("rho")                 and abs(fl["rho"] - float(meta["fluid"]["rho"])) > 1e-6 * float(meta["fluid"]["rho"]):
+            out.append(f"the case was made for a fluid of density {float(meta['fluid']['rho']):g} kg/m3 but the setup's fluid has "
+                       f"{fl['rho']:g}")
+        cells = ((self.data.get("mesh") or {}).get("stats") or {}).get("cells")
+        if cells and meta.get("n_cells") and int(cells) != int(meta["n_cells"]):
+            out.append(f"the case was made for a mesh of {int(meta['n_cells']):,} cells but the study's mesh has {int(cells):,}")
+        if "rotors" in meta and len(meta["rotors"] or []) != len(self.data.get("rotors") or []):
+            out.append(f"the case has {len(meta['rotors'] or [])} rotor(s) but the setup has {len(self.data.get('rotors') or [])}")
+        if "moving_zones" in meta:
+            mz, dz = meta["moving_zones"] or [], self.data.get("moving_zones") or []
+            if len(mz) != len(dz):
+                out.append(f"the case has {len(mz)} moving zone(s) but the setup has {len(dz)}")
+            else:
+                r0 = sorted(round(float(z["rpm"]), 6) for z in mz if z.get("rpm") is not None)
+                r1 = sorted(round(float(z.get("rpm") or 0), 6) for z in dz)
+                if r0 and r0 != r1:
+                    out.append("the case was made with other rotation speeds of the moving zones")
+        if "symmetry" in meta and len(meta["symmetry"] or []) != len(self.data.get("symmetry") or []):
+            out.append("the case has a different number of symmetry planes")
+        return out
+
+    ADOPTED_WARNING = ("You confirmed that the setup matches this case (the study was run by an older version of the workbench, "
+                       "which kept no record of it). If the setup was changed since the run, these numbers are worked out with "
+                       "today's settings, not the ones the run used.")
+
+    def _adopted_warning(self, summary) -> None:
+        """Keep the confirmation visible with the results of a study whose setup was adopted (never silent)."""
+        if self.data.get("case_setup_adopted") and isinstance(summary, dict):
+            w = summary.setdefault("warnings", [])
+            if self.ADOPTED_WARNING not in w:
+                w.append(self.ADOPTED_WARNING)
+
+    def adopt_current_setup(self) -> dict:
+        """The user confirms that the current setup is what the case folder was made with (for a study run by a version that
+        kept no record of it): the record is made from the current setup and the old run can be carried on again. The case on
+        disk stays what it is - a resume still runs that case - so a wrong confirmation cannot damage it; the results would
+        only be labelled with settings the case was not made with. The few things the case folder does tell are checked."""
+        if self.busy():
+            raise RuntimeError("Please wait: a job is still running for this project (or cancel it).")
+        if not (self.case_dir / "simwb_case.json").exists():
+            raise ValueError("There is no OpenFOAM case in this study yet: nothing to match")
+        if self.data.get("case_setup") is not None:
+            raise ValueError("This study already knows what its case was made from: change the setup back to match it, or run "
+                             "the simulation again")
+        meta = json.loads((self.case_dir / "simwb_case.json").read_text())
+        s = self.data["settings"]
+        bad = self.case_mismatches(meta)
+        if bad:
+            raise ValueError("The setup does not match the case folder, so it cannot be used for it: " + "; ".join(bad)
+                             + ". Change the setup back, or run the simulation again")
+        self.data["case_setup"] = setup_snapshot(self.data)
+        self.data["case_run"] = {k: s.get(k) for k in ("n_frames", "frame_deg")}
+        self.data["case_setup_adopted"] = {"at": _now()}
+        sv = self.data["solve"]
+        self._adopted_warning(sv.get("summary"))
+        sv.pop("setup_changed", None)
+        if sv.get("status") == "stale":
+            sv["status"] = sv.pop("stale_from", None) or ("done" if sv.get("summary") else "interrupted")
+        self.data.pop("edited_during_run", None)
+        self.save()
+        return self.state()
+
     def mark_stale(self, what=("mesh", "solve")):
         if self.busy():
             self.data["edited_during_run"] = True  # the running job's results will not match the setup
@@ -612,10 +801,21 @@ class Project:
                 self.data[k]["stale"] = True
         if "mesh" in what and self.data["mesh"].get("status") == "ready":
             self.data["mesh"]["status"] = "stale"
-        if "solve" in what and self.data["solve"].get("status") in ("done",):
-            self.data["solve"]["status"] = "stale"
-        elif "solve" in what and self.data["solve"].get("status") in ("interrupted", "failed"):
-            self.data["solve"]["setup_changed"] = True
+        if "solve" not in what:
+            return
+        sv = self.data["solve"]
+        ch = self.setup_changes()
+        if ch == []:  # back to what the case was made from: the old run is valid again
+            sv.pop("setup_changed", None)
+            if sv.get("status") == "stale" and sv.get("stale_from"):
+                sv["status"] = sv["stale_from"]
+            sv.pop("stale_from", None)
+            self.data.pop("edited_during_run", None)
+        elif sv.get("status") in ("done",):
+            sv["status"] = "stale"
+            sv["stale_from"] = "done"
+        elif sv.get("status") in ("interrupted", "failed"):
+            sv["setup_changed"] = True
 
     def state(self, include_faces=False) -> dict:
         d = dict(self.data)
@@ -631,6 +831,9 @@ class Project:
             d["hex_unsupported"] = self.hex_unsupported()  # why the hex-dominant mesh cannot be used (None = it can)
         d["edits"] = self.cad_edits()
         d["checks"] = self.check()
+        if d["solve"].get("status") in ("stale", "interrupted", "failed", "done") and self.data.get("case_setup"):
+            d["setup_changes"] = self.setup_changes()  # what differs from the case on disk (empty: nothing)
+        d["solve_lock"] = self.lock_state()
         jobs = {}
         for kind in ("prepare", "mesh", "solve", "check"):
             j = JOBS.latest(self.id, kind)
@@ -3745,8 +3948,7 @@ class Project:
             if self.busy():
                 raise RuntimeError("Please wait: a job is still running for this project (or cancel it).")
             if self.data["solve"].get("status") in ("stale", "none") or self.data["solve"].get("setup_changed"):
-                raise ValueError("The setup or mesh changed since the last run: run the simulation again instead of "
-                                 "continuing the old case")
+                raise ValueError(self._locked_message())
             meta = json.loads((self.case_dir / "simwb_case.json").read_text())
             if meta.get("transient"):
                 # an interrupted transient run (Cancel, a crash, the machine stopped) resumes from its last saved time
@@ -3758,6 +3960,20 @@ class Project:
                 t0 = runner.saved_transient_time(self.case_dir)
                 if t0 is None or t0 <= 0:
                     raise ValueError("The interrupted run saved no time step yet: run it again")
+                tr = meta["transient"]
+                want = float(self.data["settings"].get("end_time") or tr["end_time"])
+                wi0 = float(tr.get("write_interval") or 0)
+                new_wi = self._resume_interval(tr, want)
+                end_changed = abs(want - tr["end_time"]) > 0.5 * wi0
+                if end_changed or (new_wi and t0 < tr["end_time"] * (1 - 1e-6)):
+                    # the end time or the save interval was changed since the run: OpenFOAM can carry on with new ones
+                    # (controlDict is rewritten and the run starts from the latest saved time)
+                    end = want if end_changed else tr["end_time"]
+                    wi = new_wi or wi0
+                    job = self._extend_transient(end, min(wi, end - t0) if wi > 0 and end > t0 else None, keep_end=True)
+                    self.data["case_run"] = {k: self.data["settings"].get(k) for k in ("n_frames", "frame_deg")}
+                    self.save()
+                    return job
                 if t0 >= meta["transient"]["end_time"] * (1 - 1e-6):
                     raise ValueError("The interrupted run had already reached its end time: run it again")
                 return JOBS.start("solve", self.id, self._solve_openfoam, False, None, resume_transient=True)
@@ -4434,9 +4650,41 @@ class Project:
             sg[m["tri_surf"] == s] = idx[nm]
         return names, sg
 
-    def _extend_transient(self, end_time, write_interval=None) -> Job:
+    def _resume_interval(self, tr: dict, end: float) -> float | None:
+        """The save interval a resumed run should use when the save settings (Saved time points, Saved frame every) were
+        changed since the case was written, None when they were not. Sliding-mesh runs save every so many degrees of turn
+        of the fastest zone (the turn per second follows from what the case saved), others every end / (points - 1) s.
+        writeInterval of controlDict may change between runs: OpenFOAM counts the write times from the time it starts at."""
+        s, run = self.data["settings"], self.data.get("case_run")
+        wi0 = float(tr.get("write_interval") or 0)
+        if not run or wi0 <= 0 or all(s.get(k) == run.get(k) for k in ("n_frames", "frame_deg")):
+            return None
+        deg = float(s.get("frame_deg") or 0)
+        if tr.get("frame_deg") and deg > 0:
+            wi = math.radians(deg) / (math.radians(float(tr["frame_deg"])) / wi0)
+        else:
+            wi = end / (max(2, int(s.get("n_frames") or 21)) - 1)
+        return wi if abs(wi - wi0) > 0.01 * wi0 else None
+
+    @staticmethod
+    def fit_resume_interval(t0: float, end: float, wi: float, dt: float = 0.0) -> tuple:
+        """(end, interval, saves) for a resumed run that keeps the end time the user set: the remaining time is a whole
+        number of saves, so the last one falls on the end. The interval is the requested one when it divides the remaining
+        time, else the nearest that does (with a fixed time step: a whole number of steps, and the end on a solved step)."""
+        rest = end - t0
+        if dt > 0:
+            steps = max(1, round(rest / dt))
+            want = max(1.0, wi / dt)
+            per = min((d for d in range(1, steps + 1) if steps % d == 0), key=lambda d: abs(math.log(d / want)))
+            return t0 + steps * dt, per * dt, steps // per
+        n = max(1, int(rest / wi + 0.5))
+        return end, rest / n, n
+
+    def _extend_transient(self, end_time, write_interval=None, keep_end=False) -> Job:
         """Run a finished (or stopped) transient run on from its last saved time to a later end time, saving every
-        write_interval seconds from there (default: as before). The saved times so far are kept."""
+        write_interval seconds from there (default: as before). The saved times so far are kept. keep_end (a resume
+        with changed settings): the end time is the one the user set, the interval is fitted to it
+        (fit_resume_interval) instead of the end being moved to a whole number of intervals."""
         from .solvers.openfoam import runner
 
         if not (self.case_dir / "simwb_case.json").exists():
@@ -4444,8 +4692,7 @@ class Project:
         if self.busy():
             raise RuntimeError("Please wait: a job is still running for this project (or cancel it).")
         if self.data["solve"].get("status") in ("stale", "none") or self.data["solve"].get("setup_changed"):
-            raise ValueError("The setup or mesh changed since the last run: run the simulation again instead of "
-                             "continuing the old case")
+            raise ValueError(self._locked_message())
         meta = json.loads((self.case_dir / "simwb_case.json").read_text())
         if not meta.get("transient"):
             raise ValueError("Only a transient run has an end time to extend: continue a steady run by iterations")
@@ -4459,6 +4706,16 @@ class Project:
         if not 0 < wi <= end - t0:
             raise ValueError("The save interval must be positive and at most the extra time")
         dt = float(meta["transient"].get("dt") or 0) if meta["transient"].get("fixed_dt") else 0.0
+        if keep_end:
+            req = wi
+            end, wi, n = self.fit_resume_interval(t0, end, wi, dt)
+            note = f"{n} more save{'s' if n != 1 else ''} every {wi:.4g} s" + (
+                f", fitted from {req:.4g} s so that the last one falls on the end time {end:.6g} s"
+                if abs(wi - req) > 1e-9 * max(req, 1e-30) else "")
+            if n > 400:
+                raise ValueError("That saves more than 400 more time points: use a longer save interval")
+            return JOBS.start("solve", self.id, self._solve_openfoam, False, None, resume_transient=True,
+                              extend=(end, wi, note))
         if dt > 0:  # whole time steps: every saved time is a solved step, and the run ends on one
             wi = max(1, round(wi / dt)) * dt
             end = t0 + max(1, round((end - t0) / wi)) * wi
@@ -4495,6 +4752,41 @@ class Project:
             rec.update(solver_added_ram_mb=solver.get("added_ram_mb"), solver_peak_ram_mb=solver.get("peak_ram_mb"))
         return rec
 
+    def _failed_step(self) -> tuple[dict, str]:
+        """The step that failed in the last run (from case.failed) and the end of its log; without that note, the
+        newest log."""
+        step: dict = {}
+        try:
+            step = json.loads((self.case_dir / "case.failed").read_text())
+            step = step if isinstance(step, dict) else {}
+        except (OSError, ValueError):
+            pass
+        lf = self.case_dir / str(step.get("log") or "")
+        if not step.get("log") or not lf.is_file():
+            logs = sorted(self.case_dir.glob("log.*"), key=lambda p: p.stat().st_mtime)
+            lf = logs[-1] if logs else None
+        txt = ""
+        if lf is not None:
+            txt = f"{lf.name}:" + chr(10) + chr(10).join(lf.read_text(errors="ignore").splitlines()[-30:])
+        return step, txt
+
+    def _join_warnings(self) -> list:
+        """Plain sentences for the saved times that could not be joined in the last run (join_skipped.json)."""
+        from .solvers.openfoam import runner
+
+        try:
+            d = json.loads((self.case_dir / runner.JOIN_SKIPPED).read_text())
+        except (OSError, ValueError):
+            return []
+        out = []
+        for sk in d.get("skipped") or []:
+            out.append(f"The saved time {sk['time']} s could not be joined and is not in these results "
+                       f"(reconstructPar {sk['reason']}). Its pieces are kept in the case folder "
+                       f"({d.get('where') or runner.UNJOINED + '/' + sk['time']}); the results shown are the other saved times.")
+        if d.get("not_tried"):
+            out.append(f"{len(d['not_tried'])} more saved time(s) were not tried after the first joins failed.")
+        return out
+
     def _solve_openfoam_inner(self, job: Job, export_only=False, continue_iterations=None, map_from=None,
                               keep_edit_flag=False, init_case=None, resume_transient=False, extend=None):
         from .solvers.openfoam import cases, runner
@@ -4525,13 +4817,14 @@ class Project:
             txt = re.sub(r"^startFrom\s+\w+;", "startFrom       latestTime;", cd.read_text(), flags=re.M)
             txt = re.sub(r"^stopAt\s+\w+;", "stopAt          endTime;", txt, flags=re.M)  # undo Stop's writeNow
             if extend:  # a later end time (and the save interval from here on)
-                end, wi = extend
+                end, wi, *how = extend
                 for key, v in (("endTime", end), ("writeInterval", wi), ("maxDeltaT", wi)):
                     txt = re.sub(rf"^{key}\s+[^;]+;", f"{key:<16}{v:.8g};", txt, flags=re.M)
                 meta["transient"].update(end_time=end, write_interval=wi,
                                          n_frames=len(runner._time_dirs(self.case_dir)) + int(round((end - start) / wi)))
                 (self.case_dir / "simwb_case.json").write_text(json.dumps(meta, indent=1))
-                self.data["settings"]["end_time"] = end
+                if not how:   # (a resume keeps the end time the user set: only a plain extension moves it)
+                    self.data["settings"]["end_time"] = end
                 self.save()
             cd.write_text(txt, newline="\n")
             old = self.case_dir / f"log.{meta['app']}"
@@ -4559,7 +4852,7 @@ class Project:
             it_from = 0
             t_from = start
             msg = (f"Continuing the run from t = {start:.4g} s to {meta['transient']['end_time']:.4g} s, saving every "
-                   f"{meta['transient']['write_interval']:.4g} s" if extend else
+                   f"{meta['transient']['write_interval']:.4g} s" + (f" ({extend[2]})" if len(extend) > 2 else "") if extend else
                    f"Resuming the interrupted run from t = {start:.4g} s to {meta['transient']['end_time']:.4g} s")
             JOBS.update(job, 0.05, msg, log=msg)
         elif continue_iterations:
@@ -4601,6 +4894,9 @@ class Project:
             m = self.load_mesh()
             info = self.data["geometry"]["info"]
             meta = cases.write_case(self.case_dir, data, m, self.faces(), info, self.bodies())
+            self.data["case_setup"] = setup_snapshot(self.data)  # what this case is made from (see setup_changes)
+            self.data["case_run"] = {k: self.data["settings"].get(k) for k in ("n_frames", "frame_deg")}  # (how it saves)
+            self.data.pop("case_setup_adopted", None)      # (a case made by this version: nothing was taken on trust)
             from .solvers.openfoam import advanced
 
             advanced.apply(self.case_dir, data.get("foam_advanced"), data.get("foam_overrides"),
@@ -4758,22 +5054,32 @@ class Project:
         if app_log.exists():
             job.extra["residuals"] = runner.parse_log(app_log.read_text(errors="ignore"))
         if not (self.case_dir / "case.done").exists():
-            tail_txt = ""
-            logs = sorted(self.case_dir.glob("log.*"), key=lambda p: p.stat().st_mtime)
-            for lf in logs[-1:]:
-                tail_txt = f"{lf.name}:\n" + "\n".join(lf.read_text(errors="ignore").splitlines()[-30:])
-                job.log.append(f"--- {lf.name} (last lines) ---\n{tail_txt}")
+            step, tail_txt = self._failed_step()
+            if tail_txt:
+                job.log.append(f"--- {step.get('log') or 'log'} (last lines) ---" + chr(10) + tail_txt)
             self.data["solve"] = {"status": "failed", "backend": det["backend"], "case_dir": str(self.case_dir),
                                   "error_tail": tail_txt}
+            if step.get("step"):
+                self.data["solve"]["failed_step"] = step["step"]
             self.save()
-            hint = job.extra.get("diverged") or runner.failure_hint(self.case_dir, tail_txt)
+            hint = job.extra.get("diverged") or runner.failure_hint(self.case_dir, tail_txt, step.get("step"))
             if hint:
                 job.log.append("Likely cause: " + hint)
                 self.data["solve"]["hint"] = hint
                 self.save()
+            if step.get("step") == "reconstructPar":
+                raise RuntimeError("The solver ran, but its saved times could not be joined into results" +
+                                   (f": {hint}" if hint else "") + ". The pieces are kept in the case folder: use "
+                                   "'Load results from case' in Solve to load what can be read")
             raise RuntimeError("OpenFOAM run failed" + (f": {hint}" if hint else " - see the log for details"))
         JOBS.update(job, 0.97, "Loading results")
         rs, summary = results_loader.load(self.case_dir, self.data)
+        self._adopted_warning(summary)
+        jw = self._join_warnings()
+        if jw:
+            summary.setdefault("warnings", []).extend(jw)
+            for w_ in jw:
+                job.log.append("WARNING: " + w_)
         if meta.get("transient"):
             summary["convergence"] = _transient_run(app_log, meta, user_stop=bool(job.extra.get("user_stop")),
                                                     time_limit=bool(job.extra.get("time_limit")))
@@ -4792,9 +5098,93 @@ class Project:
         rs.save(self.results_dir / "result.npz")
         self._results = rs
         self._remember_previous()
-        stale = bool(self.data.pop("edited_during_run", None))
+        stale = bool(self.data.pop("edited_during_run", None)) and self.setup_changes() != []  # (changed and changed back: not stale)
         self.data["solve"] = {"status": "stale" if stale else "done", "backend": det["backend"], "finished": _now(),
                               "summary": summary, "case_dir": str(self.case_dir)}
+        self.save()
+        return summary
+
+    def load_case_results(self) -> Job:
+        """Load the results that are already in the case folder, without running the solver: the saved times still in
+        the processor folders are joined (each on its own: a damaged one is left out and named, the pieces stay, so the
+        run can still be resumed) and the results are read from the newest joined time. For a run that was stopped,
+        failed or whose results could not be loaded."""
+        if self.spec["solver"] == "builtin_fem":
+            raise ValueError("This study is solved by the built-in solver: there is no OpenFOAM case to load")
+        if not (self.case_dir / "simwb_case.json").exists():
+            raise ValueError("There is no OpenFOAM case in this study yet: run the simulation first")
+        if self.busy():
+            raise RuntimeError("Please wait: a job is still running for this project (or cancel it).")
+        return JOBS.start("solve", self.id, self._load_case_results_work)
+
+    def _load_case_results_work(self, job: Job):
+        from .solvers.openfoam import results_loader, runner
+
+        case = self.case_dir
+        meta = json.loads((case / "simwb_case.json").read_text())
+        det = runner.detect(refresh=True)
+        rep: dict = {}
+        region = meta["regions"][0] if meta.get("regions") else None
+        if runner.unjoined_times(case, aside=False):   # (saved times that exist only as pieces: they must be joined to be read)
+            if not (det.get("available") and det.get("backend") == "windows"):
+                raise RuntimeError("The saved times in the case folder are still split over the processor folders, and joining "
+                                   "them needs OpenFOAM, which the workbench cannot use here"
+                                   + ("" if det.get("available") else " (it is not installed: see Software in the Solve step)")
+                                   + ". The saved times are untouched: install OpenFOAM and try again")
+            JOBS.update(job, 0.05, "Joining the saved times", log="Joining the saved times found in the processor folders")
+            env = runner.windows_env(Path(det["project_dir"]), Path(det["bin_dir"]))
+            step = {"split_times": max(runner.processor_count(case), 1), "log": "log.reconstructPar",
+                    "args": ["-allRegions"] if meta.get("regions") else []}
+            on_line = lambda line: JOBS.update(job, None, line if line.startswith("$") else None, log=line)  # noqa: E731
+            exe = Path(det["bin_dir"]) / "reconstructPar.exe"
+            runner.run_split_times(case, step, exe, env, self._job_proc(job), on_line, report=rep, keep_pieces=True)
+            job.check_cancel()
+            if rep.get("skipped"):
+                (case / runner.JOIN_SKIPPED).write_text(json.dumps({"skipped": rep["skipped"],
+                                                                    "not_tried": rep.get("not_tried", []),
+                                                                    "joined": len(rep["joined"]), "where": "processor*"}))
+        latest = results_loader.latest_time(case, region)
+        if not latest:
+            bad = "; ".join(f"{x['time']}: {x['reason']}" for x in rep.get("skipped", [])[:3])
+            raise RuntimeError("No saved time in the case folder could be read" + (f" ({bad})" if bad else "")
+                               + ". The pieces are untouched: nothing was lost")
+        JOBS.update(job, 0.9, "Loading results")
+        rs, summary = results_loader.load(case, self.data)
+        for w_ in self._join_warnings():
+            summary.setdefault("warnings", []).append(w_)
+            job.log.append("WARNING: " + w_)
+        newest = runner.newest_piece_time(case)   # never load an older time without saying so
+        if newest is not None and newest > float(latest) * (1 + 1e-9) + 1e-12:
+            w_ = (f"The newest saved time in the case folder is {newest:g} s, but these results are from {float(latest):g} s: "
+                  "the newer time could not be loaded (see the other warnings and the solver log).")
+            summary.setdefault("warnings", []).append(w_)
+            job.log.append("WARNING: " + w_)
+        app_log = case / f"log.{meta['app']}"
+        if meta.get("transient"):
+            summary["convergence"] = _transient_run(app_log, meta, user_stop=True)
+        else:
+            summary["convergence"] = _energy_check(_convergence(app_log, int(self.data["settings"].get("iterations", 1000)),
+                                                                meta, user_stop=True), summary)
+            _qualify_unconverged(summary)
+        ch = self.setup_changes()
+        if ch != []:
+            summary.setdefault("warnings", []).append(
+                ("The setup changed since this run (" + "; ".join(ch[:3]) + ")" if ch else "The setup may have changed since this run")
+                + ": the numbers use today's settings.")
+        summary["loaded_from_case"] = True
+        self._adopted_warning(summary)
+        old = (self.data["solve"].get("summary") or {})
+        if "solve_seconds" in old:
+            summary.setdefault("solve_seconds", old["solve_seconds"])
+        self.results_dir.mkdir(exist_ok=True)
+        rs.save(self.results_dir / "result.npz")
+        self._results = rs
+        self.data["solve"] = {"status": "done" if ch == [] else "stale", "backend": det.get("backend"),
+                              "finished": _now(), "summary": summary, "case_dir": str(case)}
+        if ch == [] or ch is None:
+            self.data["solve"].pop("stale_from", None)
+        elif ch:
+            self.data["solve"]["stale_from"] = "done"
         self.save()
         return summary
 
@@ -4807,6 +5197,7 @@ class Project:
             raise ValueError("No finished OpenFOAM run to reload")
         meta = json.loads((self.case_dir / "simwb_case.json").read_text())
         rs, summary = results_loader.load(self.case_dir, self.data)
+        self._adopted_warning(summary)
         app_log = self.case_dir / f"log.{meta['app']}"
         old = self.data["solve"].get("summary") or {}
         oc = old.get("convergence") or {}

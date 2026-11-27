@@ -13,6 +13,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from . import daemonthread
 from . import project as P
 from .tools import SYSTEM_PROMPT, TOOLS, call
 
@@ -200,7 +201,7 @@ class ChatSession:
             def make(name=name):
                 async def handler(args):
                     await self.send({"type": "chat_tool", "name": name, "input": args})
-                    text = await asyncio.to_thread(call, name, self._project(), args)
+                    text = await daemonthread.to_thread(call, name, self._project(), args)
                     await self.send({"type": "chat_tool_result", "name": name,
                                      "ok": not text.startswith("ERROR"), "preview": text[:300]})
                     return {"content": [{"type": "text", "text": text}], "is_error": text.startswith("ERROR")}

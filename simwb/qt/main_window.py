@@ -918,13 +918,98 @@ class MainWindow(QMainWindow):
             p.end()
         img.save(path, "PNG")
 
+    # ------------------------------------------------------------------ closing
+    SHUTDOWN_GRACE_S = 10.0     # how long closing waits for the running work to stop before it goes on without it
+
     def closeEvent(self, e):  # noqa: N802
+        """Closing the window (the X, Alt+F4, File > Quit, the Close button) ends the process within a few seconds: running jobs are
+        stopped (a flow run is kept as far as it got and can be resumed), the study is saved, the assistant is shut down, the memory of
+        the results is let go. If that takes more than a moment a "Closing" notice says so; nothing is left running unseen."""
+        state = getattr(self, "_shutdown", None)
+        if state == "done":
+            super().closeEvent(e)
+            return
+        e.ignore()                       # (the window closes itself, once the work has stopped)
+        if state == "closing":
+            return
+        running = chrome.running()
+        if running and not self._confirm_close(len(running)):
+            return
+        self._begin_shutdown(running)
+
+    def _confirm_close(self, n: int) -> bool:
+        r = QMessageBox.question(self, "Close the workbench", f"{n} job(s) are still running and will be stopped. Close anyway?")
+        return r == QMessageBox.Yes
+
+    def _begin_shutdown(self, running):
+        import threading
+        import time
+
+        self._shutdown = "closing"
+        self._shutdown_t0 = time.time()
+        self._shutdown_notice = None
+        for j in running:
+            P.JOBS.cancel(j.id)          # (kills the solver and its children; the job thread ends and marks the run interrupted)
+        self._bridge_down = threading.Event()   # (the assistant's sessions are closed off the window's thread: each may take a few seconds)
+
+        def bridge_down():
+            try:
+                self.bridge.shutdown()
+            finally:
+                self._bridge_down.set()
+
+        if self.bridge.sessions:
+            threading.Thread(target=bridge_down, daemon=True, name="simwb-bridge-down").start()
+        else:                            # (no assistant session: nothing to wait for)
+            bridge_down()
+        self._shutdown_timer = QTimer(self)
+        self._shutdown_timer.timeout.connect(self._shutdown_poll)
+        self._shutdown_timer.start(100)
+        QTimer.singleShot(0, self._shutdown_poll)    # (not inside the close event: closing the window again from there does nothing)
+
+    def _shutdown_poll(self):
+        import time
+
+        if self._shutdown != "closing":
+            return
+        waited = time.time() - self._shutdown_t0
+        busy = chrome.running() or not self._bridge_down.is_set()
+        if busy and waited < self.SHUTDOWN_GRACE_S:
+            if waited > 0.4 and self._shutdown_notice is None:      # (a quick close shows nothing)
+                what = "stopping the running work" if chrome.running() else "closing the assistant"
+                self._shutdown_notice = self.toasts.show(f"Closing: {what} ...", "info", 60)
+                self.statusBar().showMessage("Closing the workbench ...")
+                self.setWindowTitle("Closing ... - Simulation Workbench")
+                self.setEnabled(False)
+            return
+        self._shutdown_timer.stop()
+        self._shutdown = "finishing"
+        self._finish_shutdown()
+
+    def _finish_shutdown(self):
+        import gc
+
         try:
             if self.engine.pid:
                 self.engine.save()
+        except Exception:  # noqa: BLE001 - closing must not be stopped by a save that fails (a read-only folder)
+            pass
         finally:
             if getattr(self, "control", None) is not None:
                 self.control.close()
-            self.bridge.shutdown()
             self.view.close()
-        super().closeEvent(e)
+            self._release_memory()
+            self._shutdown = "done"
+            self.close()
+        gc.collect()
+
+    def _release_memory(self):
+        """Let go of what the open studies hold in memory (the results of a transient run are gigabytes) before the process ends."""
+        try:
+            self.engine.pid = None
+            with P._LOCK:
+                for pr in list(P._OPEN.values()):
+                    pr._results = None
+                P._OPEN.clear()
+        except Exception:  # noqa: BLE001
+            pass

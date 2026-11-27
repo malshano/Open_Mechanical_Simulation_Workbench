@@ -4,12 +4,13 @@ cancel, carrying a run on (resume, continue, extend a transient run), the OpenFO
 with the residuals, the advanced OpenFOAM numerics and case files, the solver's own messages, and the way on to the results."""
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QDoubleValidator, QIntValidator
-from PySide6.QtWidgets import (QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QProgressBar, QPushButton,
+from PySide6.QtWidgets import (QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
                                QVBoxLayout, QWidget)
 
 from ... import project as P
@@ -179,21 +180,33 @@ class SolvePanel(_Panel):
         self.cont_n.setToolTip("How many more iterations")
         self.cont = _btn("Continue", "solve.continue", "Carry the last run on from where it stopped for this many more iterations")
         self.cont.clicked.connect(lambda: self._carry())
+        self.adopt = _btn("The setup matches the case folder: use it", "solve.adopt_setup",
+                          "Say that the setup is still what the case folder was made with, so the old run can be carried on. Use it only "
+                          "when you know nothing was changed: the workbench cannot check the settings (this study was run by an older "
+                          "version that kept no record). A resume still runs the case as it is on disk; if the setup did differ, the "
+                          "results are shown with settings the case was not made with.")
+        self.adopt.clicked.connect(self._adopt)
+        self.adopt_row = _row(self.adopt, stretch=False)
         self.cont_row = QWidget()
         fl = FlowLayout(self.cont_row)
         for x in (QLabel("Continue the last run for"), self.cont_n, QLabel("more iterations"), self.cont):
             fl.addWidget(x)
-        for x in (self.resume_row, self.extend_row, self.cont_row):
+        for x in (self.adopt_row, self.resume_row, self.extend_row, self.cont_row):
             self.v.addWidget(x)
         # ---- the OpenFOAM case
         self.case = _btn("Write OpenFOAM case only", "solve.case", "Write the solver's case files without running it (to run it yourself)")
         self.case.clicked.connect(self._case_only)
         self.zip = _btn("Save case (.zip)…", "solve.case_zip", "Save the OpenFOAM case folder of this study as a zip file")
         self.zip.clicked.connect(self._zip_dialog)
+        self.load_case = _btn("Load results from case", "solve.load_case",
+                              "Join the saved times in the case folder and load them as the results, without running the solver "
+                              "(a time that cannot be read is left out and named)")
+        self.load_case.clicked.connect(self._load_case)
         self.case_row = QWidget()
         _fl = FlowLayout(self.case_row)
         _fl.addWidget(self.case)
         _fl.addWidget(self.zip)
+        _fl.addWidget(self.load_case)
         self.v.addWidget(self.case_row)
         # ---- progress
         self.bar = wid(QProgressBar(), "solve.progress")
@@ -274,6 +287,58 @@ class SolvePanel(_Panel):
         try:
             self.engine.project().solve(export_only=True)
             self.state.setText("Writing the OpenFOAM case…")
+            self.engine.changed.emit()
+        except Exception as e:  # noqa: BLE001
+            self._fail(e)
+
+    @staticmethod
+    def _saved_times_note(pieces: int, aside: int, can_load: bool, needs_foam: bool, locked: bool) -> str:
+        """One short line about the saved times of the old case: what is not loaded yet, what is set aside, and the way to
+        load them (or that OpenFOAM is needed for it)."""
+        bits = []
+        if pieces:
+            bits.append(f"{pieces} saved time(s) are not loaded yet")
+        if aside:
+            bits.append(f"{aside} {'' if pieces else 'saved time(s) '}could not be joined and {'were' if pieces or aside > 1 else 'was'} set aside in case/unjoined/")
+        text = " and ".join(bits)
+        if text:
+            text += "; running again deletes them."
+        if pieces or locked:
+            if needs_foam:
+                text += " Joining the saved times needs OpenFOAM: it is not installed (install it below)."
+            elif can_load:
+                text += (" Load them with 'Load results from case'." if pieces else
+                         " The results in the case folder can be loaded with 'Load results from case'.")
+        return text.strip()
+
+    def _adopt(self):
+        try:
+            pr = self.engine.project()
+            bad = pr.case_mismatches(json.loads((pr.case_dir / "simwb_case.json").read_text()))
+            if not bad and not self._confirm_adopt():
+                return
+            pr.adopt_current_setup()
+            self.win.toasts.ok("The setup is taken as the one the case folder was made with: the old run can be carried on")
+            self.engine.changed.emit()
+        except Exception as e:  # noqa: BLE001
+            self._fail(e)
+
+    def _confirm_adopt(self) -> bool:
+        r = QMessageBox.question(
+            self.win or self, "Use the setup for the old run?",
+            "This study was run by an older version of the workbench, which did not keep what the run was made with, so the "
+            "workbench cannot tell if the setup was changed since.\n\nIf you go on, the old run can be resumed and its results are "
+            "worked out with today's settings (speed, fluid, areas). If the setup was changed, those numbers are wrong, and only a "
+            "warning with the results says so. The workbench has checked what the case folder records (speed, fluid, mesh size, "
+            "rotors, zones) and found no difference.\n\nUse the setup anyway?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        return r == QMessageBox.Yes
+
+    def _load_case(self):
+        try:
+            self.engine.project().load_case_results()
+            self.log.clear()
+            self.state.setText("Loading the results from the case folder…")
             self.engine.changed.emit()
         except Exception as e:  # noqa: BLE001
             self._fail(e)
@@ -751,15 +816,30 @@ class SolvePanel(_Panel):
         self.btn.setToolTip(why)
         t = theme.tokens()
         st = self.st
-        notes = []
+        case_dir = P.open_project(self.engine.pid).case_dir if (self.engine.pid and st and self.flow) else None
+        has_case = bool(case_dir is not None and case_dir.exists())
+        pieces = aside = 0
+        if has_case and not self.running:
+            from ...solvers.openfoam import runner
+
+            pieces, aside = runner.unjoined_times(case_dir, aside=False), runner.set_aside_count(case_dir)
+        needs_foam = bool(pieces) and no_foam              # (joining the saved times is done by OpenFOAM)
+        can_load = has_case and not self.running and not needs_foam
+        notes = []                                          # one block, in the order of what to do: the old run first, then the setup
         if st:
+            lock = st.get("solve_lock")
+            if lock and not self.running:
+                notes.append(lock["message"])
+            elif st["solve"].get("status") == "interrupted" and not self.running:
+                notes.append("The last run was stopped before it finished. Continue it below, or run again.")
+            saved = self._saved_times_note(pieces, aside, can_load, needs_foam, bool(lock))
+            if saved:
+                notes.append(saved)
             mstat = st["mesh"].get("status")
             if mstat != "ready":
                 notes.append("The mesh is out of date: regenerate it (step 3, Mesh)." if mstat == "stale" else "Generate a mesh first (step 3, Mesh).")
             if blockers:
                 notes.append("Fix before solving:<br>" + "<br>".join("• " + b for b in blockers))
-            if st["solve"].get("status") == "interrupted" and not self.running:
-                notes.append("The last run was stopped before it finished. Continue it below, or run again.")
         if blockers and meshed and not self.running and not getattr(self, "done", False):
             self.state.setText("Before it can run: " + blockers[0] + (f" (and {len(blockers) - 1} more: see above)" if len(blockers) > 1 else ""))
         self.note.setText("<br>".join(notes))
@@ -783,8 +863,14 @@ class SolvePanel(_Panel):
         self.case.setEnabled(getattr(self, "mesh_ready", False) and not self.running and not blockers)
         self.case.setToolTip("Write the solver's case files without running it (to run it yourself)" if self.case.isEnabled()
                              else "A run is in progress" if self.running else "Not yet: generate the mesh and complete the setup first")
-        case_dir = P.open_project(self.engine.pid).case_dir if (self.engine.pid and st and self.flow) else None
-        has_case = bool(case_dir is not None and case_dir.exists())
+        self.load_case.setEnabled(can_load)
+        self.load_case.setToolTip("Join the saved times in the case folder and load them as the results, without running the solver "
+                                  "(a time that cannot be read is left out and named)" if self.load_case.isEnabled()
+                                  else "A run is in progress" if self.running
+                                  else "Not yet: no OpenFOAM case is written" if not has_case
+                                  else "Not available: joining the saved times needs OpenFOAM, which is not installed (install it above)")
+        lock = (st or {}).get("solve_lock")
+        self.adopt_row.setVisible(bool(lock and lock.get("can_adopt")) and not self.running)
         self.zip.setEnabled(has_case and not self.running)
         self.zip.setToolTip("Save the OpenFOAM case folder of this study as a zip file" if self.zip.isEnabled()
                             else "A run is in progress" if self.running else "Not yet: no OpenFOAM case is written (run, or write the case only)")
