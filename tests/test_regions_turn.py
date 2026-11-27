@@ -283,3 +283,50 @@ def test_a_region_turns_and_moves_with_the_model_it_was_placed_on(aero):
 def test_the_turn_of_a_region_goes_back_to_none_when_the_model_is_turned_back():
     t = regions.transformed({**BOX, "rotation": rz(30).tolist()}, rz(-30))
     assert "rotation" not in t
+
+
+def test_apply_and_cancel_of_a_region_are_in_the_bar_under_the_3d_view_and_at_the_top_of_the_session(aero):
+    c = aero
+    c.do("mesh.region_add", {"kind": "box"})
+    before = c.engine.state()["mesh"]["regions"][0]
+    c.widget_do("mesh.region.0.xform", "set", True)
+    bar = c.win.view.banner
+    text = c.win.shell.hint()[1]
+    assert text.startswith("Drag a ring to turn · drag an arrow to move") and "Esc cancels a drag" in text          # (the Geometry hint's wording)
+    assert bar.button.text() == "Cancel" and bar.button2.text() == "Apply" and bar.button2.isVisibleTo(bar)       # (next to each other, where the 3D view is)
+    x = c.win.panels["mesh"].adv.xform
+    c.win.view.handles.simulate_move("face.0.1", 0.02)
+    assert x.grow[0, 1] == pytest.approx(0.02, abs=1e-6)
+    bar.button2.click()                                                                                          # (Apply in the bar)
+    c._settle()
+    assert regions.size_of(c.engine.state()["mesh"]["regions"][0])[0] == pytest.approx(regions.size_of(before)[0] + 0.02, abs=1e-6)
+    assert not x.active and not bar.button2.isVisibleTo(bar)
+    c.widget_do("mesh.region.0.xform", "set", True)
+    c.win.view.handles.simulate_move("face.0.1", 0.02)
+    bar.button.click()                                                                                           # (Cancel in the bar)
+    c._settle()
+    assert not x.active and regions.size_of(c.engine.state()["mesh"]["regions"][0])[0] == pytest.approx(regions.size_of(before)[0] + 0.02, abs=1e-6)
+    # in the card the buttons come before the numbers: no scrolling past the fields to find them
+    c.widget_do("mesh.region.0.xform", "set", True)
+    c._settle()
+    idx = c._index()
+    adv = c.win.panels["mesh"].adv
+    y = lambda k: idx[k].mapTo(adv, idx[k].rect().topLeft()).y()  # noqa: E731
+    assert y("mesh.region.0.xf.apply") < y("mesh.region.0.xf.cancel") + 1 and y("mesh.region.0.xf.apply") < y("mesh.region.0.xf.mx")
+    assert abs(y("mesh.region.0.xf.apply") - y("mesh.region.0.xf.cancel")) < 5                                   # (side by side)
+
+
+def test_escape_cancels_the_drag_in_progress_before_anything_else(aero):
+    c = aero
+    c.do("mesh.region_add", {"kind": "box"})
+    c.widget_do("mesh.region.0.xform", "set", True)
+    hs, x = c.win.view.handles, c.win.panels["mesh"].adv.xform
+    start = hs.grab_px("face.0.1")
+    assert hs.press(*start, force=("face.0.1", "face"))
+    hs.drag_to(*hs._px(hs._taken(hs.specs["face.0.1"], "face") + hs._dir(hs.specs["face.0.1"]) * 0.03))
+    assert x.grow[0, 1] == pytest.approx(0.03, abs=1e-6)
+    c.win.view._hset_drag = True                                              # (what the viewport sets when its mouse handler took the press)
+    c.win.shell.escape()                                                       # (the window's Esc shortcut)
+    assert hs.drag is None and not x.grow.any() and x.active                  # (the drag is gone, the region is as it was, the session goes on)
+    c.win.shell.escape()                                                       # (a second Esc: the session's Cancel)
+    assert not x.active

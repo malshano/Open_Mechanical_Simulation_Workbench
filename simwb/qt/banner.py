@@ -64,6 +64,8 @@ class Banner(QFrame):
     def _refresh(self):
         if not self._items:
             self.setVisible(False)
+            self.button.setVisible(False)
+            self.button2.setVisible(False)
             self._cb = self._cb2 = None
             return
         _, text, button, cb, tip, extra = max(self._items.values(), key=lambda v: v[0])
