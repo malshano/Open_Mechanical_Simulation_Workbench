@@ -493,11 +493,21 @@ def processor_count(case: Path) -> int:
     return sum(1 for d in Path(case).glob("processor*") if d.is_dir() and d.name[9:].isdigit())
 
 
-def unjoined_times(case: Path) -> int:
-    """How many saved times (not counting the start state) exist only as pieces in the processor folders: a new run
-    deletes them with the old case, so they are worth loading first."""
+def unjoined_times(case: Path, aside: bool = True) -> int:
+    """How many saved times (not counting the start state) exist only as pieces: in the processor folders, and
+    (aside) set aside in case/unjoined/ after a failed join. A new run deletes them with the old case, so they are
+    worth loading or repairing first. They are not part of the joined times of the case."""
     p0 = Path(case) / "processor0"
-    return sum(1 for t, v in _time_dirs(p0).items() if v > 0 and not (Path(case) / t).is_dir())
+    n = sum(1 for t, v in _time_dirs(p0).items() if v > 0 and not time_is_joined(case, t))
+    if aside:
+        n += set_aside_count(case)
+    return n
+
+
+def set_aside_count(case: Path) -> int:
+    """How many saved times could not be joined and were set aside in case/unjoined/."""
+    d = Path(case) / UNJOINED
+    return sum(1 for x in d.iterdir() if x.is_dir()) if d.is_dir() else 0
 
 
 def _time_dirs(d: Path) -> dict:
@@ -824,6 +834,23 @@ def set_unjoined_aside(case: Path, t: str) -> None:
     shutil.rmtree(Path(case) / t, ignore_errors=True)  # a half-written join of that time
 
 
+def time_is_joined(case: Path, t: str) -> bool:
+    """True when the joined folder case/<t> holds every file the pieces of that time have (a half-written join does not count)."""
+    d, p0 = Path(case) / t, Path(case) / "processor0" / t
+    if not d.is_dir():
+        return False
+    try:
+        return all((d / f.name).exists() for f in p0.iterdir() if f.is_file()) and any(d.iterdir())
+    except OSError:
+        return False
+
+
+def newest_piece_time(case: Path) -> float | None:
+    """The newest saved time (not the start state) that exists as pieces in processor0, None when there are none."""
+    times = [v for v in _time_dirs(Path(case) / "processor0").values() if v > 0]
+    return max(times) if times else None
+
+
 def run_split_times(case: Path, st: dict, exe: Path, env: dict, on_proc=None, on_line=None, report: dict | None = None,
                     keep_pieces: bool = False) -> int | None:
     """reconstructPar is serial: with many saved times (a transient run) join them with several processes at once.
@@ -845,8 +872,8 @@ def run_split_times(case: Path, st: dict, exe: Path, env: dict, on_proc=None, on
     times = sorted((d.name for d in p0.iterdir() if d.is_dir() and re.fullmatch(r"[0-9.eE+-]+", d.name)
                     and float(d.name) > 0), key=float) if p0.exists() else []
     if keep_pieces:  # (loading the results of a case again: what is joined already is not joined twice)
-        times = [t for t in times if not (case / t).is_dir()]
-    if len(times) < 2:
+        times = [t for t in times if not time_is_joined(case, t)]
+    if len(times) < (1 if keep_pieces else 2):  # (a single time left to join is joined here too when loading: it may be the newest)
         return None
     times = [times[-1]] + times[:-1]  # the newest first: it is the one the results are read from
     cells = 0

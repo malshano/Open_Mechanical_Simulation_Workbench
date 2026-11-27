@@ -4313,7 +4313,7 @@ class Project:
         for sk in d.get("skipped") or []:
             out.append(f"The saved time {sk['time']} s could not be joined and is not in these results "
                        f"(reconstructPar {sk['reason']}). Its pieces are kept in the case folder "
-                       f"({runner.UNJOINED}/{sk['time']}); the results shown are the other saved times.")
+                       f"({d.get('where') or runner.UNJOINED + '/' + sk['time']}); the results shown are the other saved times.")
         if d.get("not_tried"):
             out.append(f"{len(d['not_tried'])} more saved time(s) were not tried after the first joins failed.")
         return out
@@ -4651,28 +4651,39 @@ class Project:
         meta = json.loads((case / "simwb_case.json").read_text())
         det = runner.detect(refresh=True)
         rep: dict = {}
-        if (case / "processor0").exists() and det.get("available") and det.get("backend") == "windows":
+        region = meta["regions"][0] if meta.get("regions") else None
+        if runner.unjoined_times(case, aside=False):   # (saved times that exist only as pieces: they must be joined to be read)
+            if not (det.get("available") and det.get("backend") == "windows"):
+                raise RuntimeError("The saved times in the case folder are still split over the processor folders, and joining "
+                                   "them needs OpenFOAM, which the workbench cannot use here"
+                                   + ("" if det.get("available") else " (it is not installed: see Software in the Solve step)")
+                                   + ". The saved times are untouched: install OpenFOAM and try again")
             JOBS.update(job, 0.05, "Joining the saved times", log="Joining the saved times found in the processor folders")
             env = runner.windows_env(Path(det["project_dir"]), Path(det["bin_dir"]))
             step = {"split_times": max(runner.processor_count(case), 1), "log": "log.reconstructPar",
                     "args": ["-allRegions"] if meta.get("regions") else []}
             on_line = lambda line: JOBS.update(job, None, line if line.startswith("$") else None, log=line)  # noqa: E731
             exe = Path(det["bin_dir"]) / "reconstructPar.exe"
-            rc = runner.run_split_times(case, step, exe, env, self._job_proc(job), on_line, report=rep, keep_pieces=True)
-            if rc is None and not results_loader.latest_time(case, meta["regions"][0] if meta.get("regions") else None):
-                runner.reconstruct_windows(case, det, bool(meta.get("regions")))  # (a single saved time)
+            runner.run_split_times(case, step, exe, env, self._job_proc(job), on_line, report=rep, keep_pieces=True)
             job.check_cancel()
             if rep.get("skipped"):
                 (case / runner.JOIN_SKIPPED).write_text(json.dumps({"skipped": rep["skipped"],
                                                                     "not_tried": rep.get("not_tried", []),
-                                                                    "joined": len(rep["joined"])}))
-        if not results_loader.latest_time(case, meta["regions"][0] if meta.get("regions") else None):
+                                                                    "joined": len(rep["joined"]), "where": "processor*"}))
+        latest = results_loader.latest_time(case, region)
+        if not latest:
             bad = "; ".join(f"{x['time']}: {x['reason']}" for x in rep.get("skipped", [])[:3])
             raise RuntimeError("No saved time in the case folder could be read" + (f" ({bad})" if bad else "")
                                + ". The pieces are untouched: nothing was lost")
         JOBS.update(job, 0.9, "Loading results")
         rs, summary = results_loader.load(case, self.data)
         for w_ in self._join_warnings():
+            summary.setdefault("warnings", []).append(w_)
+            job.log.append("WARNING: " + w_)
+        newest = runner.newest_piece_time(case)   # never load an older time without saying so
+        if newest is not None and newest > float(latest) * (1 + 1e-9) + 1e-12:
+            w_ = (f"The newest saved time in the case folder is {newest:g} s, but these results are from {float(latest):g} s: "
+                  "the newer time could not be loaded (see the other warnings and the solver log).")
             summary.setdefault("warnings", []).append(w_)
             job.log.append("WARNING: " + w_)
         app_log = case / f"log.{meta['app']}"

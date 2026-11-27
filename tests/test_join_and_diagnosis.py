@@ -267,3 +267,99 @@ def test_a_failed_join_is_not_reported_as_a_divergence_by_the_run(tmp_path):
     # an old-style empty marker still works (the newest log is read)
     (pr.case_dir / "case.failed").write_text("")
     assert pr._failed_step()[0] == {}
+
+
+# ---------------------------------------------- the load must never hand back an older time without saying so
+def _fake(pr, bad):
+    (pr.dir.parent.parent / "fake_reconstruct.py").write_text(FAKE % (list(bad),))
+
+
+def _joined(case, t):
+    (case / t).mkdir(parents=True, exist_ok=True)
+    (case / t / "U").write_text(t)
+
+
+def _load(pr, monkeypatch):
+    """Run the load; returns (job, the case folder's latest time as results_loader.load saw it)."""
+    from simwb.solvers.openfoam import results_loader
+
+    seen = {}
+
+    def load(case, data):
+        seen["latest"] = results_loader.latest_time(case)
+        return _Rs(), {"time": float(seen["latest"])}
+    monkeypatch.setattr(results_loader, "load", load)
+    job = pr.load_case_results()
+    assert job.wait(60), "timed out"
+    return job, seen
+
+
+def test_one_newer_unjoined_time_is_joined_not_skipped(loader, monkeypatch):
+    """processor*/{0, 0.1, 0.15} with case/0.1 joined: the old code joined nothing and silently loaded 0.1."""
+    pr, go = loader
+    _tree(pr.case_dir, ["0.1", "0.15"])
+    _joined(pr.case_dir, "0.1")
+    _fake(pr, [])
+    job, seen = _load(pr, monkeypatch)
+    assert job.status == "done", (job.error, job.log[-5:])
+    assert seen["latest"] == "0.15" and (pr.case_dir / "0.15").is_dir()
+    assert not any("could not be loaded" in w for w in pr.data["solve"]["summary"].get("warnings", []))
+    assert (pr.case_dir / "processor0" / "0.15").is_dir()  # the pieces stay
+
+
+def test_a_single_unjoined_time_with_nothing_joined_is_joined(loader, monkeypatch):
+    pr, go = loader
+    _tree(pr.case_dir, ["0.15"])
+    _fake(pr, [])
+    job, seen = _load(pr, monkeypatch)
+    assert job.status == "done", (job.error, job.log[-5:])
+    assert seen["latest"] == "0.15"
+
+
+def test_when_the_newest_time_cannot_be_joined_the_older_result_is_flagged(loader, monkeypatch):
+    pr, go = loader
+    _tree(pr.case_dir, ["0.1", "0.15"])
+    _joined(pr.case_dir, "0.1")
+    _fake(pr, ["0.15"])
+    job, seen = _load(pr, monkeypatch)
+    assert job.status == "done", (job.error, job.log[-5:])
+    assert seen["latest"] == "0.1"
+    ws = pr.data["solve"]["summary"]["warnings"]
+    assert any("newest saved time" in w and "0.15" in w and "0.1 s" in w for w in ws), ws
+    assert any("could not be joined" in w for w in ws)
+    assert pr.data["solve"]["summary"]["loaded_from_case"]
+
+
+def test_a_half_written_join_does_not_count_as_joined(tmp_path):
+    _tree(tmp_path, ["0.1"])
+    (tmp_path / "0.1").mkdir()
+    assert not runner.time_is_joined(tmp_path, "0.1")        # (empty folder: a join that was cut off)
+    (tmp_path / "0.1" / "U").write_text("x")
+    assert runner.time_is_joined(tmp_path, "0.1")
+    assert runner.unjoined_times(tmp_path) == 0 and runner.newest_piece_time(tmp_path) == 0.1
+
+
+def test_the_load_route_starts_the_job(loader, monkeypatch):
+    import importlib
+
+    from fastapi.testclient import TestClient
+
+    pr, go = loader
+    import simwb.server as S
+
+    importlib.reload(S)
+    _tree(pr.case_dir, ["0.1"])
+    _fake(pr, [])
+    from simwb.solvers.openfoam import results_loader
+    monkeypatch.setattr(results_loader, "load", lambda case, data: (_Rs(), {"time": 0.1}))
+    c = TestClient(S.app, base_url="http://127.0.0.1:8765")
+    r = c.post(f"/api/projects/{pr.id}/results/load_case", headers={"X-SimWB": "1"})
+    assert r.status_code == 200, r.text
+    import simwb.project as P
+    job = P.JOBS.latest(pr.id, "solve")
+    assert job.wait(60) and job.status == "done", (job.error, job.log[-5:])
+    assert (pr.case_dir / "0.1").is_dir()
+    # a study without a case is refused with a plain message
+    other = P.create_project("Other", "external_aero", str(pr.dir.parent))
+    r = c.post(f"/api/projects/{other.id}/results/load_case", headers={"X-SimWB": "1"})
+    assert r.status_code >= 400 and "no openfoam case" in r.text.lower()
