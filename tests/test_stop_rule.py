@@ -65,3 +65,12 @@ def test_setting_reaches_the_monitor_and_is_a_run_control(P, tmp_path):
     pr.data["case_setup"] = P.setup_snapshot(pr.data)
     pr.set_settings(auto_stop_tol=0.02)
     assert pr.setup_changes() == []
+
+
+def test_note_of_a_run_with_the_rule_off_does_not_say_still_changing(P, tmp_path):
+    log = tmp_path / "log.simpleFoam"
+    log.write_text(_log(lambda i: 1.0, 600))
+    off = P._convergence(log, 600, dict(META, auto_stop_tol_pct=0))
+    assert off["converged"] is False and "does not stop early" in off["note"] and "still changing" not in off["note"]
+    on = P._convergence(log, 600, dict(META, auto_stop_tol_pct=0.2))
+    assert on["converged"] is True and "0.2 % of the total load" in on["note"]

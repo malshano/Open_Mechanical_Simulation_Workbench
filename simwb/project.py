@@ -5369,7 +5369,10 @@ def _convergence(app_log: Path, it_target: int, meta: dict | None = None, auto_s
     note = ("Residual targets reached." if res_conv else
             f"Key outputs stable: {mon.get('reason')}." if mon.get("stable") else
             "Stopped by you before the results settled - continue the run for final numbers." if user_stop else
-            ("Stopped at the iteration limit while the results were still changing - continue the run."
+            ("Ran to the iteration limit: the setting 'Stop when forces settle' is 0, so the run does not stop early "
+             "(check the force history before you use the numbers)."
+             if meta and meta.get("auto_stop_tol_pct") == 0 and h["iters"] and h["iters"][-1] >= it_target - 1 else
+             "Stopped at the iteration limit while the results were still changing - continue the run."
              if h["iters"] and h["iters"][-1] >= it_target - 1 else
              "Stopped before the iteration limit while the results were still changing - continue the run."))
     if plateau and converged:
