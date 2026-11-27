@@ -155,7 +155,7 @@ class Surface:
         """True for the points inside a body (the nearest facet looks away from them): used to leave the bodies out of the air, and the air out of the solids."""
         if self.ctree is None or not len(P):
             return np.zeros(len(P), bool)
-        d, i = self.ctree.query(P)
+        d, i = self.ctree.query(P, workers=-1)
         return np.einsum("ij,ij->i", P - self.centroid[i], self.normal_out[i]) < 0.0
 
 
@@ -386,7 +386,7 @@ def sizing(study: str, faces: list, info: dict, ms: dict, rc: dict | None = None
             t = surf.tree(0.7 * size, ids)
             if t is None:
                 return np.full(len(P), 1e30)
-            d, _ = t.query(P)
+            d, _ = t.query(P, workers=-1)
             return threshold(d, size, size, d_max, far)
         return f
 
@@ -406,7 +406,7 @@ def sizing(study: str, faces: list, info: dict, ms: dict, rc: dict | None = None
             t = surf.tree(0.7 * sz, ids)
             if t is None:
                 return np.full(len(P), 1e30)
-            d, _ = t.query(P)
+            d, _ = t.query(P, workers=-1)
             return threshold(d, sz, sz, sz * 10, far)
         src.append(fr)
     # curved faces: the mesher's curvature sizing (MeshSizeFromCurvature) made finer than the wall size on small radii, spread into the volume with the growth
@@ -419,7 +419,7 @@ def sizing(study: str, faces: list, info: dict, ms: dict, rc: dict | None = None
             if "t" not in tc:
                 from scipy.spatial import cKDTree
                 tc["t"] = cKDTree(cen)
-            d, i = tc["t"].query(P)
+            d, i = tc["t"].query(P, workers=-1)
             return hc[i] + (growth - 1.0) * d
         src.append(fc)
     # boxes: the recipe's near field and wake (Thickness = how far the size takes to grow), the old sizing's box, the user's regions, rotors, zones
@@ -645,12 +645,12 @@ def bulk_settings(ms: dict, rc: dict | None, base: dict, t: float) -> tuple:
     return ms2, rc2, ch
 
 
-def fit(pr, ms: dict, rc: dict | None, budget_mb: float, surf: Surface | None = None, steps: int = 9) -> dict:
+def fit(pr, ms: dict, rc: dict | None, budget_mb: float, surf: Surface | None = None, steps: int = 6, before: dict | None = None) -> dict:
     """Coarsen the bulk until the estimate fits `budget_mb`: {status: 'fits' | 'coarsened' | 'refused', ms, rc, changes, before, after, smallest, t}. The walls, thin
     and small faces, part sizings, edge refinement and the regions you drew keep their sizes. 'refused': even the coarsest bulk does not fit; `after` is that
     mesh (the smallest this setup can reach)."""
     surf = surf or surface_of(pr)
-    before = evaluate(pr, ms, rc, surf)
+    before = before or evaluate(pr, ms, rc, surf)
     out = {"budget_mb": budget_mb, "before": before, "after": before, "ms": ms, "rc": rc, "changes": {}, "t": 0.0}
     if peak_mb(before) <= budget_mb:
         out["status"] = "fits"
@@ -733,7 +733,7 @@ def coarser_preset_that_fits(pr, ms: dict, budget_mb: float, surf: Surface) -> d
     return None
 
 
-def budget_plan(pr, ms: dict, rc: dict | None, surf: Surface | None = None, free_mb: float | None = None) -> dict:
+def budget_plan(pr, ms: dict, rc: dict | None, surf: Surface | None = None, free_mb: float | None = None, before: dict | None = None) -> dict:
     """Apply the memory budget in `ms['budget']`: the fit (see `fit`) with the words for the user: {status: 'off' | 'fits' | 'coarsened' | 'refused', message, ms, rc,
     changes, budget_mb, cells_before, cells_after, before, after, suggestion}."""
     surf = surf or surface_of(pr)
@@ -741,7 +741,7 @@ def budget_plan(pr, ms: dict, rc: dict | None, surf: Surface | None = None, free
     mb = budget_to_mb(b, free_mb)
     if mb is None:
         return {"status": "off", "message": "", "ms": ms, "rc": rc, "changes": {}, "budget_mb": None}
-    f = fit(pr, ms, rc, mb, surf)
+    f = fit(pr, ms, rc, mb, surf, before=before)
     f["budget"] = b
     bw = _budget_words(b, mb)
     after, before = f["after"], f["before"]
@@ -796,7 +796,7 @@ def report(pr, budget=None) -> dict:
     bmb = budget_to_mb(b, free)
     out["budget"] = {"on": bool(b and b.get("on", True) and bmb), "mode": (b or {}).get("mode"), "value": (b or {}).get("value"), "mb": bmb}
     if bmb is not None:
-        plan = budget_plan(pr, dict(ms, budget=dict(b, on=True)), rc, surf, free)
+        plan = budget_plan(pr, dict(ms, budget=dict(b, on=True)), rc, surf, free, before=base)
         out["budget"].update(status=plan["status"], message=plan["message"], changes={k: list(v) for k, v in plan.get("changes", {}).items()},
                              suggestion=plan.get("suggestion"))
         out["applied"] = _plain(plan["after"]) if plan["status"] != "fits" else out["estimate"]

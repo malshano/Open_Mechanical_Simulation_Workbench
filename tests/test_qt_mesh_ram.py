@@ -126,9 +126,9 @@ def test_the_estimate_follows_the_resolution_and_the_hex_mesh_says_it_is_not_est
 
 def test_the_control_api_gives_the_estimate_and_sets_the_budget(ctl):
     c = open_mesh(ctl)
-    r = c.do("mesh.estimate")
+    r = c.do("mesh.estimate")["result"]
     assert r["text"].startswith("About ") and r["report"]["estimate"]["cells"] > 0
-    r2 = c.do("mesh.budget", {"mode": "percent", "value": 40})
+    r2 = c.do("mesh.budget", {"mode": "percent", "value": 40})["result"]
     assert r2["report"]["budget"]["mode"] == "percent" and r2["report"]["budget"]["on"]
-    r3 = c.do("mesh.budget", {"mode": "off"})
+    r3 = c.do("mesh.budget", {"mode": "off"})["result"]
     assert not r3["report"]["budget"]["on"]
