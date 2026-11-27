@@ -14,8 +14,8 @@ one axis to the next, the drawing and the on-screen line show the zone along the
 Like a refinement region, a zone that is dragged is only previewed (a draft in rotors.py): the drawing, the numbers in the card and a line in the corner of the
 view follow, the card shows Apply and Cancel (and the bar under the 3D view too), and nothing is stored until Apply. Escape cancels the drag in progress.
 
-The handles are laid out so that each is taken where it is drawn: the move arrows reach 0.8 of the zone's size, the length handles reach 0.2 beyond them
-(and are taken at their square ends), the radius handle sticks out 0.15 of the size beyond the side, and the rings (taken anywhere on them) are 1.4 of the size."""
+The handles are laid out so that each is taken where it is drawn: the move arrows reach 0.8 of the zone's size, the length handles' arrows start just beyond them
+(a thin line leads to each from its face), the radius handle sticks out 0.15 of the size beyond the side, and the rings (taken anywhere on them) are 1.4 of the size."""
 from __future__ import annotations
 
 import numpy as np
@@ -27,7 +27,8 @@ from .gizmo import nice_step_mm
 M = 1000.0
 MOVE_COLOUR = "#f5f5f5"
 MOVE_ARROW = 0.8                 # the move arrows' length, in units of the zone's size r0 = max(radius, half the length)
-BEYOND = 0.2                     # a length handle's square end is this far beyond the move arrow (or the face)
+GAP = 0.05                       # a length handle's arrow starts this far beyond the move arrow (a thin line leads to it from the face) ...
+BEYOND = 0.15                    # ... and is this long
 RADIUS_ARROW = 0.15
 RING = 1.4
 
@@ -67,14 +68,16 @@ class ZoneHandles:
                             "callback": (lambda key, v, final, a=a, i=i: self.on_tilt(i, a, v, final))})
         for h in zone_tools.face_handles(z):
             k = h["key"]
+            start = 0.0
             if k[0] == "length":
                 room = float(z["length"]) - lmin
-                reach = max(MOVE_ARROW * r0 - float(z["length"]) / 2, 0.0) + BEYOND * r0        # (the square end lies beyond the move arrow)
+                start = max(MOVE_ARROW * r0 - float(z["length"]) / 2, 0.0) + GAP * r0          # (the arrow starts beyond the move arrow that lies on the same line)
+                reach = BEYOND * r0
             else:
                 room = float(z["radius"]) - rmin
                 reach = RADIUS_ARROW * r0
             out.append({"key": face_key(k), "kind": "face", "axis": 0 if k[0] == "length" else 1, "point": np.asarray(h["pos"], float).tolist(),
-                        "dir": np.asarray(h["dir"], float).tolist(), "length": reach, "fit": True, "value": 0.0, "limits": [-max(room, 0.0), None], "snap_m": snap,
+                        "dir": np.asarray(h["dir"], float).tolist(), "length": reach, "start": start, "fit": True, "value": 0.0, "limits": [-max(room, 0.0), None], "snap_m": snap,
                         "callback": (lambda key, v, final, k=k, i=i: self.on_scale(i, k, v, final))})
         return out
 

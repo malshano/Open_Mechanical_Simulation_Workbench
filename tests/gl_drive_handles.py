@@ -120,32 +120,96 @@ def main():
     settle()
     view.fit()
     pump(300)
+    rot = win.panels["setup"].rot
     z0 = dict(eng.state()["moving_zones"][0])
     out["zone0"] = z0
     look("01_setup_zone_handles.png")
-    # the arrow along x
-    p0 = np.array(hs.specs["move"]["point"])
+
+    def press_picks(label):
+        """Press (no drag) on the place each handle says it is taken: what did the press take? Then let go without moving."""
+        got = {}
+        for key, spec in list(hs.specs.items()):
+            part = "ring" if spec["kind"] == "ring" else "face" if spec["kind"] == "face" else "axis0"
+            if key == "move":
+                for part in ("axis0", "axis1", "axis2", "ball"):
+                    got[f"{key}:{part}"] = _press_release(hs.grab_px(key, part))
+                continue
+            got[f"{key}:{part}"] = _press_release(hs.grab_px(key, part))
+        out[label] = got
+
+    def _press_release(px):
+        QTest.mouseMove(iren, widget_pos(px))
+        pump(30)
+        QTest.mousePress(iren, Qt.LeftButton, Qt.NoModifier, widget_pos(px))
+        pump(30)
+        took = None if hs.drag is None else f"{hs.drag['key']}:{hs.drag['part']}"
+        QTest.mouseRelease(iren, Qt.LeftButton, Qt.NoModifier, widget_pos(px))
+        pump(80)
+        return took
+
+    iren.AddObserver("KeyPressEvent", lambda o, e: out.setdefault("keys", []).append(str(iren.GetKeySym())))
+    press_picks("zone_picks_default")
+    out["zone_draft_after_clicks"] = rot.draft is not None and rot.draft["zone"] != {k: z0[k] for k in rot.draft["zone"]}
+    # the arrow along x: a draft, nothing stored; then Apply
     start = hs.grab_px("move", "axis0")
     tip = hs._arrows(hs.specs["move"])[0]
     end = hs._px((tip[1] + tip[2]) / 2 + [0.02, 0, 0])
     out["zone_move_took"] = mouse_drag(start, end, shot="02_setup_zone_moving.png")
-    z1 = eng.state()["moving_zones"][0]
+    z1 = rot.current(0)
     out["zone_move_dx_mm"] = (z1["center"][0] - z0["center"][0]) * 1000
     out["zone_move_dyz_mm"] = [(z1["center"][k] - z0["center"][k]) * 1000 for k in (1, 2)]
+    out["zone_stored_before_apply"] = eng.state()["moving_zones"][0] == z0
+    # Escape in the middle of a drag of the length handle: the zone stays as it was
+    spec = hs.specs["face.length.1"]
+    a, b = np.asarray(hs.grab_px("face.length.1")), None
+    end = hs._px(hs._taken(spec, "face") + np.asarray(spec["dir"]) * 0.01)
+    QTest.mouseMove(iren, widget_pos(a))
+    pump(30)
+    QTest.mousePress(iren, Qt.LeftButton, Qt.NoModifier, widget_pos(a))
+    pump(30)
+    for i in range(1, 5):
+        QTest.mouseMove(iren, widget_pos(a + (end - a) * i / 4))
+        pump(20)
+    out["zone_len_during_drag_mm"] = rot.current(0)["length"] * 1000
+    QTest.keyClick(iren, Qt.Key_Escape)
+    pump(100)
+    QTest.mouseMove(iren, widget_pos(end + np.array([30.0, 30.0])))
+    pump(30)
+    QTest.mouseRelease(iren, Qt.LeftButton, Qt.NoModifier, widget_pos(end + np.array([30.0, 30.0])))
+    pump(100)
+    out["zone_len_after_escape_mm"] = rot.current(0)["length"] * 1000
+    out["zone_dragging_after_escape"] = hs.drag is not None
+    c.widget_do("setup.zone.0.apply", "click")
+    settle()
+    out["zone_applied_dx_mm"] = (eng.state()["moving_zones"][0]["center"][0] - z0["center"][0]) * 1000
+    z1 = dict(eng.state()["moving_zones"][0])
     # a face handle (radius)
     start = hs.grab_px("face.radius", "face")
-    a, b = hs._arrows(hs.specs["face.radius"])[0][1:]
-    end = hs._px((a + b) / 2 + hs._dir(hs.specs["face.radius"]) * 0.01)
+    end = hs._px(hs._taken(hs.specs["face.radius"], "face") + hs._dir(hs.specs["face.radius"]) * 0.01)
     out["zone_radius_took"] = mouse_drag(start, end)
-    z2 = eng.state()["moving_zones"][0]
+    z2 = rot.current(0)
     out["zone_radius_dr_mm"] = (z2["radius"] - z1["radius"]) * 1000
-    # the ring: a quarter turn about x
-    s = hs.specs["tilt.x"]
-    start = hs._px(hs._ring_point(s, 20.0))
-    end = hs._px(hs._ring_point(s, 20.0 + 100.0))
+    c.widget_do("setup.zone.0.apply", "click")
+    settle()
+    # the ring: a quarter turn about x (picked by pressing ON the ring, where the zone's other handles also are)
+    s_ = hs.specs["tilt.x"]
+    start = hs._px(hs._ring_point(s_, 20.0))
+    end = hs._px(hs._ring_point(s_, 20.0 + 100.0))
     out["zone_tilt_took"] = mouse_drag(start, end, steps=12)
+    out["zone_axis_draft"] = rot.current(0)["axis"]
+    c.widget_do("setup.zone.0.apply", "click")
+    settle()
     out["zone_axis_after"] = eng.state()["moving_zones"][0]["axis"]
     look("03_setup_zone_after_tilt.png")
+    press_picks("zone_picks_tilted")                       # (the same on a zone along another axis)
+    rot.cancel_draft()
+    # a ring picked anywhere on it, not only where it crosses an arrow
+    picks = []
+    for k in ("tilt.x", "tilt.z"):
+        if k in hs.specs:
+            for deg in (20.0, 110.0, 200.0, 290.0):
+                picks.append(hs.pick(*hs._px(hs._ring_point(hs.specs[k], deg))))
+    out["zone_ring_picks"] = [list(p) if p else None for p in picks]
 
     # ---------------------------------------------------------------- a refinement region, in Mesh
     c.do("step.go", {"step": "mesh"})

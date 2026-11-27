@@ -271,7 +271,8 @@ class HandleSet:
         if s["kind"] == "plane":
             return [("axis", g, g + self._normal(s) * 0.3 * h)]
         if s["kind"] == "face":
-            return [("face", g, g + self._dir(s) * h)]
+            st = float(s.get("start") or 0.0) * self._k(s)               # (the arrow may start away from the face: beyond what lies on the same line)
+            return [("face", g + self._dir(s) * st, g + self._dir(s) * (st + h))]
         if s["kind"] == "ring" or s.get("resolver"):
             return []
         return [(f"axis{a}", g, g + AXES[a] * h) for a in range(3)]
@@ -352,6 +353,8 @@ class HandleSet:
         if s["kind"] == "face":                                 # (an arrow out of the face with a square end: the round tips are the move arrows)
             a, b = self._arrows(s)[0][1:]
             c = self._axis_colour(s)
+            if float(s.get("start") or 0.0) > 0:                        # (a thin line from the face to where the arrow starts: it is the face's handle)
+                self._tube(top, v.ren2, np.array([g, a]), h * 0.012, c, 0.45)
             self._tube(top, v.ren2, np.array([a, b]), h * (0.05 if hot else 0.035), c, 1.0 if hot else 0.9)
             cube = vtkCubeSource()
             side = h * (0.34 if hot else 0.28)
@@ -435,8 +438,8 @@ class HandleSet:
                     found.append(((1, tip, 0.0, n), (k, part)))
                     continue
                 d2 = self._near_segment(q, pa, pb)
-                if d2 < GRAB_PX * dpr:
-                    found.append(((2, round(d2 / (4 * dpr)), tip, n), (k, part)))
+                if d2 < GRAB_PX * dpr:                                   # (on a line two arrows share, a move arrow wins over the shaft of a face handle: that is taken at its square end)
+                    found.append(((2, round(d2 / (4 * dpr)) + (1 if s["kind"] == "face" else 0), tip, n), (k, part)))
         return min(found, key=lambda f: f[0])[1] if found else None
 
     def _taken(self, s, part: str) -> np.ndarray:

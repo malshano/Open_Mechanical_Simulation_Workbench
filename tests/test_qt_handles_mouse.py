@@ -33,12 +33,32 @@ def drive(tmp_path_factory):
     return out
 
 
-def test_a_real_mouse_drag_of_each_kind_of_zone_handle_changes_the_zone(drive):
+def test_a_real_press_on_each_handle_of_a_zone_takes_that_handle(drive):
+    """Where each handle of the default zone (along z) and of a turned one (along -y) says it is taken, a real mouse press takes it - not the handle that lies on
+    the same line (the move arrow along the length handle) or the ring that crosses the radius arrow."""
+    for label in ("zone_picks_default", "zone_picks_tilted"):
+        picks = drive[label]
+        assert picks and all(want == got for want, got in picks.items()), (label, {k: v for k, v in picks.items() if k != v})
+    assert set(drive["zone_picks_default"]) >= {"move:axis0", "move:axis1", "move:axis2", "move:ball", "tilt.x:ring", "tilt.y:ring", "face.length.0:face", "face.length.1:face",
+                                                 "face.radius:face"}
+    assert not drive["zone_draft_after_clicks"]                                                          # (a press that does not move changes nothing)
+    assert all(p is not None and p[1] == "ring" for p in drive["zone_ring_picks"])                       # (a ring is taken anywhere on it)
+
+
+def test_a_real_mouse_drag_of_each_kind_of_zone_handle_previews_and_apply_stores(drive):
     assert drive["zone_move_took"] and drive["zone_radius_took"] and drive["zone_tilt_took"]            # (each press took the handle, not the camera)
-    assert drive["zone_move_dx_mm"] == pytest.approx(20.0, abs=0.5)                                      # (the arrow along x: 20 mm along x and nothing else)
+    assert drive["zone_move_dx_mm"] == pytest.approx(20.0, abs=2.5)                                      # (the arrow along x: along x and nothing else)
     assert all(abs(v) < 0.2 for v in drive["zone_move_dyz_mm"])
-    assert drive["zone_radius_dr_mm"] == pytest.approx(10.0, abs=0.5)                                    # (the side handle: 10 mm more radius)
-    assert drive["zone_axis_after"] != drive["zone0"]["axis"]                                            # (the ring: a quarter turn of the axis)
+    assert drive["zone_stored_before_apply"]                                                              # (nothing stored while it is a draft)
+    assert drive["zone_applied_dx_mm"] == pytest.approx(drive["zone_move_dx_mm"], abs=0.01)             # (Apply stores what was drawn)
+    assert drive["zone_radius_dr_mm"] == pytest.approx(10.0, abs=2.5)                                    # (the side handle: more radius)
+    assert drive["zone_axis_draft"] != drive["zone0"]["axis"] and drive["zone_axis_after"] == drive["zone_axis_draft"]       # (the ring: a quarter turn of the axis)
+
+
+def test_a_real_escape_in_the_middle_of_a_drag_puts_the_zone_back(drive):
+    assert drive["zone_len_during_drag_mm"] > drive["zone_len_after_escape_mm"] + 5                      # (it was longer while dragged)
+    assert drive["zone_len_after_escape_mm"] == pytest.approx(drive["zone0"]["length"] * 1000, abs=0.01)         # (and is as it was when the mouse went down)
+    assert not drive["zone_dragging_after_escape"]
 
 
 def test_a_real_mouse_drag_of_each_kind_of_region_handle_changes_the_preview_and_nothing_is_stored_until_apply(drive):

@@ -661,12 +661,19 @@ class Viewport(QWidget):
             self.iren.SetInteractorStyle(None)
 
     def _on_key(self, obj, event):
-        """Escape while a handle is being dragged: the drag is cancelled and the handle goes back to where it was."""
-        if self.iren.GetKeySym() == "Escape" and self._hset_drag and self.handles.cancel():
-            self._hset_drag = False
-            self._press = None
-            if self._style is not None:
-                self.iren.SetInteractorStyle(self._style)
+        """Escape while a handle is being dragged (when the window has no Esc shortcut of its own): the drag is cancelled."""
+        if self.iren.GetKeySym() == "Escape":
+            self.cancel_drag()
+
+    def cancel_drag(self) -> bool:
+        """Escape during the drag of a handle: the handle goes back to where it was when the mouse went down and the drag ends there. True when there was a drag."""
+        if not (self._hset_drag and self.handles.cancel()):
+            return False
+        self._hset_drag = False
+        self._press = None
+        if self._style is not None:
+            self.iren.SetInteractorStyle(self._style)
+        return True
 
     def _on_release(self, obj, event):
         p, self._press = self._press, None

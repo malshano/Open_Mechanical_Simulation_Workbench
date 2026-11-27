@@ -333,6 +333,7 @@ def test_handles_that_overlap_are_each_taken_at_their_own_end(ctl):
         {"key": "move", "kind": "point", "point": [0, 0, 0], "size": 0.5},
         {"key": "tilt", "kind": "ring", "axis": 0, "point": [0, 0, 0], "radius": 0.9, "value": 0.0},
         {"key": "len", "kind": "face", "axis": 0, "point": [0.0, 0.0, 0.15], "dir": [0, 0, 1], "length": 0.5, "value": 0.0},
+        {"key": "len2", "kind": "face", "axis": 0, "point": [0.0, 0.0, -0.15], "dir": [0, 0, -1], "length": 0.12, "start": 0.5, "value": 0.0},      # (starts beyond the move arrow, a line leads to it)
         {"key": "rad", "kind": "face", "axis": 1, "point": [0.0, 0.3, 0.0], "dir": [0, 1, 0], "length": 0.3, "value": 0.0}])
     tip_len = hs._arrows(hs.specs["len"])[0][2]
     tip_move = hs._arrows(hs.specs["move"])[2][2]
@@ -341,8 +342,10 @@ def test_handles_that_overlap_are_each_taken_at_their_own_end(ctl):
     assert hs.pick(*hs._px(hs._ring_point(hs.specs["tilt"], 20.0))) == ("tilt", "ring")
     assert hs.pick(*hs._px(hs._ring_point(hs.specs["tilt"], 200.0))) == ("tilt", "ring")
     assert hs.pick(*hs._px(hs._arrows(hs.specs["rad"])[0][2])) == ("rad", "face")
-    for k in ("move", "len", "rad", "tilt"):                                   # (and every handle is reachable where it says it is taken)
-        part = {"move": "axis2", "len": "face", "rad": "face", "tilt": "ring"}[k]
+    mid_len2 = hs._px(sum(hs._arrows(hs.specs["len2"])[0][1:]) / 2)
+    assert hs.pick(*mid_len2) == ("len2", "face")                                 # (the whole arrow of a handle that starts beyond the move arrow is its own)
+    for k in ("move", "len", "len2", "rad", "tilt"):                           # (and every handle is reachable where it says it is taken)
+        part = {"move": "axis2", "len": "face", "len2": "face", "rad": "face", "tilt": "ring"}[k]
         assert hs.pick(*hs.grab_px(k, part)) == (k, part), k
     far = hs._px(hs._ring_point(hs.specs["tilt"], 110.0) * 1.0 + [0.0, 0.0, 0.6])
     assert hs.pick(*far) is None                                               # (empty space is nothing)

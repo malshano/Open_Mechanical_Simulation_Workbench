@@ -104,7 +104,9 @@ class Shell(QObject):
         w.assistant.input.setFocus()
 
     def escape(self):
-        """Esc: finish what the hint bar asks about (Done / Cancel), or else close the newest toast."""
+        """Esc: cancel the drag of a handle if one is in progress; else finish what the hint bar asks about (Done / Cancel), or else close the newest toast."""
+        if self.win.view.cancel_drag():
+            return
         b = self.win.view.banner
         if b.isVisible() and b.button.isVisible() and b.button.isEnabled():
             b.button.click()
