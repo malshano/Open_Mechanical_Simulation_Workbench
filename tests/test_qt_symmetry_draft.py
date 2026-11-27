@@ -112,3 +112,25 @@ def test_leaving_the_step_hides_the_preview_and_coming_back_shows_it(bracket):
     assert not c.win.view.plane_handle.on
     c.do("step.go", {"step": "setup"})
     assert c.win.view.plane_handle.on and draft(c) is not None
+
+
+def test_escape_during_the_drag_of_the_planes_arrow_puts_the_plane_back(bracket):
+    c = bracket
+    c.widget_do("setup.sym.add_y", "click")
+    v = c.win.view
+    h = v.plane_handle
+    p0 = h.point.copy()
+    x, y, _ = v.gizmo.project(h.point + h.normal * 0.004)                       # (on the arrow, just out of the plane)
+    for dx, dy in ((0, 0), (3, 0), (-3, 0), (0, 3), (0, -3), (6, 0), (0, 6)):
+        if h.press(x + dx, y + dy):
+            break
+    assert h.drag is not None, "the arrow of the plane could not be taken from this camera"
+    v._plane_drag = True
+    h.drag_to(x + 40, y - 40)
+    assert not np.allclose(h.point, p0)
+    seen = []
+    h.callback = (lambda cb: (lambda p, final: (seen.append(final), cb(p, final))))(h.callback)
+    c.win.shell.escape()
+    assert h.drag is None and not v._plane_drag and np.allclose(h.point, p0)
+    assert seen == [True]                                                         # (the control is told the drag ended where it began)
+    assert float(c.widget_do("setup.sym.draft.pos")["value"]) == pytest.approx(float(p0[1]) * 1000, abs=0.01)         # (and its number agrees)

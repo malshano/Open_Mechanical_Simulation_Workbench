@@ -133,6 +133,9 @@ def main():
             if key == "move":
                 for part in ("axis0", "axis1", "axis2", "ball"):
                     got[f"{key}:{part}"] = _press_release(hs.grab_px(key, part))
+                for part, a_, b_ in hs._arrows(spec):                      # (the outer end of each move arrow, where a resize handle's arrow used to start)
+                    got[f"{key}:{part}@tip"] = _press_release(hs._px(b_))
+                    got[f"{key}:{part}@cone"] = _press_release(hs._px(b_ + (b_ - a_) * 0.08))
                 continue
             got[f"{key}:{part}"] = _press_release(hs.grab_px(key, part))
         out[label] = got
@@ -252,6 +255,18 @@ def main():
     out["region_applied"] = eng.state()["mesh"]["regions"][0]
     pump(200)
     look("08_mesh_region_applied.png")
+    # a draft pending in a narrow window: the bar under the 3D view must stay one short line (last: the window is not put back)
+    c.do("step.go", {"step": "setup"})
+    settle()
+    pump(300)
+    hs.simulate_move("face.radius", 0.005)
+    win.resize(900, 620)
+    pump(800)
+    out["narrow_view_h"] = view.iren.height()
+    out["narrow_bar_h"] = win.view.banner.height()
+    out["narrow_bar_text"] = win.view.banner.label.text()
+    out["narrow_window_h"] = win.height()
+    look("09_narrow_window_draft.png")
     c.close()
     return 0
 

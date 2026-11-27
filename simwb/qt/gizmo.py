@@ -514,6 +514,18 @@ class RotateGizmo:
             self.callback(kind, a, val, True)
         return val
 
+    def cancel(self) -> bool:
+        """Escape during a drag: the ring, arrow or ball goes back to where it was when the mouse went down; the control is told the drag ended with a zero change."""
+        d, self.drag = self.drag, None
+        if d is None:
+            return False
+        self.hover = None
+        self._cursor(None)
+        self._draw()
+        if self.callback:
+            self.callback(d["kind"], d["axis"], np.zeros(3) if d["kind"] == "free" else 0.0, True)
+        return True
+
     # ------------------------------------------------------------------ the preview of the model turning and moving
     def _user_matrix(self) -> vtkMatrix4x4 | None:
         if np.allclose(self.R, np.eye(3)) and not np.abs(self.shift).max() > 1e-12:

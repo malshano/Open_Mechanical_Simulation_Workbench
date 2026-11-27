@@ -479,6 +479,9 @@ class Shell(QObject):
         return None
 
     def _sync_hint(self):
+        v = self.win.view
+        if getattr(v, "_hset_drag", False) or getattr(v, "_gizmo_drag", False) or getattr(v, "_plane_drag", False):
+            return                                           # (a handle is being dragged: the bar keeps its height, so that the picture does not move under the pointer)
         bar = self.win.view.banner
         h = self.hint()
         if h is None:

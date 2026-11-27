@@ -126,6 +126,11 @@ class RegionTransform:
         self._fill_fields()
         self.view.render()
 
+    def _sync_bar(self):
+        """The drag is over: the bar under the 3D view says what is pending now."""
+        if self.adv.panel.win is not None:
+            self.adv.panel.win.shell.sync()
+
     def _text(self, text: str):
         self.view.handles.label(text)
         if self.readout is not None:
@@ -140,6 +145,7 @@ class RegionTransform:
         self._text(f"Moving: ({d[0] * M:+.1f}, {d[1] * M:+.1f}, {d[2] * M:+.1f}) mm")
         if final:
             self.view.handles.label(None)
+            self._sync_bar()
 
     def on_turn(self, axis: int, key: str, angle: float, final: bool):
         """A ring is dragged; the first call (zero, not final) starts the drag and remembers where the region was."""
@@ -153,6 +159,7 @@ class RegionTransform:
         if final:
             self.view.handles.label(None)
             self.live = False
+            self._sync_bar()
 
     def on_scale(self, key, delta: float, final: bool):
         """A face handle is dragged: its face moves out by `delta` (called by the handles); the first call (zero, not final) starts the drag."""
@@ -166,6 +173,7 @@ class RegionTransform:
         if final:
             self.view.handles.label(None)
             self.scaling = False
+            self._sync_bar()
 
     # ------------------------------------------------------------------ typed numbers
     def _fill_fields(self):

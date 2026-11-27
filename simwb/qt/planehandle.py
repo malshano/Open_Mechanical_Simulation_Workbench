@@ -241,6 +241,20 @@ class PlaneHandle:
         if self.callback:
             self.callback(self.point.copy(), True)
 
+    def cancel(self) -> bool:
+        """Escape during a drag: the plane goes back to where it was when the mouse went down, and the drag ends there (the control is told, so its number agrees)."""
+        d = self.drag
+        if d is None:
+            return False
+        self.point = d["origin"].copy()
+        self.drag = None
+        self.hover = False
+        self._g._cursor(None)
+        self._draw()
+        if self.callback:
+            self.callback(self.point.copy(), True)
+        return True
+
     def describe(self) -> dict:
         return {"on": self.on, "point": [float(x) for x in self.point], "normal": [float(x) for x in self.normal], "dragging": self.drag is not None,
                 "hover": self.hover}

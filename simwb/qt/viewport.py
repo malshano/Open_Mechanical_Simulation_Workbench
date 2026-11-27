@@ -666,10 +666,16 @@ class Viewport(QWidget):
             self.cancel_drag()
 
     def cancel_drag(self) -> bool:
-        """Escape during the drag of a handle: the handle goes back to where it was when the mouse went down and the drag ends there. True when there was a drag."""
-        if not (self._hset_drag and self.handles.cancel()):
+        """Escape during the drag of a handle - a shared one (rings, arrows, faces, planes, points), the Geometry step's gizmo or a symmetry plane's arrow: it goes back to
+        where it was when the mouse went down and the drag ends there. True when there was a drag."""
+        if self._hset_drag and self.handles.cancel():
+            self._hset_drag = False
+        elif self._gizmo_drag and self._gz.cancel():
+            self._gizmo_drag = False
+        elif self._plane_drag and self.plane_handle.cancel():
+            self._plane_drag = False
+        else:
             return False
-        self._hset_drag = False
         self._press = None
         if self._style is not None:
             self.iren.SetInteractorStyle(self._style)

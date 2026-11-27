@@ -710,3 +710,21 @@ def test_the_popup_applies_the_turn(aero):
     wait(c)
     d = c.engine.project().align_info(max((f for f in c.engine.project().faces() if f.get("kind") == "body"), key=lambda f: f["area"])["id"])
     assert d["nearest"] == "+y" and c.do("geometry.align_state")["result"]["step"] == 0
+
+
+def test_escape_during_a_ring_drag_puts_the_gizmo_back_and_the_preview_with_it(plate):
+    """Esc cancels the drag of a ring of the Geometry step as it does for every handle (the window's Esc shortcut calls Viewport.cancel_drag)."""
+    c = plate
+    v = c.win.view
+    g = v.gizmo
+    assert g.on
+    x, y, _ = g.project(g.ring_point(2, 20.0))
+    assert g.press(x, y) and g.drag["kind"] == "rot"
+    v._gizmo_drag, v._gz = True, g                                              # (what the viewport's mouse handler sets when the press took a ring)
+    for k in range(1, 5):
+        g.drag_to(*g.project(g.ring_point(2, 20.0 + 25.0 * k))[:2])
+    assert g.previewing                                                          # (the parts are drawn turned while it is dragged)
+    c.win.shell.escape()                                                         # (the window's Esc shortcut)
+    assert g.drag is None and not v._gizmo_drag
+    assert not g.previewing and "+" not in c.widget_do("geometry.rotate.readout")["value"]        # (back as it was: nothing turned, nothing to apply)
+    assert not c.widget_do("geometry.rotate.apply")["enabled"]

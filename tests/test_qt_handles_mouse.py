@@ -38,9 +38,12 @@ def test_a_real_press_on_each_handle_of_a_zone_takes_that_handle(drive):
     the same line (the move arrow along the length handle) or the ring that crosses the radius arrow."""
     for label in ("zone_picks_default", "zone_picks_tilted"):
         picks = drive[label]
-        assert picks and all(want == got for want, got in picks.items()), (label, {k: v for k, v in picks.items() if k != v})
+        assert picks and all(want.split("@")[0] == got for want, got in picks.items()), (label, {k: v for k, v in picks.items() if k.split("@")[0] != v})
     assert set(drive["zone_picks_default"]) >= {"move:axis0", "move:axis1", "move:axis2", "move:ball", "tilt.x:ring", "tilt.y:ring", "face.length.0:face", "face.length.1:face",
                                                  "face.radius:face"}
+    for label in ("zone_picks_default", "zone_picks_tilted"):                                            # (the far end of every move arrow, and its cone, takes the move arrow)
+        tips = {k: v for k, v in drive[label].items() if "@" in k}
+        assert len(tips) == 6 and all(k.split("@")[0] == v for k, v in tips.items()), tips
     assert not drive["zone_draft_after_clicks"]                                                          # (a press that does not move changes nothing)
     assert all(p is not None and p[1] == "ring" for p in drive["zone_ring_picks"])                       # (a ring is taken anywhere on it)
 
@@ -75,3 +78,9 @@ def test_a_real_mouse_drag_of_each_kind_of_region_handle_changes_the_preview_and
 def test_the_pictures_were_made(drive):
     names = sorted(p.name for p in Path(drive["shots"]).glob("*.png"))
     assert len(names) >= 6
+
+
+def test_a_pending_zone_in_a_narrow_window_keeps_the_3d_view_tall_and_the_bar_to_one_short_line(drive):
+    assert drive["narrow_bar_text"] == "Not stored: Apply / Cancel"
+    assert drive["narrow_bar_h"] < 60                                                                       # (one line, not eight)
+    assert drive["narrow_view_h"] >= 280                                                                  # (the picture keeps its height in a 900 x 620 window: the bar took 41 px, not eight lines)
