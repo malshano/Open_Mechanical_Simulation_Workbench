@@ -440,15 +440,18 @@ def _monitor_steady(text: str, meta: dict, window: int = 300) -> dict:
                 dV = float(np.linalg.norm(v1 - np.mean(vs[-win:-win // 2], axis=0)))
                 tol_v = max(5 * frac * float(np.linalg.norm(v1)), 0.01 * tol)
                 ok_v = dV < tol_v
-                txt_v = f"; the friction force changed by {dV:.5f} N (limit {tol_v:.5f} N)"
+                txt_v = f" and friction force by {dV:.5f} N (limit {tol_v:.5f} N)"
                 out.update(dV_window_N=dV, tolerance_viscous_N=tol_v)
             elif frac > 0 and len(fs) > win:       # (no Viscous lines, or not one per force block: say that the friction was not checked)
-                txt_v = "; the friction force was not checked (the solver log has no matching Viscous lines)"
+                txt_v = ""
                 out["viscous_check"] = "skipped: the log has no matching Viscous lines"
             if frac > 0 and dF < tol and ok_m and ok_v:
                 out["stable"] = True
-                out["reason"] = (f"the total force (100-iteration average) changed by {dF:.4f} N{txt_m}{txt_v}, over the last {win} iterations; "
-                                 f"the force and the friction force are both below the tolerance (the force: {frac * 100:g} % of the total load)")
+                checked = "viscous_check" not in out
+                out["reason"] = (f"total force changed by {dF:.4f} N{txt_m}{txt_v} between the last two 100-iteration windows; "
+                                 + (f"both" if checked else "the total force is")
+                                 + f" below the tolerance ({frac * 100:g} % of the total load)"
+                                 + ("" if checked else "; the friction force was not checked (the solver log has no matching Viscous lines)"))
     return out
 
 

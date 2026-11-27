@@ -129,3 +129,4 @@ def test_missing_viscous_lines_are_said_not_silently_skipped():
                   for i in range(1, 801))                                   # a log without Pressure / Viscous lines
     mon = monitor_outputs(txt, META)
     assert mon["stable"] and mon["viscous_check"].startswith("skipped") and "friction force was not checked" in mon["reason"]
+    assert "both" not in mon["reason"] and "total force is below the tolerance" in mon["reason"]   # (no claim about the friction force)
