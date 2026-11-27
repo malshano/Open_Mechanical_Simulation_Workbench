@@ -187,6 +187,7 @@ class Viewport(QWidget):
             self.iren.AddObserver("LeftButtonPressEvent", self._on_press, 100)
             self.iren.AddObserver("LeftButtonReleaseEvent", self._on_release, 100)
             self.iren.AddObserver("MouseMoveEvent", self._on_move, 100)
+            self.iren.AddObserver("KeyPressEvent", self._on_key, 100)
 
     # ------------------------------------------------------------------ small things
     def apply_theme(self):
@@ -658,6 +659,14 @@ class Viewport(QWidget):
         if i is not None:                                   # a label is taken: it moves with the mouse and the camera stays where it is
             self._drag = (i, self._press, self._label_state[i]["off"], self._style)
             self.iren.SetInteractorStyle(None)
+
+    def _on_key(self, obj, event):
+        """Escape while a handle is being dragged: the drag is cancelled and the handle goes back to where it was."""
+        if self.iren.GetKeySym() == "Escape" and self._hset_drag and self.handles.cancel():
+            self._hset_drag = False
+            self._press = None
+            if self._style is not None:
+                self.iren.SetInteractorStyle(self._style)
 
     def _on_release(self, obj, event):
         p, self._press = self._press, None

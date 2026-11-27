@@ -46,6 +46,7 @@ from vtkmodules.vtkRenderingCore import vtkActor, vtkPolyDataMapper
 from .gizmo import RING_COLORS, SNAP_DEG, SCREEN_FRACTION, _rgb, ring_axes
 
 PALETTE = ("#14b8a6", "#e879f9", "#84cc16", "#fb923c", "#60a5fa", "#f43f5e")
+RING_PX = 16.0                          # how close (window pixels) the pointer must be to a ring to take it
 GRAB_PX = 12.0                          # how close (window pixels) the pointer must be to a handle's arrow to take it
 BALL_PX = 16.0
 CAP_PX = 14.0                           # the square end of a face handle counts as part of it: this far (window pixels) from its centre
@@ -80,6 +81,9 @@ def _quad(corners) -> vtkPolyData:
     return pd
 
 
+HOOKS = ("callback", "resolver", "on_press", "on_cancel")      # (what a spec carries that is not a number: never a reason to draw again)
+
+
 def _sig_of(s: dict):
     """What decides whether a handle must be drawn again: every number of its spec, but not its callbacks."""
     def norm(x):
@@ -90,7 +94,7 @@ def _sig_of(s: dict):
         if isinstance(x, dict):
             return tuple(sorted((k, norm(v)) for k, v in x.items()))
         return x
-    return norm({k: v for k, v in s.items() if k not in ("callback", "resolver")}), bool(s.get("resolver"))
+    return norm({k: v for k, v in s.items() if k not in HOOKS}), bool(s.get("resolver"))
 
 
 class HandleSet:
@@ -123,7 +127,8 @@ class HandleSet:
             if dk in self.specs and any(s["key"] == dk for s in specs) and [s["key"] for s in specs] == self.order:
                 for s in specs:
                     if s["key"] == dk:
-                        self.specs[dk]["callback"] = s.get("callback")
+                        for h in HOOKS:
+                            self.specs[dk][h] = s.get(h)
                     elif _sig_of(s) != _sig_of(self.specs[s["key"]]):
                         self.specs[s["key"]] = s
                         self._draw(s["key"])
@@ -132,8 +137,8 @@ class HandleSet:
         sig = [_sig_of(s) for s in specs]
         if sig == getattr(self, "_sig", None) and self.on:
             for s in specs:                    # (the callbacks may have been rebuilt)
-                self.specs[s["key"]]["callback"] = s.get("callback")
-                self.specs[s["key"]]["resolver"] = s.get("resolver")
+                for h in HOOKS:
+                    self.specs[s["key"]][h] = s.get(h)
             return
         self._sig = sig
         for k in list(self.actors):
@@ -402,42 +407,51 @@ class HandleSet:
         return float(np.linalg.norm(q - (pa + t * ab)))
 
     def pick(self, x: float, y: float):
-        """(key, part) of the handle under (x, y), or None. A ball beats an arrow and an arrow beats a ring; a nearer handle beats a farther one."""
+        """(key, part) of the handle under (x, y), or None. What is taken first where handles overlap: a ball, then the square end of a face handle, then an
+        arrow, then a ring (a ring is also the largest thing, so it comes last). Between arrows on the same line (a zone's move arrow and its length handle) the one
+        whose own tip is nearer wins: each is taken at its end."""
         if not self.on:
             return None
         dpr = self._g.dpr()
         q = np.array([x, y], float)
-        best, bd = None, 1e18
-        for k in self.order:
+        found = []
+        for n, k in enumerate(self.order):
             s = self.specs[k]
             if s["kind"] == "ring":
                 pts = np.array([self._px(p) for p in self._ring_points(s, 120)])
                 d = min(self._near_segment(q, pts[i], pts[(i + 1) % len(pts)]) for i in range(len(pts)))
-                if d < GRAB_PX * dpr and d + 2 * BALL_PX * dpr < bd:             # (the ring comes last where it meets an arrow or a ball)
-                    best, bd = (k, "ring"), d + 2 * BALL_PX * dpr
+                if d < RING_PX * dpr:
+                    found.append(((3, d, 0.0, n), (k, "ring")))
                 continue
             if s["kind"] != "face":
-                c = self._px(self._grab(s))
-                d = float(np.linalg.norm(q - c))
-                if d < BALL_PX * dpr and d < bd:
-                    best, bd = (k, "ball"), d
+                d = float(np.linalg.norm(q - self._px(self._grab(s))))
+                if d < BALL_PX * dpr:
+                    found.append(((0, d, 0.0, n), (k, "ball")))
             for part, a, b in self._arrows(s):
                 pa, pb = self._px(a), self._px(b)
-                cap = (CAP_PX - GRAB_PX) * dpr if s["kind"] == "face" else 0.0
-                d2 = min(self._near_segment(q, pa, pb), float(np.linalg.norm(q - pb)) - cap)
-                if d2 < GRAB_PX * dpr and d2 + BALL_PX * dpr < bd:           # (a ball wins when both are close)
-                    best, bd = (k, part), d2 + BALL_PX * dpr
-        return best
+                tip = float(np.linalg.norm(q - pb))
+                if s["kind"] == "face" and tip < CAP_PX * dpr:
+                    found.append(((1, tip, 0.0, n), (k, part)))
+                    continue
+                d2 = self._near_segment(q, pa, pb)
+                if d2 < GRAB_PX * dpr:
+                    found.append(((2, round(d2 / (4 * dpr)), tip, n), (k, part)))
+        return min(found, key=lambda f: f[0])[1] if found else None
+
+    def _taken(self, s, part: str) -> np.ndarray:
+        """The world point where a handle is taken: its ball; the square end of a face handle; the middle of an arrow; a ring where it is drawn at 20 degrees."""
+        if s["kind"] == "ring":
+            return self._ring_point(s, 20.0)
+        if s["kind"] == "face":
+            return self._arrows(s)[0][2]
+        if part == "ball":
+            return self._grab(s)
+        a, b = next((a, b) for p, a, b in self._arrows(s) if p == part)
+        return (a + b) / 2
 
     def grab_px(self, key: str, part: str = "ball") -> np.ndarray:
-        """Where to press to take this handle (the ball, or the middle of an arrow; a ring: where it is drawn at 20 degrees): for tests and the control API."""
-        s = self.specs[key]
-        if s["kind"] == "ring":
-            return self._px(self._ring_point(s, 20.0))
-        if part == "ball" and s["kind"] != "face":
-            return self._px(self._grab(s))
-        a, b = next((a, b) for p, a, b in self._arrows(s) if p == (part if part != "ball" else "face"))
-        return self._px((a + b) / 2)
+        """Where to press to take this handle (see _taken): for tests and the control API."""
+        return self._px(self._taken(self.specs[key], part))
 
     def _line_param(self, origin, direction, x, y):
         o, d = self._g.ray(x, y)
@@ -522,10 +536,13 @@ class HandleSet:
             if t0 is None:
                 return False
             d.update(mode="axis", a=a, p0=p0, t0=t0)
+        d["restore"] = list(s["point"]) if s["kind"] == "point" else float(s.get("value") or 0.0)
         self.drag = d
         self.hover = (key, part)
         self._g._cursor(Qt.ClosedHandCursor)
         self._draw(key)
+        if s.get("on_press"):
+            s["on_press"](key)
         if s["kind"] in RELATIVE:
             s["value"] = 0.0
             self._draw(key)
@@ -646,6 +663,29 @@ class HandleSet:
         if cb:
             cb(d["key"], val, True)
 
+    def cancel(self) -> bool:
+        """Escape during a drag: the handle goes back to where it was when the mouse went down and the drag ends there (the control is told it ended at the old
+        value, so its numbers, its drawing and the handle agree again). True when a drag was cancelled."""
+        d = self.drag
+        if d is None:
+            return False
+        s = self.specs[d["key"]]
+        old = d["restore"]
+        if s["kind"] == "point":
+            s["point"] = list(old)
+        else:
+            s["value"] = old
+        self.drag = None
+        self.hover = None
+        self._g._cursor(None)
+        self._draw(d["key"])
+        self.v.render()
+        if s.get("on_cancel"):
+            s["on_cancel"](d["key"])
+        elif s.get("callback"):
+            s["callback"](d["key"], list(old) if s["kind"] == "point" else (0.0 if s["kind"] in RELATIVE else float(old)), True)
+        return True
+
     # ------------------------------------------------------------------ driving it without a mouse (tests, the control API)
     def simulate_move(self, key: str, value, steps: int = 5, part: str = "ball", shift: bool = False):
         """Press the handle, drag it to `value` in a few mouse steps and release it. A plane: its position in m; a point: [x, y, z] in m; a ring: the angle
@@ -667,7 +707,7 @@ class HandleSet:
         if s["kind"] == "face":
             part = "face"
         start = self.grab_px(key, part)
-        taken = self._grab(s) if part == "ball" else next((a + b) / 2 for p, a, b in self._arrows(s) if p == part)        # (where on the handle it is taken)
+        taken = self._taken(s, part)                                   # (where on the handle it is taken)
         if s["kind"] == "face":
             end = self._px(taken + self._dir(s) * (float(value) - float(s.get("value") or 0.0)))
         elif s["kind"] == "plane":
