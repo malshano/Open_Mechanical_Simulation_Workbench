@@ -363,3 +363,39 @@ def test_the_load_route_starts_the_job(loader, monkeypatch):
     other = P.create_project("Other", "external_aero", str(pr.dir.parent))
     r = c.post(f"/api/projects/{other.id}/results/load_case", headers={"X-SimWB": "1"})
     assert r.status_code >= 400 and "no openfoam case" in r.text.lower()
+
+
+def test_a_time_present_in_only_one_processor_folder_is_not_ignored(tmp_path):
+    """The run was stopped while saving: only processor1 has the newest time. It is still a saved time (counted, and the load
+    warns if it cannot be loaded)."""
+    _tree(tmp_path, ["0.1"], nproc=2)
+    (tmp_path / "processor1" / "0.2").mkdir()
+    (tmp_path / "processor1" / "0.2" / "U").write_text("x")
+    assert runner.newest_piece_time(tmp_path) == 0.2
+    assert runner.unjoined_times(tmp_path, aside=False) == 2
+    _joined(tmp_path, "0.1")
+    assert runner.unjoined_times(tmp_path, aside=False) == 1                       # (0.1 is joined, 0.2 is not)
+    assert not runner.time_is_joined(tmp_path, "0.2")
+
+
+def test_the_load_warns_when_the_newest_time_exists_in_one_processor_only(loader, monkeypatch):
+    pr, go = loader
+    _tree(pr.case_dir, ["0.1"], nproc=2)
+    _joined(pr.case_dir, "0.1")
+    (pr.case_dir / "processor1" / "0.2").mkdir()
+    (pr.case_dir / "processor1" / "0.2" / "U").write_text("x")
+    _fake(pr, ["0.2"])
+    job, seen = _load(pr, monkeypatch)
+    assert job.status == "done", (job.error, job.log[-5:])
+    assert seen["latest"] == "0.1"
+    assert any("newest saved time" in w and "0.2" in w for w in pr.data["solve"]["summary"]["warnings"])
+
+
+def test_the_snapshotless_warning_is_short(loader, monkeypatch):
+    pr, go = loader
+    _tree(pr.case_dir, ["0.1"])
+    _fake(pr, [])
+    job, _ = _load(pr, monkeypatch)
+    assert job.status == "done", (job.error, job.log[-5:])
+    w = [x for x in pr.data["solve"]["summary"]["warnings"] if "setup" in x]
+    assert w == ["The setup may have changed since this run: the numbers use today's settings."]

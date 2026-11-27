@@ -4873,8 +4873,8 @@ class Project:
         ch = self.setup_changes()
         if ch != []:
             summary.setdefault("warnings", []).append(
-                "The setup may have changed since this run" + (f" ({'; '.join(ch[:3])})" if ch else "")
-                + ": the numbers are computed with today's settings, so check them before relying on them.")
+                ("The setup changed since this run (" + "; ".join(ch[:3]) + ")" if ch else "The setup may have changed since this run")
+                + ": the numbers use today's settings.")
         summary["loaded_from_case"] = True
         self._adopted_warning(summary)
         old = (self.data["solve"].get("summary") or {})
