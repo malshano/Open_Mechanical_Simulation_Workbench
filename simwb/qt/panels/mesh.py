@@ -14,6 +14,7 @@ from ..forms import fmt_num
 from ..ids import wid
 from ..meshtools import AdvisorCard, Budget, LayerCard, MeshCheck, StatsGrid, mesh_notes, stats_rows
 from .common import _h, _muted, _Panel, _seg
+from . import mesh_edges
 from .mesh_adv import MeshAdvanced
 
 
@@ -74,6 +75,7 @@ class MeshPanel(_Panel):
         v.zone_view.clear()
         v.legend.set_extra([])
         v.layer_view.clear()
+        v.sharp_view.clear()
         v.set_labels([])
         v.set_face_tints({})
         v.set_selection([])
@@ -188,6 +190,7 @@ class MeshPanel(_Panel):
                 zt = {}
         self.view.set_face_tints({**zt, **tints})
         self._draw_interface(zs)
+        mesh_edges.draw(self.adv)
 
     def _draw_interface(self, zs):
         """The meshed boundary of the rotating zones (the sliding interface), in the 3D view and counted under the colour buttons."""

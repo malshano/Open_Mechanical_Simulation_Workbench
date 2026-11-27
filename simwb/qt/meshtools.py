@@ -64,6 +64,9 @@ def stats_rows(st: dict) -> list:
         rows += [("Max non-orthogonality", f"{_f1(fq.get('non_orthogonality_max'))}°"), ("Max skewness", f"{fq.get('skewness_max', 0):.2f}")]
     if s.get("defeatured_faces"):
         rows.append(("Defeatured faces", str(s["defeatured_faces"])))
+    er = s.get("edge_refine")
+    if er:
+        rows.append(("Edge refinement", f"{er['edges']} edge{'s' if er['edges'] != 1 else ''} · cells of {_f(er['size'] * 1000)} mm · about {er['estimated_extra_cells']:,.0f} extra cells (estimate)"))
     if s.get("method") == "hex" and s.get("cell_types"):
         ct, x = s["cell_types"], s.get("hex") or {}
         rows += [("Hexahedra", f"{100 * ct.get('hexahedra', 0) / max(s.get('cells', 1), 1):.0f} %"),

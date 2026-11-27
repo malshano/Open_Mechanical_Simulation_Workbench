@@ -62,7 +62,7 @@ def settings(pr) -> dict:
         return {"on": True, "source": "setting", "factor": float(er.get("factor", 6.0)), "max_cells": float(er.get("max_cells", gmsh_worker.EDGE_CAP)),
                 "max_angle": float(er.get("max_angle", gmsh_worker.EDGE_ANGLE))}
     smart = bool(m.get("smart")) and not m.get("no_edge_refine")
-    return {"on": smart, "source": "smart" if smart else None, "factor": SMART_FACTOR if smart else 6.0,
+    return {"on": smart, "source": "smart" if smart else None, "factor": SMART_FACTOR if m.get("smart") else 6.0,       # (with smart sizing the default is its own 4)
             "max_cells": float(gmsh_worker.EDGE_CAP), "max_angle": float(gmsh_worker.EDGE_ANGLE)}
 
 
@@ -105,44 +105,95 @@ def run_scan(pr) -> dict:
     return result
 
 
-def ensure_scan(pr, wait: bool = False) -> dict:
-    """Start the edge search of the current geometry when there is none (on a thread of its own: the window stays alive), and say where it is. With `wait`
-    the call returns when it is done. The project's change event tells the window when the answer is in."""
-    key = _key(pr)
+def _background(pr, attr: str, key, fn, wait: bool = False) -> dict:
+    """Run fn() once per key on a thread of its own and keep the answer on the project as pr.<attr> = {key, state, result, error, thread}; the window is told
+    (project change event) when it is in. Returns {state, result, error} of the current key."""
     with _LOCK:
-        sc = getattr(pr, "_edge_scan", None)
+        sc = getattr(pr, attr, None)
         if not sc or sc["key"] != key:
             sc = {"key": key, "state": "running", "result": None, "error": None}
-            pr._edge_scan = sc
+            setattr(pr, attr, sc)
 
             def work():
                 try:
-                    sc["result"] = run_scan(pr)
+                    sc["result"] = fn()
                     sc["state"] = "ready"
                 except Exception as e:  # noqa: BLE001 - a help: it says why it has no numbers
                     sc["error"], sc["state"] = str(e), "failed"
-                from .jobs import JOBS
+                from .project import JOBS
 
                 JOBS.emit({"type": "project_changed", "project": pr.id})
 
-            t = threading.Thread(target=work, name="edge-scan", daemon=True)
+            t = threading.Thread(target=work, name=attr, daemon=True)
             sc["thread"] = t
             t.start()
     if wait and sc.get("thread") is not None:
         sc["thread"].join()
-    return scan_state(pr)
+    return {k: sc.get(k) for k in ("state", "result", "error")}
+
+
+def ensure_scan(pr, wait: bool = False) -> dict:
+    """Start the edge search of the current geometry when there is none (on a thread of its own: the window stays alive), and say where it is. With `wait`
+    the call returns when it is done."""
+    return _background(pr, "_edge_scan", _key(pr), lambda: run_scan(pr), wait)
+
+
+def measure(pr, wait: bool = False) -> dict:
+    """What the last mesh holds at the refined edges, counted in the mesh itself (not estimated): {state, result: {zone_cells, zone_share, extra_cells,
+    distance}} for the tetrahedra whose centre lies within the edge field's reach (stats.edge_refine.dist_max) of the edges that were refined; `extra_cells`
+    is those cells less what the same volume holds at the wall cell size. None without a mesh made with edge refinement and a finished edge search."""
+    st = (pr.data["mesh"].get("stats") or {})
+    er = st.get("edge_refine")
+    sc = scan_state(pr)
+    if not er or sc["state"] != "ready":
+        return {"state": "none"}
+    return _background(pr, "_edge_measure", (_key(pr), st.get("seconds"), st.get("cells")), lambda: _measure(pr, er, sc["result"]), wait)
+
+
+def _measure(pr, er: dict, scan: dict) -> dict:
+    import numpy as np
+    from scipy.spatial import cKDTree
+
+    m = pr.load_mesh()
+    if "hex" in m:
+        raise ValueError("a hex-dominant mesh")
+    nodes, tets = np.asarray(m["nodes"], float), np.asarray(m["tets"])
+    h_wall = float(er["size_far_of_edge_field"])
+    dist = float(er["dist_max"])
+    # the refined edges again, as the plan chooses them from the same search
+    edges = [(e["tag"], e["angle"], e["length"], e["points"]) for e in scan["edges"]]
+    L = float(scan["ref_length"])
+    plan = gmsh_worker.edge_refine_plan(edges, h_wall, L, float(er["growth"]), float(er["factor"]), float(er["cap_cells"]), float(er.get("angle_limit", gmsh_worker.EDGE_ANGLE)))
+    pts = []
+    for e in plan["edges"]:
+        p = np.asarray(e[3], float)
+        seg = np.linalg.norm(np.diff(p, axis=0), axis=1)
+        n = max(int(np.ceil(seg.sum() / max(er["size"] * 0.5, 1e-9))), 2)
+        t = np.concatenate([[0], np.cumsum(seg)])
+        s = np.linspace(0, t[-1], min(n, 200_000))
+        pts.append(np.stack([np.interp(s, t, p[:, k]) for k in range(3)], axis=1))
+    if not pts:
+        return {"zone_cells": 0, "zone_share": 0.0, "extra_cells": 0.0, "distance": dist}
+    tree = cKDTree(np.vstack(pts))
+    a, b, c, d = (nodes[tets[:, k]] for k in range(4))
+    cen = (a + b + c + d) / 4.0
+    near = tree.query(cen, distance_upper_bound=dist)[0] < dist
+    vol = np.abs(np.einsum("ij,ij->i", np.cross(b - a, c - a), d - a)) / 6.0
+    wall_cell = h_wall ** 3 / (6.0 * np.sqrt(2.0))
+    zone = int(near.sum())
+    return {"zone_cells": zone, "zone_share": zone / max(len(tets), 1), "extra_cells": max(zone - float(vol[near].sum()) / wall_cell, 0.0), "distance": dist}
 
 
 # ---------------------------------------------------------------------------------------------------------------------------------- the preview
 def preview(pr, scan: bool = False, wait: bool = False) -> dict:
     """The sharp-edge refinement as the stored settings would run it: {available, reason, on, source, factor, max_cells, max_angle, smart, blocked,
-    scan, h_wall, plan: {applied, reason, edges (count), total_length, h_edge, factor_used, estimated_extra_cells, capped, cap_cells} | None,
+    scan, measured (what the last mesh holds at the edges, see measure), h_wall, plan: {applied, reason, edges (count), total_length, h_edge, factor_used, estimated_extra_cells, capped, cap_cells} | None,
     lines: [polyline of each refined edge]}. `scan` starts the edge search when there is none (needed for the plan); `wait` waits for it."""
     m = pr.data["mesh"]
     why = unavailable(pr)
     s = settings(pr)
     out = {"available": why is None, "reason": why, **s, "smart": bool(m.get("smart")), "blocked": None, "scan": "none", "scan_error": None,
-           "h_wall": None, "plan": None, "lines": []}
+           "h_wall": None, "plan": None, "lines": [], "measured": None}
     if why is not None:
         return out
     if m.get("size_min") and not m.get("smart"):
@@ -172,4 +223,6 @@ def preview(pr, scan: bool = False, wait: bool = False) -> dict:
     out["lines"] = [e[3] for e in plan["edges"]] if plan["applied"] else []
     out["plan"] = {k: v for k, v in plan.items() if k != "edges"}
     out["plan"]["edges"] = len(plan["edges"])
+    mm = measure(pr, wait=wait)
+    out["measured"] = mm if mm["state"] != "none" else None
     return out
