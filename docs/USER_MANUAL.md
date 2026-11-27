@@ -647,7 +647,10 @@ The tabs are the ones of section 8, with these differences and additions.
   | Pinned value (each) | Probe | ball on the model | **X, Y, Z** (mm) under each pin: type a point and it goes to the nearest place on the model |
   | Ends A and B of the line plot | Probe | ball on the model | **X, Y, Z** of each end |
 
-  The refinement regions and the rotating zones of the Mesh and Setup steps have their own handles (they are not in the Results step).
+  The refinement regions of the Mesh step and the rotating zones of the Setup step use the same handles, drawn the same way: **three arrows** (red x, green y,
+  blue z) and a **ball** move something, **rings** turn it (Shift: 5 degree steps), and a **square-ended arrow** on a face resizes it. The pointer becomes a hand over a
+  handle, the handle lights up, and a line in the corner of the view says what the drag does (for example *Turning about z: +30.0°*). In every step the numbers and
+  the handles follow each other, and what is expensive waits until you let go.
 - **Probe**: pin values by clicking the coloured result; line plot between two points or from the minimum to the maximum.
 - **Time bar** (Display, under the field; transient results): the saved time shown, a slider over the saved times and **▶ Play** /
   **❚❚ Pause**. Pinned values are cleared when the time changes; the line plot follows the time. A note says when the field hardly
@@ -757,6 +760,13 @@ gravity too). A line at the top of the panel says what the last action did, or w
   are **inside** (they turn with it), which are **outside**, and warns in the warning colour about a part the zone's boundary cuts through (the mesh cannot
   match there: make the zone larger or smaller). **Preview the turn** (a slider over one revolution, and ▶) turns a purple ghost of what is inside the zone;
   with a transient analysis it says how many saved frames the angle is (the **Saved frame every** setting). Nothing is stored; leaving the step puts it away.
+  **Drag a zone in the 3D view**: tick **Show handles in the 3D view** on its card (a new zone has it ticked; one zone at a time). The three arrows and the
+  ball move it, a square-ended arrow on each flat face changes its **Length along the axis**, the one on its side its **Radius**, and the two rings turn
+  its **Axis** a quarter turn at a time (a zone has to lie along x, y or z: the ring jumps from one axis to the next, and the zone is drawn along the new one;
+  for any other direction use **Centre on a round edge** and **Turn the model**). The **Centre**, **Radius**, **Length** and **Axis** in the card follow the
+  handles and the handles follow the numbers. The zone is stored when you let go (the mesh is then out of date, as when you type); if it would touch another
+  zone it goes back and the message says why. The handles are put away while you are choosing a centre of rotation or the faces of a condition, so that a
+  click reaches the model.
 - The settings are headed (**Flow condition**, **Loads**, **Modes and vibration source** ...). A transient external flow with
   sliding zones shows a **Suggested end time** with **Use it**.
 
@@ -798,16 +808,19 @@ layers** - and **Generate mesh**.
 - **Refinement regions are drawn in the 3D view** before you mesh: each box or cylinder (a ring too) as a translucent body with an outline, in
   the colour of its swatch in the list, with its name and cell size written on it; the region you edit is drawn stronger. **◎** zooms to a
   region, and **Show the regions in the 3D view** switches the drawing off. Edit the numbers and the drawing follows.
-- **Move / turn a region**: press **Move / turn…** on a region's card. Resize it in the same session: **square-ended arrows** on its faces (a box has six, a cylinder one at each end and one for the radius) move that face while the
-  opposite one stays (Shift: round steps), or type the **Size** (mm, in the region's own axes) or **Scale all** (a percentage of the stored region).
-  A gizmo appears at the region's middle, as in the Geometry step: drag an
-  arrow to move it along x, y or z, the ball to move it freely, a ring to turn it about x, y or z (hold Shift for round steps); or type
-  **Move by** (mm) and **Turn about** (degrees). The region is drawn as it would be; **Apply** stores it, **Reset** puts the preview back,
-  **Cancel** leaves the region alone. A box keeps its turn (a note on its card says so; its corner numbers are the box before the turn);
-  a cylinder moves its end points. The tetrahedral mesh follows a turned box exactly; the hex-dominant mesh refines the box round it.
+- **Move, turn and resize a region**: press **Move / turn…** on a region's card. The region gets the handles of the 3D view (the same as in the Results step and for
+  the rotating zones): **three arrows** (red x, green y, blue z) and a white **ball** at its middle move it, three **rings** (about x, y, z) turn it, and a
+  **square-ended arrow** on each face resizes it (a box has six, a cylinder one at each end and one for the radius): the face moves and the opposite one
+  stays. Hold **Shift** for round steps (5 degrees, round millimetres). Or type **Move by** (mm), **Turn about** (degrees), **Size** (mm, in the region's own
+  axes) or **Scale all** (a percentage of the stored region): the numbers and the handles follow each other, and a line in the corner of the view says what the
+  drag does. The region is drawn as it would be; nothing is stored and nothing is meshed until you press **Apply**; **Reset** puts the preview back, **Cancel**
+  leaves the region alone. A box keeps its turn (a note on its card says so; its corner numbers are the box before the turn); a cylinder moves its end points.
+  A turned box is meshed as the turned box: the tetrahedral mesh follows it exactly (a size field in the box's own axes) and the hex-dominant mesh is given
+  the turned box as a closed surface of its own, so the fine cells fill the box and not the larger box round it.
   **Line up with a face…** (in the same session) turns the region so that the side of it that already points closest to a face is parallel to that face
-  (a cylinder: its axis): click the button, then click a face of the model or a wall of the air volume. Tick **and put its middle on the face** to move the
-  region there too. It is only previewed: the numbers show the turn, and **Apply** stores it.
+  (a cylinder: its axis): click the button, then click a face of the model or a wall of the air volume (the handles are put away while you click, so that
+  they never take the click). Tick **and put its middle on the face** to move the region there too. It is only previewed: the numbers show the turn, and
+  **Apply** stores it.
 - **Refinement regions**: **＋ Box** and **＋ Cylinder** as before; each region now shows roughly how many cells it alone makes (in the
   warning colour above three million), and a box has **Fit around part…** to put it round a part. In a flow study with rotating zones,
   **＋ Wake behind rotating zones** adds a cylinder of zone-size cells two diameters downstream of each zone, and **＋ Tip-vortex rings**
@@ -875,8 +888,8 @@ yourself afterwards.
 
 What is still missing in the window is small:
 
-- **Dragging in the 3D view**: the orange handles of the air volume, and dragging a symmetry plane, a rotor disc or a rotating zone with the
-  mouse. Type the values in the panel instead.
+- **Dragging in the 3D view**: the orange handles of the air volume and a rotor disc cannot be dragged yet. Type the values in the panel instead.
+  (A symmetry plane, a refinement region, a rotating zone and everything in the Results step have handles.)
 - **Symbols on the model**: block, roller and plate symbols for each kind of condition. The desktop window shows each
   condition by its tint, its label and arrows.
 - **A per-part gizmo preview inside a flow study**: the model turns and moves as a whole there (a single part can be moved in heat,

@@ -220,3 +220,33 @@ def test_gmsh_makes_small_cells_in_the_turned_box_and_not_in_the_box_round_it():
         & (np.abs(P[:, 2] - 0.5) < 0.05)                              # (inside the box round the turned one, far from the turned box)
     assert inside.sum() > 100                                          # (many nodes: the turned box is meshed finely)
     assert inside.sum() > 5 * max(int(corner.sum()), 1) or corner.sum() == 0
+
+
+def test_a_turned_region_is_the_same_after_the_study_is_closed_and_opened_again(aero, tmp_path):
+    """Save, close and reopen the study: the turned, moved and resized region comes back unchanged (project.json keeps min, max and the rotation)."""
+    c = aero
+    c.do("mesh.region_add", {"kind": "box"})
+    c.widget_do("mesh.region.0.xform", "set", True)
+    c.widget_do("mesh.region.0.xf.mx", "set", "12")
+    c.widget_do("mesh.region.0.xf.tz", "set", "35")
+    c.widget_do("mesh.region.0.xf.sx", "set", "300")
+    c.widget_do("mesh.region.0.xf.apply", "click")
+    saved = c.engine.state()["mesh"]["regions"][0]
+    assert saved["rotation"] is not None
+    folder = str(c.engine.project().dir)
+    c.do("study.new", {"name": "Other", "study": "external_aero"})                      # (the first study is closed: it was saved on the way)
+    c.do("study.open_folder", {"path": folder})
+    again = c.engine.state()["mesh"]["regions"][0]
+    assert again == saved
+    assert np.allclose(again["rotation"], rz(35)) or euler_deg(np.array(again["rotation"]))[2] == pytest.approx(35.0)
+    c.widget_do("mesh.region.0.xform", "set", True)                                     # (and the session starts from it: no change pending, the handles are on it)
+    assert not c.win.panels["mesh"].adv.xform.pending() and c.win.view.handles.on
+    assert regions.size_of(c.win.panels["mesh"].adv.xform.preview())[0] == pytest.approx(0.3)
+
+
+def test_the_cell_estimate_of_a_turned_box_is_that_of_the_box():
+    from simwb.qt.meshtools import region_cells
+    turned = regions.moved_and_turned(BOX, rz(37), [0, 0, 0])
+    assert region_cells(turned)[0] == pytest.approx(region_cells(BOX)[0])               # (turning does not change the volume: the estimate is of the box in its own axes, not the box round it)
+    lo, hi = regions.bounds(turned)
+    assert np.prod(np.subtract(hi, lo)) > 1.2 * np.prod(np.subtract(BOX["max"], BOX["min"]))     # (the box round it is larger: using it would over-count)

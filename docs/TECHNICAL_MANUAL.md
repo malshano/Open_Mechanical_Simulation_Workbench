@@ -268,6 +268,7 @@ An optional mesher for `external_aero` (`mesh.method == "hex"`, set with `set_me
 - **Scope**: a body in the automatic box of air; wall conditions only. `hexmesh.unsupported()` returns the reason it cannot be used (rotors, moving zones, symmetry planes, a non-box air volume, a condition on an air-box face); the GUI shows it, `set_mesh(method="hex")` and the writer refuse. The tetrahedral mesh stays the default.
 - **Plan** (`make_plan`): same sizing rules as the Gmsh mesher (`PRESETS`, `FEATURE_CELLS`, `L/(4n)` wall size, thin-face sizes, user refinements and regions). The surface cell is `h_wall`; the background cell is `h_wall * 2^levels` (4..7 levels, as few as `MAX_BACKGROUND_CELLS` allows), cubic cells, a wake box downstream (level `levels - 2`) when the speed is at least 1 m/s. Faces with a local size form one surface per refinement level.
 - **Case** (`write_case`): one STL per refinement group (`<patch>_L<level>`), `blockMeshDict` (single patch `farfield`), `surfaceFeatureExtractDict`, `snappyHexMeshDict` (castellate, snap, layers with `relativeSizes false` and the same y+-based first layer as the tetrahedral layers), `createPatchDict`, a `controlDict` with `writeFormat ascii; writePrecision 10;` (snappyHexMesh refuses to merge points otherwise). `locationInMesh` is a point in the air off every grid plane.
+- **Turned refinement boxes**: a region with a `rotation` is written as `triSurfaceMesh` (`region_<i>_<name>.stl`, the 12 triangles of `regions.box_triangles`, normals out) with `mode inside`, because `searchableBox` cannot turn; the plan keeps the bounding box in `min` / `max` and the corners in `corners` / `triangles`. The tetrahedral mesh uses `gmsh_worker.box_size_expr` (a MathEval size field in the box's own axes).
 - **Run**: `STEPS` = blockMesh, surfaceFeatureExtract, snappyHexMesh, createPatch (merges the groups into the patches the setup knows), checkMesh (`allow_fail`). In the v2606 Windows build `createPatch -overwrite` writes to `0/polyMesh`; `finalize()` moves it to `constant/polyMesh`. Non-Windows backends run the same steps from an `Allmesh` script (not tested).
 - **Stored**: `mesh_dir/polyMesh_hex` is the real mesh. `mesh.npz` holds display arrays in the same format as the tetrahedral mesh (cells split into display tetrahedra by `results_loader.display_mesh`, boundary triangles with a representative CAD face per patch, `tri_owner`, a per-tet quality of `1 - worst non-orthogonality / 90 deg`, `hex = 1`). `load_mesh()` adds `hex_dir`. `stats` has `method: "hex"`, `cell_types`, `foam_quality` (from checkMesh) and a `hex` block (levels, layers coverage, problems, warnings).
 - **Case writer**: `write_external_aero` copies `polyMesh_hex` into the case (`_use_polymesh`) instead of converting tetrahedra, does not add layers again, and refuses rotors, zones and symmetry planes.
@@ -809,6 +810,22 @@ highlighted (`faceColorFn`) and `viewer.setAlignMarker` draws its normal. Tests:
 
 `Project.ref_info(face, exclude)` is the plane to align to: a tunnel wall (`wall_info`) or another flat face (`align_info`); `align_face(face, wall=<that face id>, away)` makes the face's outward normal equal to its normal (`away`: the opposite). The GUI asks for it as the click right after the face (`startRefPick`, `GET /align_info?ref=1`). A previewed turn (`S.rotPending`) is applied by `goStep` when the Geometry step is left (`applyOrientation(then)`).
 
+
+## Handles in the 3D view (`simwb/qt/handles.py`)
+
+One behaviour for everything that can be dragged in the 3D view; a control describes what it wants as a list of specs and gets `callback(key, value, final)`.
+Kinds: `plane` (a sheet dragged along its axis), `point` (a ball and x / y / z arrows; with a `resolver` the ball follows the surface under the pointer), `ring`
+(`axis` or `normal`, `point`, `radius`; value = angle in rad since the drag began; `detent_deg` makes it jump in steps, Shift snaps to `snap_deg`), `face` (`point`, `dir`,
+`length`, `limits`; value = distance in m moved outwards since the drag began). Rings and faces call back with 0 and `final=False` when the drag starts (the control
+keeps what it was), then with the value, then with `final=True` on release; planes and points report the new position. While a handle is dragged `HandleSet.set()`
+updates the other handles (a region's rings follow the arrow that moves it) and the dragged one follows the pointer itself. `"fit": True` keeps the largest
+part of a spec inside 30 % of the picture's smaller side (it is drawn again when the camera moves). Everything works from pixel positions and the camera, so
+`simulate_move(key, value, part=)` is a whole press-drag-release for tests and the control API (`view.handle`: mm for a point or a face, degrees for a ring).
+Users: `resulthandles.py` (Results step), `regionhandles.py` + `regionxform.py` (the Move / turn session of a refinement region: `x' = R (x - c) + c + shift`, faces
+through `regions.grown`), `zonehandles.py` (a rotating zone in Setup: move, `zones.grown` for the faces, a quarter-turn ring through `zones.tilted_axis`; stored on
+release with `set_moving_zones`, put back when the engine refuses it). The Geometry step keeps its own `RotateGizmo` (it also previews the model).
+Tests: `tests/test_qt_handles.py`, `tests/test_regions_turn.py`, `tests/test_zone_handles.py`; real mouse events in a window with OpenGL: `tests/test_qt_handles_mouse.py`
+(drives `tests/gl_drive_handles.py` in its own process, skipped where no OpenGL window can be made).
 
 ## Centre of rotation from a round feature (`simwb/axisfit.py`)
 
