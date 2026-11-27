@@ -47,6 +47,23 @@ def box_corners(r: dict) -> np.ndarray:
     return c + (signs * h) @ rotation_of(r).T
 
 
+BOX_QUADS = ((0, 1, 3, 2), (4, 5, 7, 6), (0, 1, 5, 4), (2, 3, 7, 6), (0, 2, 6, 4), (1, 3, 7, 5))      # (corner indices of the six sides, see box_corners)
+
+
+def box_triangles(r: dict) -> tuple:
+    """(corners (8, 3), triangles (12, 3)) of a box region in the world, every triangle turned so that its normal points out of the box: the closed
+    surface a mesher that cannot turn a box (snappyHexMesh's searchableBox) is given instead."""
+    c8 = box_corners(r)
+    mid = c8.mean(axis=0)
+    tris = []
+    for q in BOX_QUADS:
+        for t in ((q[0], q[1], q[2]), (q[0], q[2], q[3])):
+            a, b, c = c8[list(t)]
+            out = float(np.cross(b - a, c - a) @ ((a + b + c) / 3 - mid)) > 0
+            tris.append(t if out else (t[0], t[2], t[1]))
+    return c8, np.array(tris, np.int64)
+
+
 def bounds(r: dict) -> tuple:
     """(min, max) of the axis-aligned box that holds the region: what a mesher that only knows axis-aligned boxes is given."""
     if r.get("shape") == "cylinder" or not is_turned(r):

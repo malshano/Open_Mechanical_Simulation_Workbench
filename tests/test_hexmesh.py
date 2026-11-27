@@ -109,6 +109,37 @@ def test_refinement_groups_levels_and_the_user_regions(workspace, tmp_path):
     assert any(r["name"] == "my_box" for r in plan["regions"])
 
 
+def test_a_turned_box_region_reaches_snappyhexmesh_as_a_closed_oriented_surface(workspace, tmp_path):
+    """snappyHexMesh's searchableBox cannot turn: a turned refinement box is written as a 12-triangle closed surface (mode inside), not its bounding box."""
+    from simwb import regions
+    t = np.radians(30)
+    rz = np.array([[np.cos(t), -np.sin(t), 0], [np.sin(t), np.cos(t), 0], [0, 0, 1.0]])
+    box = {"name": "tilted", "min": [0, 0, 0], "max": [0.1, 0.02, 0.02], "size": 0.01}
+    pr = _project(workspace, tmp_path)
+    pr.set_mesh(regions=[{**box, "rotation": rz.tolist()}, {**box, "name": "straight", "min": [0, 0.05, 0], "max": [0.1, 0.07, 0.02]}])
+    plan, faces, *_ = _plan(pr)
+    tilted = next(r for r in plan["regions"] if r["name"] == "tilted")
+    straight = next(r for r in plan["regions"] if r["name"] == "straight")
+    assert len(tilted["triangles"]) == 12 and "corners" not in straight
+    case = tmp_path / "hexcase2"
+    hexmesh.write_case(case, plan, faces)
+    snappy = (case / "system" / "snappyHexMeshDict").read_text()
+    i = plan["regions"].index(tilted)
+    stl = case / "constant" / "triSurface" / f"region_{i}_tilted.stl"
+    assert stl.is_file() and stl.read_text().count("facet normal") == 12
+    assert f'region_{i}_tilted {{ type triSurfaceMesh; file "region_{i}_tilted.stl"; }}' in snappy
+    assert "searchableBox; min (0 0.05 0)" in snappy                     # (the straight one is as before)
+    # the surface is the turned box: closed (every edge twice), normals out, the volume of the box
+    v, tr = regions.box_triangles({**box, "rotation": rz.tolist()})
+    edges = {}
+    for a, b, c in tr:
+        for e in ((a, b), (b, c), (c, a)):
+            edges[e] = edges.get(e, 0) + 1
+    assert all(edges.get((b, a)) == 1 for (a, b) in edges)
+    vol = sum(float(np.dot(v[a], np.cross(v[b], v[c]))) for a, b, c in tr) / 6
+    assert vol == pytest.approx(0.1 * 0.02 * 0.02, rel=1e-9)             # (positive: the normals point out)
+
+
 def test_the_meshing_case_is_written(workspace, tmp_path):
     pr = _project(workspace, tmp_path)
     pr.set_mesh(layers={"n": 3, "growth": 1.2})

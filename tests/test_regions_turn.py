@@ -188,3 +188,34 @@ def test_the_resize_handles_go_when_the_session_ends(aero):
     assert [h["key"] for h in c.win.view.scale_handles.handles] == [("len", 0), ("len", 1), ("rad", 0)]
     c.widget_do("mesh.region.0.xf.cancel", "click")
     assert not c.win.view.scale_handles.on
+
+
+def test_gmsh_makes_small_cells_in_the_turned_box_and_not_in_the_box_round_it():
+    """The size field of a turned box, in a real (tiny) gmsh mesh: cells inside the turned box are fine, cells in the corners of the axis-aligned box round it are not."""
+    import gmsh
+    turned = regions.moved_and_turned({"name": "t", "min": [0.3, 0.45, 0.45], "max": [0.7, 0.55, 0.55], "size": 0.02}, rz(45), [0, 0, 0])
+    expr = box_size_expr(turned["min"], turned["max"], turned["rotation"], 0.02, 0.2, 0.1)
+    gmsh.initialize(["-nopopup"])
+    try:
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.model.add("t")
+        gmsh.model.occ.addBox(0, 0, 0, 1, 1, 1)
+        gmsh.model.occ.synchronize()
+        f = gmsh.model.mesh.field.add("MathEval")
+        gmsh.model.mesh.field.setString(f, "F", expr)
+        gmsh.model.mesh.field.setAsBackgroundMesh(f)
+        for k in ("Mesh.MeshSizeFromPoints", "Mesh.MeshSizeExtendFromBoundary", "Mesh.MeshSizeFromCurvature"):
+            gmsh.option.setNumber(k, 0)
+        gmsh.option.setNumber("Mesh.MeshSizeMax", 0.2)
+        gmsh.model.mesh.generate(3)
+        _t, coords, _p = gmsh.model.mesh.getNodes()
+    finally:
+        gmsh.finalize()
+    P = np.asarray(coords).reshape(-1, 3)
+    R = np.asarray(turned["rotation"])
+    local = (P - 0.5) @ R                                              # (R^T (x - c): the points in the box's own axes)
+    inside = (np.abs(local) <= np.array([0.2, 0.05, 0.05]) + 0.02).all(axis=1)
+    corner = (np.abs(P[:, 0] - 0.5) > 0.15) & (np.abs(P[:, 1] - 0.5) > 0.15) & (np.abs(P[:, 0] - 0.5) < 0.25) & (np.abs(P[:, 1] - 0.5) < 0.25) \
+        & (np.abs(P[:, 2] - 0.5) < 0.05)                              # (inside the box round the turned one, far from the turned box)
+    assert inside.sum() > 100                                          # (many nodes: the turned box is meshed finely)
+    assert inside.sum() > 5 * max(int(corner.sum()), 1) or corner.sum() == 0
