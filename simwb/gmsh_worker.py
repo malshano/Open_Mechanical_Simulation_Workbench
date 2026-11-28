@@ -1219,6 +1219,8 @@ def task_mesh(job: dict) -> dict:
         size_far = max(bmax[i] - bmin[i] for i in range(3)) / 12
     elif study == "cht_enclosure":
         size_far = h_body
+    if ms.get("far_size"):                  # (the memory budget coarsens the bulk: meshplan.bulk_settings)
+        size_far = max(float(ms["far_size"]), h_wall)
 
     dist = fields.add("Distance")
     fields.setNumbers(dist, "SurfacesList", wall_faces)

@@ -16,6 +16,7 @@ from ..meshtools import AdvisorCard, Budget, LayerCard, MeshCheck, StatsGrid, me
 from .common import _h, _muted, _Panel, _seg
 from . import mesh_edges
 from .mesh_adv import MeshAdvanced
+from .mesh_ram import MemoryCard
 
 
 def verdict(q: dict, stats: dict | None = None) -> tuple:
@@ -244,6 +245,10 @@ class MeshPanel(_Panel):
         self._advice_key = None
         self.adv = MeshAdvanced(self)
         self.v.addWidget(self.adv)
+        self.memory_h = _h("Memory budget")
+        self.v.addWidget(self.memory_h)
+        self.memory = wid(MemoryCard(self), "mesh.memory")
+        self.v.addWidget(self.memory)
         self.gen = wid(QPushButton("Generate mesh"), "mesh.generate")
         self.gen.setObjectName("primary")
         self.gen.clicked.connect(self._generate)
@@ -529,6 +534,8 @@ class MeshPanel(_Panel):
         if m.get("preset") in self.preset_btns:
             self.preset_btns[m["preset"]].setChecked(True)
         self.adv.refresh(st)
+        self.memory.refresh(st)
+        self.memory_h.setVisible(self.memory.isVisible())
         self.adv.setVisible(not mode.simple())              # (Simple mode: the presets only)
         s = m.get("stats")
         t = theme.tokens()

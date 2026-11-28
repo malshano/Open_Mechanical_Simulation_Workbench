@@ -2894,7 +2894,7 @@ class Project:
         return hexmesh.unsupported(self.data, self.faces(), self.data["geometry"].get("info") or {})
 
     def set_mesh(self, preset=None, size_max_mm=None, size_min_mm=None, refinements=None, regions=None,
-                 layers=None, defeature_mm=False, method=None, edge_refinement=None, smart=None):
+                 layers=None, defeature_mm=False, method=None, edge_refinement=None, smart=None, budget=None):
         if self.busy():
             raise RuntimeError("Please wait: a job is still running for this project (or cancel it).")
         m = self.data["mesh"]
@@ -3015,6 +3015,8 @@ class Project:
 
                 m["edge_refine"] = edgepreview.check_options(edge_refinement, base=m.get("edge_refine"))
                 m.pop("no_edge_refine", None)
+        if budget is not None:  # the memory budget: off | {"mb": 4000} | {"percent": 50} | a number (MB); {"on": false} switches it off and keeps the value (see meshplan.py)
+            m["budget"] = self._check_budget(budget, m.get("budget"))
         if defeature_mm is not False:  # small-face groups merged into the face they sit on: None / 0 = off
             d = studies.finite(defeature_mm or 0, "Defeature size")
             if not 0 <= d <= 50:
@@ -3026,13 +3028,45 @@ class Project:
         # (the tetrahedral mesh gets its layers at the run; the hex-dominant mesh makes them with the mesh)
         only_layers = (layers is not None and preset is None and size_max_mm is None and size_min_mm is None
                        and refinements is None and regions is None and method is None and edge_refinement is None
-                       and smart is None and m.get("method") != "hex")
+                       and smart is None and budget is None and m.get("method") != "hex")
         self.mark_stale(("solve",) if only_layers else ("mesh", "solve"))  # (layers are added at the run)
         self.save()
+
+    @staticmethod
+    def _check_budget(b, old: dict | None) -> dict:
+        """The memory budget as stored: {mode: 'mb' | 'percent', value, on}. Accepts False / 'off' (off, the value kept), a number (MB), {mb}, {percent} or {mode, value, on}."""
+        old = dict(old or {})
+        if b in (False, "off", 0) or (isinstance(b, dict) and b.get("on") is False and not ({"mb", "percent", "value"} & set(b))):
+            return {"mode": old.get("mode", "mb"), "value": old.get("value", 4000.0), "on": False}
+        if isinstance(b, (int, float)) and not isinstance(b, bool):
+            b = {"mb": b}
+        if b is True:
+            b = {}
+        if not isinstance(b, dict):
+            raise ValueError("The memory budget is a number of MB, {mb: ...}, {percent: ...} or false")
+        if "mb" in b:
+            mode, val = "mb", studies.finite(b["mb"], "Memory budget")
+        elif "percent" in b:
+            mode, val = "percent", studies.finite(b["percent"], "Memory budget")
+        else:
+            mode = b.get("mode", old.get("mode", "mb"))
+            if mode not in ("mb", "percent"):
+                raise ValueError("The memory budget is in MB ('mb') or in percent of the free memory ('percent')")
+            val = studies.finite(b.get("value", old.get("value", 4000.0 if mode == "mb" else 50.0)), "Memory budget")
+        if mode == "mb" and not 300 <= val <= 4_000_000:
+            raise ValueError("The memory budget must be between 300 MB and 4,000,000 MB (a mesh job alone holds about 800 MB before its first cell)")
+        if mode == "percent" and not 5 <= val <= 95:
+            raise ValueError("The memory budget in percent of the free memory must be between 5 and 95")
+        return {"mode": mode, "value": val, "on": bool(b.get("on", True))}
 
     def generate_mesh(self) -> Job:
         if self.data["geometry"].get("status") != "ready":
             raise ValueError("Import geometry first")
+        b = self.data["mesh"].get("budget")
+        if b and b.get("on", True) and self.data["mesh"].get("method") != "hex":
+            plan = self._mesh_inputs()[2]                      # (refused before the job starts: the message is shown at once)
+            if plan and plan["status"] == "refused":
+                raise ValueError(plan["message"])
         return JOBS.start("mesh", self.id, self._mesh_work)
 
     def _hex_mesh_work(self, job: Job, p0=0.0, p1=1.0):
@@ -3346,24 +3380,23 @@ class Project:
                 self.save()
         return stats
 
-    def _mesh_work_inner(self, job: Job, p0=0.0, p1=1.0):
-        if self.data["mesh"].get("method") == "hex" and self.study == "external_aero":
-            return self._hex_mesh_work(job, p0, p1)
-        mesh_ms, recipe = self.data["mesh"], None
-        if self.study == "external_aero" and mesh_ms.get("smart"):
-            from . import meshadvisor
-            an = meshadvisor.analyse(self.data, self.faces(), self.data["geometry"]["info"])
-            recipe = meshadvisor.recipe(an, mesh_ms.get("preset", "medium"), mesh_ms.get("growth"))
-            mesh_ms = dict(mesh_ms, recipe=recipe)
-            if not mesh_ms.get("edge_refine") and recipe.get("edge_refinement") and not mesh_ms.get("no_edge_refine"):
-                mesh_ms["edge_refine"] = {"factor": recipe["edge_refinement"]}      # (leading and trailing edges resolved: part of the recipe)
-        payload = {
+    def _mesh_payload(self, mesh_ms: dict) -> dict:
+        """The job the gmsh worker gets for the tetrahedral mesh."""
+        return {
             "study": self.study, "out_dir": str(self.mesh_dir), "brep": str(self.geo_dir / "domain.brep"),
             "bodies_json": str(self.geo_dir / "bodies.json"), "faces_json": str(self.geo_dir / "faces.json"),
             "domain_info": str(self.geo_dir / "domain_info.json"),
             "mesh": mesh_ms, "rotors": self._rotors_with_wake(),
             "moving_zones": [dict(z, axis=list(studies.AXES[z["axis"]])) for z in self.data.get("moving_zones") or []],
         }
+
+    def _mesh_work_inner(self, job: Job, p0=0.0, p1=1.0):
+        if self.data["mesh"].get("method") == "hex" and self.study == "external_aero":
+            return self._hex_mesh_work(job, p0, p1)
+        mesh_ms, recipe, plan = self._mesh_inputs()
+        if plan and plan["status"] == "refused":
+            raise ValueError(plan["message"])
+        payload = self._mesh_payload(mesh_ms)
         (self.mesh_dir / "layered.npz").unlink(missing_ok=True)       # (a new mesh: the layered one of the old mesh is not its layers)
         prev = self.data["mesh"].get("status")
         self.data["mesh"]["status"] = "meshing"
@@ -3375,6 +3408,8 @@ class Project:
             raise
         if recipe:
             stats["recipe"] = {k: recipe[k] for k in ("preset", "h_surf", "h_near", "h_wake", "growth", "boxes", "layers", "rationale")}
+        if plan:
+            stats["budget"] = {k: plan[k] for k in ("status", "message", "budget_mb", "cells_before", "cells_after", "changes") if k in plan}
         if self.spec["solver"].startswith("openfoam"):
             JOBS.update(job, 0.92, "Checking OpenFOAM mesh quality")
             stats["foam_quality"] = self._foam_quality()
@@ -3390,6 +3425,26 @@ class Project:
             self._results = None
             self.save()
         return stats
+
+    # ------------------------------------------------------------------ the memory planner (see meshplan.py)
+    def _mesh_inputs(self, with_budget: bool = True) -> tuple:
+        """(mesh settings, recipe, budget plan) as the mesher gets them: the stored settings, smart sizing's recipe, and - when a memory budget is on - the bulk
+        coarsened to fit it (plan: {status, message, ...}, None without a budget). A budget that cannot be met gives status 'refused' (the settings are then the
+        coarsest the budget would make)."""
+        from . import meshplan
+        ms, rc = meshplan.base_inputs(self)
+        plan = None
+        b = ms.get("budget")
+        if with_budget and b and b.get("on", True) and self.data["geometry"].get("status") == "ready":
+            plan = meshplan.budget_plan(self, ms, rc)
+            if plan["status"] != "refused":
+                ms, rc = plan["ms"], plan["rc"]
+        return ms, rc, plan
+
+    def mesh_estimate(self, budget=None) -> dict:
+        """How many cells and how much memory the mesh will need, worked out from the size fields before meshing (meshplan.report). `budget` overrides the stored one."""
+        from . import meshplan
+        return meshplan.report(self, budget)
 
     # ------------------------------------------------------------------ the mesh advisor (see meshadvisor.py)
     def _score_mesh(self, stats: dict) -> dict | None:
