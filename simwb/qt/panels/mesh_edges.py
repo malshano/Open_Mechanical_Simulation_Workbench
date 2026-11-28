@@ -62,8 +62,11 @@ def section(adv, st, m):
     e = m.get("edge_refine")
     s = adv._sec("Edge refinement", "mesh.edges", bool(e))
     s.head.toggled.connect(lambda on: QTimer.singleShot(0, lambda: adv.rebuild()))               # (opened: the edges are looked for, if that has not been done)
-    s.body.addWidget(_muted("Finer cells along the sharp edges that cross the flow (the leading and trailing edge of a wing, the corner of a box), where the flow "
-                            "changes fastest. The extra cells are estimated before the mesh is made; the edge cells are made coarser until the estimate fits under the cap."))
+    aero = st["study"] == "external_aero"
+    s.body.addWidget(_muted(("Finer cells along the sharp edges that cross the flow (the leading and trailing edge of a wing, the corner of a box), where the flow "
+                             "changes fastest. " if aero else
+                             "Finer cells along the sharp edges of the parts (corners, knife edges, the rims of thin plates), where stress and heat flow change fastest. ")
+                            + "The extra cells are estimated before the mesh is made; the edge cells are made coarser until the estimate fits under the cap."))
     want = bool(e) or adv.show_edges or adv._open.get("mesh.edges", False) or bool(_stats(m).get("edge_refine"))
     pv = edgepreview.preview(pr, scan=want)
     adv.edge_pv = pv
@@ -71,7 +74,8 @@ def section(adv, st, m):
     chk = wid(QCheckBox("Refine sharp edges"), "mesh.edges.on")
     chk.setChecked(on and pv["available"])
     chk.setEnabled(pv["available"])
-    chk.setToolTip("Make the cells finer along the sharp edges across the flow (a leading or trailing edge carries much of the friction of a thin body)"
+    chk.setToolTip(("Make the cells finer along the sharp edges across the flow (a leading or trailing edge carries much of the friction of a thin body)" if aero else
+                    "Make the cells finer along the sharp edges of the parts (a corner or a thin rim is where stress and heat flow change fastest)")
                    if pv["available"] else pv["reason"])
     chk.toggled.connect(lambda v, pv=pv: _switch(adv, v, pv))
     s.body.addWidget(chk)
@@ -90,7 +94,7 @@ def section(adv, st, m):
     f.setToolTip("" if on else "Switch on 'Refine sharp edges' first")
     f.changed.connect(lambda k, v, f=f: _options(adv, f.values()))
     s.body.addWidget(f)
-    if on and not pv["smart"]:
+    if on and not pv["smart"] and aero:
         s.body.addWidget(_msg("⚠ The numbers below are for the edge zone only: with Smart sizing off the whole mesh can grow by much less (0.04 to 0.7 times the estimate in our runs).",
                               "warn", "mesh.edges.legacy"))
         sm = wid(QPushButton("Turn Smart sizing on"), "mesh.edges.smart")
@@ -119,9 +123,7 @@ def _estimate(pv: dict, on: bool) -> QLabel:
     """The live line: the wall cell size, the edge cell size, and about how many extra cells that adds (before there is a mesh)."""
     pl = pv["plan"]
     tone, name = "muted", "mesh.edges.estimate"
-    if pv["blocked"] == "size_min":
-        return _msg("⚠ Not used while a smallest cell size is set in Advanced sizes and Smart sizing is off: the mesher keeps to the size you set and leaves the "
-                    "edges alone. Clear the smallest cell size, or switch Smart sizing on.", "warn", name)
+    aero = pv.get("study", "external_aero") == "external_aero"
     if pv["scan"] in ("none", "running"):
         return _msg("Looking for the sharp edges in the geometry…" if pv["scan"] == "running" else "Open this group to look for the sharp edges.", name=name)
     if pv["scan"] == "failed":
@@ -133,25 +135,27 @@ def _estimate(pv: dict, on: bool) -> QLabel:
         return _msg("", name=name)
     lead = "" if on else "Off. Switched on it would: "
     if not pl["applied"]:
-        why = {"no_edges": f"no sharp edge across the flow was found (edges where the surfaces meet at less than {fmt_num(pv['max_angle'])}° and are at least "
+        why = {"no_edges": f"no sharp edge {'across the flow ' if aero else ''}was found (edges where the surfaces meet at less than {fmt_num(pv['max_angle'])}° and are at least "
                            f"3 % of the body long), so nothing is refined",
                "finer_than_floor": "the wall cells are already about as fine as edge cells can be (the body length / 3000), so nothing is refined",
                "cap_too_low": f"even the coarsest edge cells would add more than the cap of {N(pl['cap_cells'])} cells, so nothing is refined: raise the cap"}[pl["reason"]]
         return _msg((lead + why + ".") if on else f"Off. {why[0].upper() + why[1:]}.", "muted" if on else "muted", name)
     length, used = fmt_num(float(f"{pl['total_length']:.3g}")), fmt_num(round(pl["factor_used"], 2))
-    if not pv["smart"]:
+    if not aero:
+        rough = f"rough: within about {int(gmsh_worker.edge_spread(pv['study']) * 100)} % in our runs"
+    elif not pv["smart"]:
         rough = "rough, for the edge zone"
     elif pl["cap_cells"] < SMALL_CAP:
         rough = "rough: with a cap this small the mesh usually comes out 1.1 to 1.7 times larger"
     else:
         rough = f"rough: typically within {int(gmsh_worker.EDGE_ESTIMATE_SPREAD * 100)} % with Smart sizing"
     txt = (f"{lead}{'About' if on else 'about'} {ROUGH(pl['estimated_extra_cells'])} extra cells ({rough}; cap {N(pl['cap_cells'])}): "
-           f"{pl['edges']} sharp edge{'s' if pl['edges'] != 1 else ''} across the flow, {length} m long; "
+           f"{pl['edges']} sharp edge{'s' if pl['edges'] != 1 else ''}{' across the flow' if aero else ''}, {length} m long; "
            f"edge cells {MM(pl['h_edge'])} mm where the wall cells are {MM(pv['h_wall'])} mm.")
     if pl["capped"]:
         txt += f" ⚠ The cap changed the setting: edge cells {used}× finer than the wall cells instead of {fmt_num(pv['factor'])}×."
         tone = "warn"
-    if pv["source"] == "smart":
+    if pv["source"] == "smart" and aero:
         txt += " Smart sizing switches this on by itself (4×); change a value or switch it off here to use your own."
     return _msg(txt, tone, name)
 
@@ -187,7 +191,7 @@ def _last_mesh(m: dict, pv: dict) -> QLabel | None:
     elif why:
         txt = ("<div>Last mesh: edge refinement was on but nothing was refined: "
                + {"size_min": "a smallest cell size was set in Advanced sizes and Smart sizing was off",
-                  "no_edges": "no sharp edge across the flow was found",
+                  "no_edges": "no sharp edge was found (across the flow, in a flow study)",
                   "finer_than_floor": "the wall cells were already about as fine as edge cells can be",
                   "cap_too_low": "the cap on the extra cells was too low for even the coarsest edge cells"}.get(why, why) + "." + stale + "</div>")
     else:

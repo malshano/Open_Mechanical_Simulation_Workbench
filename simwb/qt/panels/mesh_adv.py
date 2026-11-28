@@ -11,7 +11,7 @@ from ..forms import ParamForm, fmt_num
 from ..ids import wid
 from ..meshtools import fit_box, region_cells, tip_rings, wake_regions
 from ..regionxform import RegionTransform
-from . import mesh_edges
+from . import mesh_edges, mesh_methods
 from .common import Section, _h, _muted, clear_layout
 
 M = 1000.0         # metres -> mm
@@ -72,7 +72,7 @@ class MeshAdvanced(QWidget):
                     self.show_regions, self.show_layers, self.active_region, self.xform.index, st.get("settings"), getattr(self.panel, "picking_part", False),
                     self.panel.picking_faces, list(self.panel.picked),
                     [(b["id"], b["name"]) for b in st["body_list"]], st.get("moving_zones"), st.get("flow_dir"), m.get("method"),
-                    theme.effective(), mesh_edges.signature(self, st)])
+                    theme.effective(), mesh_edges.signature(self, st), mesh_methods.signature(self, st)])
         if sig == self._sig:
             return
         self._sig = sig
@@ -80,8 +80,8 @@ class MeshAdvanced(QWidget):
         self._sizes(m)
         self._parts(st, m)
         self._regions(st, m)
-        if st["study"] == "external_aero":                  # (like the wall layers: a flow study's option, not shown in the others)
-            self.v.addWidget(mesh_edges.section(self, st, m))
+        self.v.addWidget(mesh_edges.section(self, st, m))   # (every study: a flow study's across-the-flow edges, the corners of the parts elsewhere)
+        if st["study"] == "external_aero":                  # (the wall layers: a flow study's option, not shown in the others)
             self._layers(st, m)
 
     def _num(self, text, prefix, value_m, tip, auto=True):
@@ -554,7 +554,7 @@ class MeshAdvanced(QWidget):
                       "mesh.layers")
         f.changed.connect(lambda k, v, f=f: self._layers_set(f.values()))
         s.body.addWidget(f)
-        for w in mesh_edges.tolerant_widgets(self, st, m):
+        for w in mesh_edges.tolerant_widgets(self, st, m) + mesh_methods.layer_widgets(self, st, m):
             s.body.addWidget(w)
         from ..meshtools import layer_numbers
         ln = layer_numbers(st)

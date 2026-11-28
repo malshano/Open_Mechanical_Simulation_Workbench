@@ -218,17 +218,16 @@ class _FakeJob:
         return lambda *a, **kw: None
 
 
-def test_a_smallest_cell_set_by_hand_blocks_it_and_the_panel_says_so(flow):
+def test_a_smallest_cell_set_by_hand_no_longer_blocks_it(flow):
+    """#40: with a smallest cell set by hand (and Smart sizing off) the edges are refined from that size: the old gate left them alone."""
     c = flow
     c.engine.project().set_mesh(size_min_mm=2, edge_refinement=True)
     c.engine.changed.emit()
     open_group(c, "edges")
+    scanned(c)
     t = c.widget_do("mesh.edges.estimate")["text"]
-    assert "Not used while a smallest cell size is set" in t
-    c.engine.project().set_mesh(smart=True)
-    c.engine.changed.emit()
-    c._settle()
-    assert "Not used" not in c.widget_do("mesh.edges.estimate")["text"]
+    assert "Not used while a smallest cell size is set" not in t
+    assert "edge cells" in t and "2 mm" in t                                                # (the wall cells are the 2 mm that were set)
 
 
 def test_the_sharp_edges_can_be_shown_in_the_3d_view(flow):
@@ -250,8 +249,8 @@ def test_the_sharp_edges_can_be_shown_in_the_3d_view(flow):
 
 
 # ---------------------------------------------------------------------------------------------------------------------------------- not available
-def test_the_group_is_not_shown_in_other_studies(ctl, tmp_path, box_step):
-    """Like the wall layers: the options of a flow study are not shown (dead) in the others."""
+def test_the_group_is_in_the_solid_studies_too_but_the_layers_are_not(ctl, tmp_path, box_step):
+    """#40: the edge refinement is there in every study; the wall layers (and their tolerant switch) stay a flow study's."""
     ctl.do("study.new", {"name": "Heat", "study": "heat_conduction"})
     ctl.do("geometry.import", {"path": str(box_step)})
     wait(ctl)
@@ -259,8 +258,15 @@ def test_the_group_is_not_shown_in_other_studies(ctl, tmp_path, box_step):
     ctl.do("app.mode", {"mode": "expert"})
     ctl._settle()
     have = ids(ctl)
-    assert not [i for i in have if i.startswith("mesh.edges.") or i == "mesh.layers.tolerant"]
-    assert "mesh.sizes.toggle" in have                                                      # (the other advanced groups are there)
+    assert "mesh.edges.on" in have and "mesh.edges.toggle" in have and "mesh.layers.tolerant" not in have
+    assert "mesh.sizes.toggle" in have
+    assert ctl.widget_do("mesh.edges.on")["enabled"]
+    ctl.widget_do("mesh.edges.on", "set", True)
+    assert mesh(ctl)["edge_refine"]["factor"] == 6.0
+    open_group(ctl, "edges")
+    scanned(ctl)
+    t = ctl.widget_do("mesh.edges.estimate")["text"]
+    assert "across the flow" not in t and "extra cells" in t and "about 50 %" in t
     with pytest.raises(ValueError):
         ctl.engine.project().set_mesh(layers={"n": 2, "tolerant": True})                    # (the engine says the same for layers)
 

@@ -259,3 +259,78 @@ def display_arrays(case: Path, s2p: dict, patches: list, faces: list, fluid_id: 
               "quality": qcell[tet_cell].astype(np.float32), "tet_layer": layer[tet_cell].astype(np.int8),
               "zone_tris": np.zeros((0, 3), np.int32), "zone_tri_zone": np.zeros(0, np.int32)}
     return arrays, pm
+
+
+# ---------------------------------------------------------------------------------------------------------------------- clamping to the local geometry
+CLAMP_FRACTION = 0.5      # all the layers together may take at most this share of the local thickness (a layer grows from each side of a thin part)
+CLAMP_COVERAGE = 0.95     # the share of the wall (by area) that keeps all its layers; the thinnest rest (the tip of a trailing edge) may lose them
+_THICK_CACHE: dict = {}
+
+
+def check_clamp(v, base=None) -> dict | None:
+    """The stored form of the layer clamp: None (off) or {fraction, coverage}, from True, False, a fraction or a dictionary; ValueError says what is wrong.
+    What the call does not name keeps its value in `base`."""
+    from ... import studies
+
+    if v in (None, False, 0, "off") or (isinstance(v, dict) and v.get("on") is False):
+        return None
+    out = dict(base or {})
+    if isinstance(v, dict):
+        if v.get("fraction") not in (None, ""):
+            out["fraction"] = studies.finite(v["fraction"], "Layer clamp fraction")
+        if v.get("coverage") not in (None, ""):
+            out["coverage"] = studies.finite(v["coverage"], "Layer clamp coverage")
+    elif v is not True and not isinstance(v, bool):
+        out["fraction"] = studies.finite(v, "Layer clamp fraction")
+    out.setdefault("fraction", CLAMP_FRACTION)
+    out.setdefault("coverage", CLAMP_COVERAGE)
+    if not 0.1 <= out["fraction"] <= 0.5:
+        raise ValueError("The layers may take 0.1 to 0.5 of the local thickness (0.5 = half: a layer grows from each side of a thin part)")
+    if not 0.5 <= out["coverage"] <= 0.999:
+        raise ValueError("The share of the wall that must keep all its layers is 0.5 to 0.999 (as a fraction of the area)")
+    return {"fraction": float(out["fraction"]), "coverage": float(out["coverage"])}
+
+
+def wall_thickness(faces: list, study: str, ref_length: float, max_dist: float) -> dict:
+    """How thick the body is behind the wall, over the wall: {dist, areas, faces, points} (see localgeom.wall_distances), kept for the same geometry. Samples
+    about max_dist / 6 apart, at least 600 across the wall."""
+    from ... import localgeom, meshplan
+
+    key = (study, len(faces), sum(len((f.get("mesh") or {}).get("triangles", [])) for f in faces), round(float(ref_length), 6), round(float(max_dist), 7))
+    if key not in _THICK_CACHE:
+        surf = meshplan.Surface(faces, study)
+        _THICK_CACHE.clear() if len(_THICK_CACHE) > 4 else None
+        _THICK_CACHE[key] = localgeom.wall_distances(surf, max(max_dist / 6.0, float(ref_length) / 600.0), max_dist, "in")
+    return _THICK_CACHE[key]
+
+
+def clamp_layers(first: float, growth: float, n: int, thick: dict, fraction: float = CLAMP_FRACTION, coverage: float = CLAMP_COVERAGE) -> dict:
+    """The layers (n, first thickness t1, growth g; metres) cut to the local thickness of the body. The wall's local thickness over its area is `thick`
+    (wall_thickness): all the layers together, t1 (g^n - 1) / (g - 1), may take `fraction` of it (half: one layer grows from each side of a thin part) on
+    `coverage` of the wall area; the thinnest rest (the tip of a trailing edge, where the thickness goes to zero) is left to the layer step, which removes
+    the layers there. Fewer layers first (the first layer keeps its thickness, so y+ stays); when not even one fits the single layer is made thinner.
+    {n, first, total, thickness_ref (the thickness the layers are fitted to), n_asked, first_asked, changed, y_plus_kept, share_short (the share of the wall
+    area that is too thin for the layers that are left), share_short_before, area_known}."""
+    from ... import localgeom
+
+    d, a = np.asarray(thick["dist"], float), np.asarray(thick["areas"], float)
+    g = max(float(growth), 1.0001)
+
+    def total(k, t1):
+        return t1 * (g ** k - 1.0) / (g - 1.0)
+
+    out = {"n_asked": int(n), "first_asked": float(first), "fraction": fraction, "coverage": coverage, "area_known": bool(len(d))}
+    if not len(d) or n <= 0:
+        return {**out, "n": int(n), "first": float(first), "total": total(n, first), "thickness_ref": None, "changed": False, "y_plus_kept": True,
+                "share_short": 0.0, "share_short_before": 0.0}
+    ref = localgeom.weighted_quantile(d, a, 1.0 - coverage)               # (inf: nothing within reach: thick enough)
+    k = int(n)
+    t1 = float(first)
+    if np.isfinite(ref):
+        while k > 1 and total(k, t1) > fraction * ref:
+            k -= 1
+        if total(k, t1) > fraction * ref:
+            t1 = fraction * ref                                           # (not even one layer of the first thickness fits: a thinner one)
+    short = lambda kk, tt: float(a[(fraction * d) < total(kk, tt)].sum() / a.sum())          # noqa: E731
+    return {**out, "n": k, "first": t1, "total": total(k, t1), "thickness_ref": float(ref) if np.isfinite(ref) else None, "changed": k != int(n) or t1 != float(first),
+            "y_plus_kept": t1 == float(first), "share_short": short(k, t1), "share_short_before": short(int(n), float(first))}
