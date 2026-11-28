@@ -679,8 +679,9 @@ class MeshPanel(_Panel):
         tips = {c: tip for c, _l, tip in self.COLORS}
         for k in self.TET_ONLY:
             b = self.color_btns[k]
-            b.setEnabled(self.metrics_ok)
-            b.setToolTip(tips[k] if self.metrics_ok else "The cells of this mesh could not be measured (generate the mesh again)")
+            usable = self.metrics_ok or not self.hex                # (a tetrahedral mesh, or none yet, as before; a hex-dominant one whose cells could not be read, not)
+            b.setEnabled(usable)
+            b.setToolTip(tips[k] if usable else "The cells of this hex-dominant mesh could not be measured (generate the mesh again)")
         self.color_btns[self.request()[2] if self.color in self.color_btns else "quality"].setChecked(True)
         self.color_note.setVisible(have and self.hex and not self.metrics_ok)
         self.color_note.setText("The cells of this hex-dominant mesh could not be measured: it is shown by its cell quality and its regions only." if self.hex else "")
