@@ -109,3 +109,34 @@ def test_a_hex_project_shows_size_aspect_growth_volume_and_a_band(workspace, tmp
         pr.mesh_view(metric="size", poor=0.5)
     with pytest.raises(ValueError, match="select cells"):
         pr.mesh_view(metric="region", band=(0, 1))
+
+
+from simwb.solvers.openfoam import runner  # noqa: E402
+
+needs_foam = pytest.mark.skipif(not runner.detect().get("available"), reason="OpenFOAM is not installed")
+
+
+@needs_foam
+def test_a_real_snappyhexmesh_mesh_is_measured_cell_by_cell(workspace, tmp_path):
+    """One real hex-dominant mesh (quick preset on a box): the volumes of the cells add up to the volume of the display tetrahedra that fill the same
+    domain, the histogram counts cells (not the tetrahedra they are drawn with), and every metric can be drawn and cut."""
+    pr = _project(workspace, tmp_path)
+    pr.set_mesh(preset="quick", layers={"n": 0})
+    pr.set_mesh(method="hex")
+    j = pr.generate_mesh()
+    assert j.wait(900) and j.status == "done", (j.error, j.log[-15:])
+    cells = pr.data["mesh"]["stats"]["cells"]
+    d = pr.mesh_metrics()
+    assert d["method"] == "hex" and d["cells"] == cells and sum(d["metrics"]["size"]["histogram"]) == cells
+    m = pr.load_mesh()
+    t, p = m["tets"].astype(np.int64), m["nodes"]
+    tet_vol = np.abs(np.einsum("ij,ij->i", np.cross(p[t[:, 1]] - p[t[:, 0]], p[t[:, 2]] - p[t[:, 0]]), p[t[:, 3]] - p[t[:, 0]])).sum() / 6
+    cell_vol = pr.hex_cell_data()["metrics"]["volume"].astype(np.float64).sum() * 1e-9
+    assert cell_vol == pytest.approx(tet_vol, rel=0.02)
+    assert len(pr.hex_cell_data()["tet_cell"]) == len(t) and len(t) > cells
+    assert d["metrics"]["aspect"]["min"] >= 0.99 and d["metrics"]["growth"]["min"] >= 1.0
+    for metric in ("size", "aspect", "growth", "volume"):
+        assert pr.mesh_view(metric=metric)["n_tris"] > 0
+        assert pr.mesh_view(metric=metric, clip_axis="y", clip_pos=0.0)["n_tris"] > 0
+    b = d["budget"][-1]
+    assert pr.mesh_view(metric="size", band=(b["lo"], b["hi"]))["n_cells_in_band"] == b["cells"]
