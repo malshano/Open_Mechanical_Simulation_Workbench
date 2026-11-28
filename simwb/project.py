@@ -3877,6 +3877,15 @@ class Project:
         d["n_cells_in_band"] = int(len(sel))
         return d
 
+    def size_preview(self, axis=None, frac: float = 0.5) -> dict:
+        """The cell sizes the mesher would use for the stored settings, before any mesh exists (simwb/sizefield.py): the sizes on the walls and, with `axis`
+        (x, y, z) and `frac` (0..1), in a cut through the domain, with the wall, body and far-field sizes, the fields at work and the notes."""
+        from . import sizefield
+
+        if axis not in (None, "", "x", "y", "z"):
+            raise ValueError("axis must be x, y or z")
+        return sizefield.preview(self, axis or None, float(frac))
+
     def mesh_zone_count(self) -> int:
         """How many rotating zones the stored mesh has (their boundary is meshed with it); 0 without a mesh."""
         try:

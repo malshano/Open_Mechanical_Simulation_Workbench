@@ -160,3 +160,23 @@ def test_a_hex_dominant_mesh_has_the_same_views(ctl, tmp_path, monkeypatch):
     ctl.do("mesh.highlight", {"off": True})
     ctl.do("mesh.view", {"color": "growth", "cut": "x", "position": 0.5})
     assert ctl.state()["view"]["overlay"]["name"] == "Size jump to neighbours" and ctl.state()["view"]["overlay"]["triangles"] > 0
+
+
+def test_the_planned_cell_sizes_are_drawn_before_any_mesh(ctl, solved):
+    ctl.do("study.import", {"path": solved["static"]})
+    ctl.do("step.go", {"step": "mesh"})
+    pn = ctl.win.panels["mesh"]
+    ctl.engine.project().data["mesh"].update(status="none", stats=None)           # (no mesh yet)
+    ctl.engine.changed.emit()
+    assert ctl.widget_do("mesh.sizes.show")["visible"] and not ctl.widget_do("mesh.sizes.text")["text"]
+    r = ctl.do("mesh.sizes", {"show": True})["result"]
+    assert "Walls" in r["text"] and "mm" in r["text"]
+    ov = ctl.state()["view"]["overlay"]
+    assert ov["name"] == "Planned cell size" and ov["triangles"] > 100 and ctl.state()["view"]["legend"]["kind"] == "scalar"
+    ctl.do("mesh.view", {"cut": "x", "position": 0.5})
+    assert ctl.state()["view"]["overlay"]["triangles"] > ov["triangles"]            # the walls and the cut
+    before = ctl.state()["view"]["overlay"]["range"]
+    ctl.do("mesh.preset", {"preset": "fine"})                                       # a setting changes the preview at once
+    assert ctl.state()["view"]["overlay"]["range"][0] < before[0]
+    ctl.do("mesh.sizes", {"show": False})
+    assert ctl.state()["view"]["overlay"]["kind"] != "scalar" or ctl.state()["view"]["overlay"].get("name") != "Planned cell size"

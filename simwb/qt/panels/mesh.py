@@ -17,6 +17,7 @@ from .common import _h, _muted, _Panel, _seg
 from . import mesh_edges
 from .mesh_adv import MeshAdvanced
 from .mesh_metrics import MetricViews
+from .mesh_sizes import SizePreview
 
 
 def verdict(q: dict, stats: dict | None = None) -> tuple:
@@ -252,6 +253,9 @@ class MeshPanel(_Panel):
         self.stale_note = wid(QLabel(""), "mesh.stale")
         self.stale_note.setWordWrap(True)
         self.v.addWidget(self.stale_note)
+        self.sizes = SizePreview()                          # (the cell sizes the mesher would use, drawn before any mesh exists)
+        self.sizes.changed.connect(self.changed.emit)
+        self.v.addWidget(self.sizes)
         self.stats_h = _h("Statistics")
         self.v.addWidget(self.stats_h)
         self.stats = wid(_muted(), "mesh.stats")
@@ -566,6 +570,7 @@ class MeshPanel(_Panel):
         if m.get("preset") in self.preset_btns:
             self.preset_btns[m["preset"]].setChecked(True)
         self.adv.refresh(st)
+        self.sizes.refresh(st, self.engine.project())
         self.adv.setVisible(not mode.simple())              # (Simple mode: the presets only)
         s = m.get("stats")
         t = theme.tokens()

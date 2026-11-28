@@ -883,6 +883,11 @@ layers** - and **Generate mesh**.
   through it shows them; the aspect ratio is the one checkMesh reports, 1 for a cube, and the size is the edge of the cube of the cell's volume). Under the buttons,
   the **cell budget** shows, for each band of cell sizes, the share of the cells and of the volume, with remarks when a size jump or a
   fine region uses too many cells.
+- **Planned cell sizes** (under *Generate mesh*, tetrahedral meshes; no mesh is needed): **Show the planned cell sizes** draws the cell size the mesher will use, on
+  the model and, with a cut open, through the air round it, on a logarithmic colour bar in mm. It shows the wall size, the thin parts, the near-field and wake boxes,
+  rotors and rotating zones, your part sizing and refinement regions, and the sharp edges, and follows every setting at once (try another resolution or move a
+  region). A line under the switch gives the wall, near-body and far-field sizes and the growth. The sizes the curvature of a face asks for and the narrow-gap
+  boxes are decided by the mesher and are not in it: the real cells come out finer there and, on average, about a quarter larger than the target elsewhere.
 - **The histogram of the metric** (under the cut controls, for Cell size, Aspect ratio, Size jump and Cell volume; quality keeps its own histogram): how many
   cells fall in each band, with the colours of the legend under the 3D view. A dashed line marks the value the remarks warn about (a size jump of 2, an aspect ratio of 20).
   **Click a bar** (or a band of the **cell budget**) to show only those cells on the model, as the outside of that set of cells; a line says how many there are, and

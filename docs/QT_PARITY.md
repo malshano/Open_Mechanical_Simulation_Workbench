@@ -82,6 +82,7 @@ plus the toolbar and application bar. Status: ✅ done in the Qt app · 🟡 par
 | Wall layers (prism / inflation): number, growth ratio | ✅ plus (new in the Qt app): first layer, target y+, the layers made with the mesh, the "Wall layers made" card, colour by Wall layers, Zoom to the layers, Make the layers again | solve-mesh |
 | Statistics (cells, nodes, near-wall/bulk size, quality, non-orthogonality, skewness, hex share ...) | ✅ (the web version's table, row for row) | solve-mesh |
 | Colour the mesh by quality / cell size / aspect ratio / size jump / volume / region; cell budget | ✅ (all six, for a tetrahedral mesh and for a hex-dominant one (measured on its real cells); legend under the 3D view; the cell budget and its findings under them) | solve-mesh |
+| Size-field preview before meshing: the planned cell sizes on the walls and in a cut (control `mesh.sizes`, widget `mesh.sizes.show`, tool `mesh_size_preview`, `GET /mesh/size_preview`) | ✅ new in the Qt app | meshing |
 | Histogram of the metric (size, aspect ratio, size jump, volume) in the panel, bars in the legend colours, a dashed line at the value the findings warn about; click a bar or a cell-budget band to show only those cells (control `mesh.highlight`, widgets `mesh.hist`, `mesh.band.info`, `mesh.band.clear`) | ✅ new in the Qt app | meshing |
 | Cut through the mesh | ✅ | - |
 | Cell quality histogram; show cells below a threshold; zoom to worst | ✅ (histogram, verdict, show cells below a threshold, zoom to the worst) | solve-mesh |

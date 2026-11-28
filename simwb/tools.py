@@ -217,6 +217,12 @@ def mesh_metrics(pr, a):
     return pr.mesh_metrics()
 
 
+def mesh_size_preview(pr, a):
+    d = pr.size_preview(a.get("axis"), a.get("position", 0.5))
+    return {k: v for k, v in d.items() if k not in ("surface", "section")} | {"surface_triangles": (d["surface"] or {}).get("n_tris"),
+                                                                              "section_triangles": (d["section"] or {}).get("n_tris")}
+
+
 def generate_mesh(pr, a):
     r = _wait(pr.generate_mesh(), float(a.get("timeout_s", 600)))
     if r.get("status") == "done":
@@ -594,6 +600,11 @@ TOOLS = [
                           "with a growth of 1.2 to 1.3 and keeps the cell count to what the free memory holds. The mesh is out of date afterwards: call generate_mesh, then "
                           "mesh_advice to see the score.",
      {"type": "object", "properties": {"preset": STR, "layers": {"type": "boolean"}}}, mesh_apply_recipe),
+    ("mesh_size_preview", "The cell sizes the mesher would use for the stored settings, BEFORE any mesh exists (no meshing needed): the wall, near-body and "
+                          "far-field sizes in metres, the growth, which fields are at work (walls, thin parts, refinement boxes, wake, rotors, zones, part "
+                          "sizing, sharp edges), and the range of the planned sizes in mm on the walls and, with axis x|y|z and position 0..1, in a cut. "
+                          "Use it to check where the cells will be small before generate_mesh; the Qt app draws it (Mesh step, Show the planned cell sizes).",
+     {"type": "object", "properties": {"axis": STR, "position": {"type": "number"}}}, mesh_size_preview),
     ("mesh_metrics", "Inspect the generated tetrahedral mesh: statistics and histograms of cell size, aspect ratio, "
                      "growth (size jump to the neighbours), volume and quality, the cell budget (for each size band "
                      "the share of cells and of the volume: where the cells - and the memory - are spent) and plain "

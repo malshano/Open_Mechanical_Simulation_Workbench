@@ -663,6 +663,15 @@ class Control(QObject):
             else:
                 raise ValueError("Give off, bar (a histogram bar), band (a budget band) or metric with low and high")
             return {"band": pn.mv.band, "cells": pn.mv.cells_in_band, "text": pn.mv.info.text()}
+        def mesh_sizes(show=True):
+            pn = win.panels["mesh"]
+            if not pn.sizes.isVisibleTo(pn):
+                raise ValueError("The size preview needs the geometry (import it first) and the tetrahedral mesh type")
+            self._set(self._w("mesh.sizes.show"), "mesh.sizes.show", bool(show))
+            return {"show": pn.sizes.show_chk.isChecked(), "text": pn.sizes.text.text(), "overlay": win.view.overlay_info if show else None}
+        R("mesh.sizes", "Show (or hide) the planned cell sizes: the sizes the mesher will use, drawn on the model and, with a cut open (mesh.view cut), through the "
+          "air, before any mesh exists. The control is mesh.sizes.show; GET /mesh/size_preview and the tool mesh_size_preview give the numbers.",
+          {"show": (B, "default true", False)}, mesh_sizes)
         R("mesh.highlight", "Show only some cells of the mesh on the model: a bar of the histogram (bar = its number), a band of the cell budget (band = its number), "
           "or a range of a metric (metric size|aspect|growth|volume with low and high); the same again, or off, shows all of them. The controls are mesh.hist "
           "(the histogram), mesh.band.info and mesh.band.clear; the histogram data is GET /mesh/metrics.",

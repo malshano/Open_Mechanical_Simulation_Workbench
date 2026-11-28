@@ -438,6 +438,12 @@ def mesh_view(pid: str, clip_axis: str | None = None, clip_pos: float | None = N
     return P.open_project(pid).mesh_view(clip_axis, clip_pos, hide_fluid, poor, metric, band)
 
 
+@app.get("/api/projects/{pid}/mesh/size_preview")
+def mesh_size_preview(pid: str, axis: str | None = None, position: float = 0.5):
+    """The cell sizes the mesher would use for the stored settings, before any mesh exists: on the walls and (axis x|y|z) in a cut."""
+    return P.open_project(pid).size_preview(axis, position)
+
+
 @app.get("/api/projects/{pid}/mesh/metrics")
 def mesh_metrics(pid: str):
     """Statistics, histograms and the cell budget of the mesh (size, aspect ratio, growth, volume, quality)."""
