@@ -3380,13 +3380,18 @@ class Project:
                 self.save()
         return stats
 
+    def _edge_flow_hint(self):
+        """The axis nearest to the free stream (the edge refinement's fallback when the domain gives no flow axis), see edgepreview.flow_axis_hint."""
+        from . import edgepreview
+        return edgepreview.flow_axis_hint(self)
+
     def _mesh_payload(self, mesh_ms: dict) -> dict:
         """The job the gmsh worker gets for the tetrahedral mesh."""
         return {
             "study": self.study, "out_dir": str(self.mesh_dir), "brep": str(self.geo_dir / "domain.brep"),
             "bodies_json": str(self.geo_dir / "bodies.json"), "faces_json": str(self.geo_dir / "faces.json"),
             "domain_info": str(self.geo_dir / "domain_info.json"),
-            "mesh": mesh_ms, "rotors": self._rotors_with_wake(),
+            "mesh": mesh_ms, "rotors": self._rotors_with_wake(), "flow_axis": self._edge_flow_hint(),
             "moving_zones": [dict(z, axis=list(studies.AXES[z["axis"]])) for z in self.data.get("moving_zones") or []],
         }
 

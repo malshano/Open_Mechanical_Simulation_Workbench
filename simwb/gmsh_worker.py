@@ -713,11 +713,19 @@ def edge_cells_estimate(length: float, h_edge: float, h_wall: float, growth: flo
     return float(length * np.trapezoid(2.0 * math.pi * r * _tube_density(h_edge, h_wall, growth, r), r))
 
 
-def edge_cells_union(polylines, angles, h_edge: float, h_wall: float, growth: float, samples: int = 24000, seed: int = 7) -> float:
+def edge_share(angle: float, share: str = "air") -> float:
+    """The part of the tube round an edge of face angle `angle` that the mesh fills: 'air' (a body in a flow: the air side, (360 - angle) / 360), 'solid'
+    (a solid study: the material side, angle / 360) or 'both' (an enclosure of air round solid parts: all of it)."""
+    a = min(max(float(angle), 0.0), 360.0)
+    return {"air": 1.0 - a / 360.0, "solid": a / 360.0}.get(share, 1.0)
+
+
+def edge_cells_union(polylines, angles, h_edge: float, h_wall: float, growth: float, samples: int = 24000, seed: int = 7, share: str = "air") -> float:
     """Estimated extra cells of the edge size field over ALL the edges together: the integral over space of the cells of the field size
     s(x) = h_edge + (growth - 1) d(x), d = the distance to the nearest edge, less those of the wall size, within r_max of an edge. Edges that lie close
     together (the two rims of a thin plate, the sides of a small box) share their tube, which a sum over the edges counts twice; the integral does not.
-    Each edge counts for the share of the tube that is air: (360 - face angle) / 360. Monte Carlo over the union of the tubes (fixed seed: the same
+    Each edge counts for the share of the tube that the mesh fills (edge_share: for a body in a flow the air side, (360 - face angle) / 360; the material
+    side in a solid study). Monte Carlo over the union of the tubes (fixed seed: the same
     answer every time), about 1 % noise. Times EDGE_CELLS_CALIBRATION."""
     from scipy.spatial import cKDTree
 
@@ -736,7 +744,7 @@ def edge_cells_union(polylines, angles, h_edge: float, h_wall: float, growth: fl
         n = max(int(math.ceil(t[-1] / step)) + 1, 2)
         u = np.linspace(0.0, t[-1], n)
         pts.append(np.stack([np.interp(u, t, p[:, k]) for k in range(3)], axis=1))
-        wgt.append(np.full(n, 1.0 - float(a) / 360.0))
+        wgt.append(np.full(n, edge_share(a, share)))
     P, W = np.vstack(pts), np.concatenate(wgt)
     tree = cKDTree(P)
     rng = np.random.default_rng(seed)
@@ -832,12 +840,49 @@ def aero_wall_size(ms: dict, feature: float, L: float, h_body: float, rc: dict |
     return h_wall
 
 
+EDGE_ESTIMATE_SPREAD_OTHER = 0.5   # outside a body in a flow: real extra cells / estimate was 0.52 to 1.47 on 12 meshes (heated plate, bracket, camera mount, flutter plate; factors 3, 6, 12; quick
+                                   # preset, no smart sizing; docs/MESHING_GUIDE.md), median 1.1: the estimate is kept as it is and the spread is wider than for a body in a flow
+EDGE_STUDY_SHARE = {"external_aero": "air", "cht_enclosure": "both"}     # (the other studies are solid: the material side)
+
+
+def edge_spread(study: str) -> float:
+    """The share of the real extra cells that the estimate can be off by (measured: EDGE_ESTIMATE_SPREAD for a body in a flow, a wider one elsewhere)."""
+    return EDGE_ESTIMATE_SPREAD if study == "external_aero" else EDGE_ESTIMATE_SPREAD_OTHER
+
+
+def edge_study_share(study: str) -> str:
+    """Which side of an edge the mesh fills in this study (see edge_share)."""
+    return EDGE_STUDY_SHARE.get(study, "solid")
+
+
+def edge_wall_faces(faces: list, study: str) -> list:
+    """The faces whose sharp edges are refined: the walls of the parts (all the faces of a solid study)."""
+    if study in SOLID_STUDIES:
+        return [f["id"] for f in faces]
+    return [f["id"] for f in faces if f["kind"] not in ("farfield", "enclosure")]
+
+
+def edge_flow_axis(info: dict, study: str, hint=None):
+    """The world axis (0, 1, 2) the flow runs along, from the domain of a body in a flow, else `hint` (the axis nearest to the direction of the free stream
+    in the study's settings); None when there is no flow (a solid study, an enclosure) or neither says. With None the edges along the flow are kept:
+    nothing is known about a direction in which they would not matter."""
+    if study != "external_aero":
+        return None
+    ax = ((info.get("domain") or {}).get("spec") or {}).get("flow_axis")
+    if ax is None:
+        ax = hint
+    try:
+        return None if ax is None else int(ax)
+    except (TypeError, ValueError):
+        return None
+
+
 EDGE_ANGLE = 140.0            # edges whose two faces meet at less than this are 'sharp' (degrees; 180 = smooth)
 EDGE_CAP = 150_000            # the most extra cells the edge refinement may add
 
 
 def edge_refine_plan(edges, h_wall: float, L: float, growth: float, factor: float, cap: float = EDGE_CAP,
-                     max_angle: float = EDGE_ANGLE, limit: int = 200) -> dict:
+                     max_angle: float = EDGE_ANGLE, limit: int = 200, share: str = "air") -> dict:
     """What the sharp-edge refinement does: from every edge (tag, face angle, length, ...) found across the flow (longest first) choose the sharp ones
     that are long enough, size the cells at them (the wall size / factor, never finer than L / 3000) and coarsen that size until the estimated extra
     cells fit the cap. {applied, reason, edges, total_length, h_edge, factor_used, estimated_extra_cells, capped}. The mesher and the Mesh step's
@@ -859,7 +904,7 @@ def edge_refine_plan(edges, h_wall: float, L: float, growth: float, factor: floa
 
     def extra(h):
         """The estimate of the extra cells at edge cell size h: over all the edges together when their polylines are known, else summed edge by edge."""
-        return edge_cells_union(lines, angles, h, h_wall, growth) if lines else EDGE_CELLS_CALIBRATION * edge_cells_estimate(total, h, h_wall, growth)
+        return edge_cells_union(lines, angles, h, h_wall, growth, share=share) if lines else EDGE_CELLS_CALIBRATION * edge_cells_estimate(total, h, h_wall, growth)
 
     est = extra(h_edge)
     h0 = h_edge
@@ -1404,15 +1449,18 @@ def task_mesh(job: dict) -> dict:
     # this adds are estimated before meshing and capped (default 150,000): where the estimate is over the cap the edge
     # cells are made coarser until it fits, so the option can never run the mesher out of memory by itself.
     edge_info, edge_skipped = None, None
-    if study == "external_aero" and ms.get("edge_refine") and not (ms.get("size_min") and not rc):
+    if ms.get("edge_refine"):
+        # (any study: the edges of the parts the mesh follows. The first version was for a body in a flow only, and kept out when a smallest cell was set by
+        # hand; with a smallest cell set the edge cells are that size divided by the factor - the refinement was asked for, so it goes below the size set)
         er = ms["edge_refine"]
         factor = float(er.get("factor", 6.0))
         cap = float(er.get("max_cells", EDGE_CAP))
         angle = float(er.get("max_angle", EDGE_ANGLE))
-        flow_axis = ((info.get("domain") or {}).get("spec") or {}).get("flow_axis")
-        found = sharp_edges(gmsh, wall_faces, 0.03 * L, max_face_angle=angle, limit=10 ** 6, flow_axis=flow_axis)
+        flow_axis = edge_flow_axis(info, study, job.get("flow_axis"))      # (None without a flow, or when the flow axis is not known: edges along the flow are then not left out)
+        share = edge_study_share(study)
+        found = sharp_edges(gmsh, edge_wall_faces(faces, study), 0.03 * L, max_face_angle=angle, limit=10 ** 6, flow_axis=flow_axis)
         found = [(t, a, ln, curve_points(gmsh, t)) for t, a, ln in found]               # (with their polylines: the estimate counts the cells over all the edges together)
-        plan = edge_refine_plan(found, h_wall, L, growth, factor, cap, angle)
+        plan = edge_refine_plan(found, h_wall, L, growth, factor, cap, angle, share=share)
         edges, h_edge, est, total_len = plan["edges"], plan["h_edge"], plan["estimated_extra_cells"], plan["total_length"]
         if plan["applied"]:
             fe = fields.add("Distance")
@@ -1435,13 +1483,12 @@ def task_mesh(job: dict) -> dict:
             edge_info = {"edges": len(edges), "size": h_edge, "factor": factor, "size_far_of_edge_field": h_wall,
                          "factor_used": plan["factor_used"], "growth": growth, "dist_max": dist_max,
                          "estimated_extra_cells": est, "cap_cells": cap, "angle_limit": angle, "capped": plan["capped"],
-                         "min_face_angle": min(e[1] for e in edges), "total_length": total_len}
-            progress(0.09, f"Sharp edges refined: {len(edges)} edge(s) across the flow, {total_len:.3g} m long, "
+                         "min_face_angle": min(e[1] for e in edges), "total_length": total_len, "share": share, "study": study,
+                         "flow_axis": flow_axis, "flow_filter": flow_axis is not None}
+            progress(0.09, f"Sharp edges refined: {len(edges)} edge(s){' across the flow' if flow_axis is not None else ''}, {total_len:.3g} m long, "
                            f"cells of {h_edge * 1e3:.2f} mm, about {est:,.0f} extra cells")
         else:
             edge_skipped = plan["reason"]
-    elif study == "external_aero" and ms.get("edge_refine"):
-        edge_skipped = "size_min"                                     # (a smallest cell set by hand, without smart sizing: the old rule)
 
     mn = fields.add("Min")
     fields.setNumbers(mn, "FieldsList", use)
@@ -1783,15 +1830,16 @@ def task_edges(job: dict) -> dict:
     faces = json.loads(Path(job["faces_json"]).read_text())
     info = json.loads(Path(job["domain_info"]).read_text())
     L = info["ref_length"]
-    wall = [f["id"] for f in faces if f["kind"] not in ("farfield", "enclosure")]
-    flow_axis = ((info.get("domain") or {}).get("spec") or {}).get("flow_axis")
+    study = job.get("study") or "external_aero"
+    wall = edge_wall_faces(faces, study)
+    flow_axis = edge_flow_axis(info, study, job.get("flow_axis"))
     found = sharp_edges(gmsh, wall, 0.03 * L, max_face_angle=175.0, limit=600, flow_axis=flow_axis)
     out = []
     for tag, angle, length in found:
         lo, hi = gmsh.model.getParametrizationBounds(1, tag)
         pts = curve_points(gmsh, tag)
         out.append({"tag": int(tag), "angle": float(angle), "length": float(length), "points": pts})
-    return {"edges": out, "count": len(out), "ref_length": L, "flow_axis": flow_axis}
+    return {"edges": out, "count": len(out), "ref_length": L, "flow_axis": flow_axis, "study": study}
 
 
 TASKS = {"prepare": task_prepare, "mesh": task_mesh, "edges": task_edges}

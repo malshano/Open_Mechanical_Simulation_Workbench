@@ -45,10 +45,30 @@ def check_options(er, base: dict | None = None, default_factor: float = 6.0) -> 
     return out
 
 
+def flow_axis_hint(pr):
+    """The world axis nearest to the free stream of an external aerodynamics study (the mesher uses it only when the domain does not give the flow axis); None
+    elsewhere or when the settings do not give a flow."""
+    if pr.study != "external_aero":
+        return None
+    try:
+        import numpy as np
+
+        from . import meshadvisor
+
+        u, v = meshadvisor.flow_direction(pr.data.get("settings") or {})
+        return int(np.argmax(np.abs(u))) if v > 0.1 else None
+    except Exception:  # noqa: BLE001 - a hint
+        return None
+
+
+def scan_axis(result) -> int | None:
+    """The flow axis the edge search left the edges along the flow out for (None: it left none out)."""
+    ax = (result or {}).get("flow_axis")
+    return None if ax is None else int(ax)
+
+
 def unavailable(pr) -> str | None:
     """Why the edge refinement cannot be used in this study, in words; None when it can."""
-    if pr.study != "external_aero":
-        return "Not for this type of study: edge refinement is for external aerodynamics (a body in a flow)"
     if pr.data["mesh"].get("method") == "hex":
         return "Not for a hex-dominant mesh: snappyHexMesh makes it and does not use this setting (switch to the tetrahedral mesh)"
     if pr.data["geometry"].get("status") != "ready":
@@ -71,7 +91,7 @@ def settings(pr) -> dict:
 
 # ---------------------------------------------------------------------------------------------------------------------------------- finding the edges
 def _key(pr):
-    return (pr.id, pr.data["geometry"].get("updated"), pr.data["geometry"].get("status"))
+    return (pr.id, pr.data["geometry"].get("updated"), pr.data["geometry"].get("status"), flow_axis_hint(pr))
 
 
 def scan_state(pr) -> dict:
@@ -108,7 +128,8 @@ def run_scan(pr) -> dict:
     from .jobs import ROOT
     from .memlimit import LimitedPopen
 
-    job = {"brep": str(pr.geo_dir / "domain.brep"), "faces_json": str(pr.geo_dir / "faces.json"), "domain_info": str(pr.geo_dir / "domain_info.json")}
+    job = {"brep": str(pr.geo_dir / "domain.brep"), "faces_json": str(pr.geo_dir / "faces.json"), "domain_info": str(pr.geo_dir / "domain_info.json"),
+           "study": pr.study, "flow_axis": flow_axis_hint(pr)}
     pr.mesh_dir.mkdir(parents=True, exist_ok=True)
     jp = pr.mesh_dir / f"_edges_job_{uuid.uuid4().hex[:10]}.json"
     jp.write_text(json.dumps(job))
@@ -192,7 +213,7 @@ def _measure(pr, er: dict, scan: dict) -> dict:
     # the refined edges again, as the plan chooses them from the same search
     edges = [(e["tag"], e["angle"], e["length"], e["points"]) for e in scan["edges"]]
     L = float(scan["ref_length"])
-    plan = gmsh_worker.edge_refine_plan(edges, h_wall, L, float(er["growth"]), float(er["factor"]), float(er["cap_cells"]), float(er.get("angle_limit", gmsh_worker.EDGE_ANGLE)))
+    plan = gmsh_worker.edge_refine_plan(edges, h_wall, L, float(er["growth"]), float(er["factor"]), float(er["cap_cells"]), float(er.get("angle_limit", gmsh_worker.EDGE_ANGLE)), share=er.get("share", "air"))
     pts = []
     for e in plan["edges"]:
         p = np.asarray(e[3], float)
@@ -225,12 +246,10 @@ def preview(pr, scan: bool = False, wait: bool = False) -> dict:
     m = pr.data["mesh"]
     why = unavailable(pr)
     s = settings(pr)
-    out = {"available": why is None, "reason": why, **s, "smart": bool(m.get("smart")), "blocked": None, "scan": "none", "scan_error": None,
+    out = {"available": why is None, "reason": why, **s, "smart": bool(m.get("smart")), "study": pr.study, "blocked": None, "scan": "none", "scan_error": None,
            "h_wall": None, "plan": None, "lines": [], "measured": None, "estimating": False}
     if why is not None:
         return out
-    if m.get("size_min") and not m.get("smart"):
-        out["blocked"] = "size_min"                      # (the mesher keeps to the smallest cell you set by hand, and leaves the edges alone)
     sc = ensure_scan(pr, wait=wait) if scan else scan_state(pr)
     out["scan"], out["scan_error"] = sc["state"], sc.get("error")
     if sc["state"] != "ready":
@@ -246,15 +265,18 @@ def preview(pr, scan: bool = False, wait: bool = False) -> dict:
         rc = meshadvisor.recipe(an, m.get("preset", "medium"), m.get("growth"))
     n_per, _c = gmsh_worker.PRESETS.get(m.get("preset", "medium"), gmsh_worker.PRESETS["medium"])
     h_body = float(m.get("size_max") or (rc["h_near"] if rc else L / n_per))
-    h_wall = gmsh_worker.aero_wall_size(m, gmsh_worker.smallest_feature(faces, L), L, h_body, rc)
+    from . import meshplan
+    h_wall = meshplan.wall_size(m, pr.study, gmsh_worker.smallest_feature(faces, L), L, h_body, rc)          # (what the mesher uses, in any study)
     growth = float(rc["growth"]) if rc else float(m.get("growth", 1.25))
+    share = gmsh_worker.edge_study_share(pr.study)
+    out["share"], out["flow_axis"] = share, scan_axis(sc["result"])
     edges = [(e["tag"], e["angle"], e["length"], e["points"]) for e in sc["result"]["edges"]]
     out["h_wall"], out["growth"] = h_wall, growth
     out["edges_found"] = len(edges)
     out["edges_sharp"] = len([e for e in edges if e[1] < s["max_angle"]])
     # the plan (with a cap that binds the estimate is computed a dozen times: 1 to 5 s) is made once per setting, on a thread of its own, and kept
-    key = (_key(pr), id(sc["result"]), round(h_wall, 9), round(growth, 6), s["factor"], s["max_cells"], s["max_angle"])
-    pc = _background(pr, "_edge_plan", key, lambda: gmsh_worker.edge_refine_plan(edges, h_wall, L, growth, s["factor"], s["max_cells"], s["max_angle"]), wait=wait)
+    key = (_key(pr), id(sc["result"]), share, round(h_wall, 9), round(growth, 6), s["factor"], s["max_cells"], s["max_angle"])
+    pc = _background(pr, "_edge_plan", key, lambda: gmsh_worker.edge_refine_plan(edges, h_wall, L, growth, s["factor"], s["max_cells"], s["max_angle"], share=share), wait=wait)
     out["estimating"] = pc["state"] == "running"
     if pc["state"] == "failed":
         out["scan"], out["scan_error"] = "failed", pc["error"]

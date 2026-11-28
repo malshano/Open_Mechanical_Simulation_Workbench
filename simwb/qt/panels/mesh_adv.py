@@ -80,8 +80,8 @@ class MeshAdvanced(QWidget):
         self._sizes(m)
         self._parts(st, m)
         self._regions(st, m)
-        if st["study"] == "external_aero":                  # (like the wall layers: a flow study's option, not shown in the others)
-            self.v.addWidget(mesh_edges.section(self, st, m))
+        self.v.addWidget(mesh_edges.section(self, st, m))   # (every study: a flow study's across-the-flow edges, the corners of the parts elsewhere)
+        if st["study"] == "external_aero":                  # (the wall layers: a flow study's option, not shown in the others)
             self._layers(st, m)
 
     def _num(self, text, prefix, value_m, tip, auto=True):

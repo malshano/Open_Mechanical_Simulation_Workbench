@@ -518,7 +518,7 @@ def edge_extra_cells(pr, sz: dict, ms: dict, rc: dict | None) -> dict:
         plan = pv.get("plan") if pv else None
         if plan and plan.get("applied"):
             from . import gmsh_worker
-            est, sp = float(plan["estimated_extra_cells"]), float(gmsh_worker.EDGE_ESTIMATE_SPREAD)
+            est, sp = float(plan["estimated_extra_cells"]), float(gmsh_worker.edge_spread(pr.study))
             return {"cells": est, "low": est * (1 - sp), "high": est * (1 + sp), "source": "edge plan", "note": None}
     except ImportError:
         pass
@@ -586,7 +586,7 @@ def evaluate(pr, ms: dict, rc: dict | None, surf: Surface | None = None) -> dict
     info = pr.data["geometry"]["info"]
     surf = surf or surface_of(pr)
     sz = sizing(pr.study, pr.faces(), info, ms, rc, rotors=pr._rotors_with_wake() if pr.study == "external_aero" else (), zones=_zones(pr), surf=surf)
-    edge = edge_extra_cells(pr, sz, ms, rc) if pr.study == "external_aero" else {"cells": 0.0, "low": 0.0, "high": 0.0, "source": None, "note": None}
+    edge = edge_extra_cells(pr, sz, ms, rc)
     out = estimate_sizing(sz, edge)
     out.update(h_wall=sz["h_wall"], h_body=sz["h_body"], far=sz["far"], growth=sz["growth"], notes=list(sz["notes"]) + ([edge["note"]] if edge.get("note") else []))
     if pr.study in SOLID_STUDIES:
