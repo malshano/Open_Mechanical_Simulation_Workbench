@@ -123,9 +123,23 @@ def _box(an: dict, up: float, down: float, side: float, depth_pad: float | None 
     return a.tolist(), b.tolist()
 
 
-def recipe(an: dict, preset: str = "medium", growth: float | None = None, free_bytes: float | None = None) -> dict:
+def wake_box(an: dict, length: float, side: float) -> tuple:
+    """(min, max) of the wake box: from the rear of the body `length` body lengths downstream along the flow, `side` body lengths beyond the body on each side.
+    One function for the recipe's wake box and the wake method (sizingmethods)."""
+    a, b = _box(an, 0.0, length, side)
+    lo, hi = np.asarray(a), np.asarray(b)                                # (the wake starts at the rear of the body: the near-field box covers the first half length)
+    ax = an["axis"]
+    if an["sign"] > 0:
+        lo[ax] = an["hi"][ax]
+    else:
+        hi[ax] = an["lo"][ax]
+    return lo.tolist(), hi.tolist()
+
+
+def recipe(an: dict, preset: str = "medium", growth: float | None = None, free_bytes: float | None = None, wake: dict | None = None) -> dict:
     """The smart sizing for a body in a flow, at a resolution preset: {preset, h_surf, h_near, h_wake, growth, n_curv, boxes[{name, min, max, size}],
     layers{n, growth, y_plus, first_mm, fit}, edge_refinement, extend_boundary, rationale[], estimate{cells_zones, cap, reduced}}. All sizes in metres.
+    `wake` (the wake method, sizingmethods.wake_plan, given as {min, max, size}) replaces the wake box and its cell size.
     The cells are capped to what half of the free memory holds: a finer preset than that is coarsened and the rationale says so."""
     t = TARGETS.get(preset, TARGETS["medium"])
     c = an["length"]
@@ -139,15 +153,11 @@ def recipe(an: dict, preset: str = "medium", growth: float | None = None, free_b
         reduced = {"from_cells": est0, "n_s": c / h_surf}
     h_near, h_wake = t["k_near"] * h_surf, t["k_wake"] * h_surf
     near = _box(an, NEAR_UP, NEAR_DOWN, NEAR_UP)
-    a, b = _box(an, 0.0, t["wake_len"], WAKE_SIDE)
-    wake_lo, wake_hi = np.asarray(a), np.asarray(b)                      # (the wake starts at the rear of the body: the near-field box covers the first half length)
-    ax = an["axis"]
-    if an["sign"] > 0:
-        wake_lo[ax] = an["hi"][ax]
-    else:
-        wake_hi[ax] = an["lo"][ax]
+    wake_lo, wake_hi = wake_box(an, t["wake_len"], WAKE_SIDE)
+    if wake:                                                             # (the wake method: its box and its cell size)
+        wake_lo, wake_hi, h_wake = list(wake["min"]), list(wake["max"]), float(wake["size"])
     boxes = [{"name": "Near field", "min": near[0], "max": near[1], "size": h_near},
-             {"name": "Wake", "min": wake_lo.tolist(), "max": wake_hi.tolist(), "size": h_wake}]
+             {"name": "Wake", "min": list(wake_lo), "max": list(wake_hi), "size": h_wake}]
     # the layers: the first layer for the wall treatment, the number the thinnest part leaves room for (a layer grows from each side of it)
     from .solvers.openfoam import cases, layermesh
     V, nu = an["speed"], an["nu"]

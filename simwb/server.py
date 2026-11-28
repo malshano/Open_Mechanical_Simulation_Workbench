@@ -410,7 +410,7 @@ def mesh_settings(pid: str, body: dict = Body(...)):
     pr.set_mesh(preset=body.get("preset"), size_max_mm=body.get("size_max_mm"), size_min_mm=body.get("size_min_mm"),
                 refinements=body.get("refinements"), regions=body.get("regions"), layers=body.get("layers"),
                 defeature_mm=body["defeature_mm"] if "defeature_mm" in body else False, method=body.get("method"),
-                edge_refinement=body.get("edge_refinement"), smart=body.get("smart"))
+                edge_refinement=body.get("edge_refinement"), smart=body.get("smart"), sizing_methods=body.get("sizing_methods"))
     return pr.state()
 
 
