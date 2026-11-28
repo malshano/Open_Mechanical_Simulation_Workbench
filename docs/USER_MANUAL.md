@@ -832,7 +832,24 @@ layers** - and **Generate mesh**.
   and what the mesher had estimated. When nothing was refined it says why (no sharp edge across the flow, the cap too low, a smallest cell size set by hand). The size of the cells is no longer taken over from the edges onto the whole faces next to them (fine cells then covered whole faces), so with Smart sizing off the whole mesh can be smaller than
   without edge refinement (the old sizing spreads the sizes of curved edges); the estimate and the cap are for the edge zone.
   **Smart sizing** switches the refinement on by itself at 4×; the box shows it as on, and switching it off there keeps it off. With a **smallest cell** set in Advanced sizes and Smart sizing off the mesher keeps to the size you set and does not refine edges (the group says so).
-  In other kinds of study and for the hex-dominant mesh the group is there but greyed, with the reason.
+  The group is there in every study (in a flow study the edges across the flow, in the others the corners and rims of the parts: the estimate counts the side of the edge the mesh fills; it is within about 25 % for a body in a flow and about 50 % elsewhere in our runs). With a **smallest cell** set in Advanced sizes the edge cells are that size divided by the factor. For the hex-dominant mesh the group is there but greyed, with the reason.
+- **Sizing methods** (Expert mode, every study; the wake box in flow studies): four methods, each switched on by its own check box, with a line that says when to use it, its options, a live
+  estimate of the cells it adds and a **cap** (the cell sizes are made coarser until the estimate fits under it). Values are kept when a method is switched off. Which method when:
+
+  | You want ... | Use | What it does |
+  | --- | --- | --- |
+  | the drag, the wake behind a body | **Wake box** | a box behind the body along the flow (length and margin in body lengths, cells = the wall cell x a factor or a size in mm); with Smart sizing it replaces the recipe's wake box. **Show the wake box in the 3D view** draws it. |
+  | fillets, holes, small cylinders | **Curvature sizing** | cells per circle (6 to 90, empty = the preset's) on the curved faces, growing back with the mesh growth; a smallest cell; the whole face gets the size |
+  | a slot, the gap between a wing and a flap, fins; thin walls in a solid study | **Proximity sizing** | at least this many cells across the gap (the faces that face each other); in a solid study across thin walls; faces with only a sliver of gap are left alone |
+  | the sharp edges | **Edge refinement** (above) | finer cells along the edges |
+  | thin plates and trailing edges with layers | **Fit the layers to the local thickness** (Wall layers) | see below |
+
+  The estimates are rough: curvature sizing added 0.55 to 0.74 of the estimated cells in our runs, the two faces of a narrow gap 0.21 to 0.38 (the estimate is an upper bound there, so the cap holds), the wake
+  box was within 15 %. Other geometries were not measured. A radius is measured on the display triangulation of the faces (good to about 30 %).
+- **Fit the layers to the local thickness** (Wall layers group): the body behind each wall is measured (along the wall normal on the faces of the geometry) and the layers are cut so that all of them together
+  take at most **half** the local thickness (0.1 to 0.5) on **95 %** of the wall (50 to 99.9 %); the thinnest rest, the tip of a trailing edge, is left to the layer step. Fewer layers first (the first one keeps its
+  thickness, so y+ stays); when not even one fits, one thinner layer is made and the line says the y+ target is no longer met. The line under the fields says how many layers were asked for, how many fit
+  and what share of the wall is still too thin. Off by default.
 - **Wall layers** (flow studies; the block is open): the number of layers, the growth ratio, the first layer (0 = automatic) and the
   **target y+** of the first cell, **measured at its centre** as OpenFOAM does (0 = automatic: about 30 for the wall-function models, which want 30 or more; 5 to 30 is the buffer
   layer where they are least accurate; a target near 1 resolves the wall itself and needs many more layers). Beta 3 and earlier sized the first layer so that the target was

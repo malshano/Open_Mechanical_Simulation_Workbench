@@ -47,6 +47,8 @@ class MeshAdvanced(QWidget):
         self.show_layers = True             # the wall layers are drawn in the 3D view (a shell of their total thickness)
         self.show_edges = False             # the sharp edges that get finer cells are drawn in the 3D view (mesh_edges.py)
         self.edge_pv = None
+        self.show_wake = False              # the wake box of the wake method is drawn in the 3D view (mesh_methods.py)
+        self.methods_pv = None
         self.active_region: int | None = None   # the one being edited or looked at: drawn stronger
         self.pick_btn = None
         self.xform = RegionTransform(self)   # moving and turning a region (regionxform.py)
@@ -80,6 +82,7 @@ class MeshAdvanced(QWidget):
         self._sizes(m)
         self._parts(st, m)
         self._regions(st, m)
+        self.v.addWidget(mesh_methods.sizing_section(self, st, m))
         self.v.addWidget(mesh_edges.section(self, st, m))   # (every study: a flow study's across-the-flow edges, the corners of the parts elsewhere)
         if st["study"] == "external_aero":                  # (the wall layers: a flow study's option, not shown in the others)
             self._layers(st, m)

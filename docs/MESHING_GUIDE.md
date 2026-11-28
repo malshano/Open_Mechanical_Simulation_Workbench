@@ -178,6 +178,26 @@ mesher's curvature rule, which is only estimated from the display triangulation)
 the hex-dominant mesher, and the run's memory.
 
 
+## 7. Sizing methods and layer clamp (#40, #33, #34, #35)
+
+All of them are off by default, selectable in the Mesh step (Expert), estimated before meshing by the memory planner (`meshplan.sizing` takes the same plan as the mesher) and capped.
+
+| You want | Method | Notes |
+| --- | --- | --- |
+| fine cells along edges, in any study | Edge refinement | the side of the edge the mesh fills is counted (air, material, both) |
+| the wake of a body | Wake box | the recipe's wake box and this are one mechanism (`meshadvisor.wake_box`) |
+| tight curves | Curvature sizing | per face, from the radius of the display triangles |
+| small gaps / thin walls | Proximity sizing | rays along the wall normal on the display triangles (`localgeom`) |
+| layers that survive thin plates | Layer clamp | all layers together at most half the local thickness on 95 % of the wall |
+
+What was measured (quick preset, one Gmsh run each, so a run-to-run spread is in it):
+
+- **Edge refinement outside a flow** (#40): 12 meshes (heated plate, topology bracket, camera mount, flutter plate; factors 3, 6, 12): real extra cells / estimate 0.52 to 1.47, median 1.1 (`EDGE_ESTIMATE_SPREAD_OTHER` = 0.5; for a body in a flow it stays 0.25). The smallest ratio is at the smallest counts (bracket, factor 3: 5,000 extra cells). Not measured: the enclosure (conjugate heat transfer) study, meshes above 200,000 cells outside a flow.
+- **Curvature sizing**: a 20 mm and an 8 mm cylinder on a plate, 16 and 40 cells per circle: +4,800 and +20,800 cells against 8,700 and 28,300 estimated (0.55, 0.74).
+- **Proximity sizing**: two 100 x 60 mm plates 1.5 mm apart: the edge on the gap faces fell from 3.4 to 0.83 mm (target 0.7 mm), cells +63,000 (smart sizing) and +114,000 (without) against 300,000 estimated at the cap (0.21, 0.38): the closed form counts a tube under each face and the two overlap in a thin gap, so it is an upper bound. The cap therefore holds, at the price of a mesh a little coarser than the cap allows. Gmsh's threaded 3D mesher left a face of three cells in 1 of 4 runs of this geometry (the conversion to OpenFOAM then refuses it: an existing fragility, a second try of the same mesh was fine).
+- **Wake box**: the estimated cells of the box were 10,000 against +4,200 real (the box replaces part of what the recipe already refined); the estimate of the whole mesh was within 15 % in three runs.
+- **Layer clamp**: tested on geometry with known thickness (a 4 mm plate: 4 mm behind the large faces; a wedge: the thickness falls to zero at the tip) and on the case the run writes (8 layers of growth 1.2 on a knife-edged plate become fewer, the first layer unchanged). Not run through snappyHexMesh: whether it keeps more of the wall than without the clamp is not measured here.
+
 ## Sources
 
 1. 4th AIAA CFD Drag Prediction Workshop, gridding guidelines: https://aiaa-dpw.larc.nasa.gov/Workshop4/gridding_guidelines_4.html (y+ about 1 for the coarse grid, 2/3, 4/9, 8/27 for finer; at least 2 constant layers; leading and trailing edge spacing about 0.1 % of the chord; cell count about 3 x between levels; farfield about 100 chords)

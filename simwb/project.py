@@ -2894,7 +2894,7 @@ class Project:
         return hexmesh.unsupported(self.data, self.faces(), self.data["geometry"].get("info") or {})
 
     def set_mesh(self, preset=None, size_max_mm=None, size_min_mm=None, refinements=None, regions=None,
-                 layers=None, defeature_mm=False, method=None, edge_refinement=None, smart=None, budget=None):
+                 layers=None, defeature_mm=False, method=None, edge_refinement=None, smart=None, budget=None, sizing_methods=None):
         if self.busy():
             raise RuntimeError("Please wait: a job is still running for this project (or cancel it).")
         m = self.data["mesh"]
@@ -3018,6 +3018,12 @@ class Project:
 
                 m["edge_refine"] = edgepreview.check_options(edge_refinement, base=m.get("edge_refine"))
                 m.pop("no_edge_refine", None)
+        if sizing_methods is not None:  # the sizing methods: {wake | curvature | proximity | coarsen: true | false | {options}} (see sizingmethods.py); what is not named keeps its value
+            from . import sizingmethods
+
+            m["sizing_methods"] = sizingmethods.check(sizing_methods, m.get("sizing_methods"), self.study)
+            if not any(v.get("on") for v in m["sizing_methods"].values()):
+                m["sizing_methods"] = {k: v for k, v in m["sizing_methods"].items() if len(v) > 1}      # (all off: only the values worth keeping)
         if budget is not None:  # the memory budget: off | {"mb": 4000} | {"percent": 50} | a number (MB); {"on": false} switches it off and keeps the value (see meshplan.py)
             m["budget"] = self._check_budget(budget, m.get("budget"))
         if defeature_mm is not False:  # small-face groups merged into the face they sit on: None / 0 = off
@@ -3031,7 +3037,7 @@ class Project:
         # (the tetrahedral mesh gets its layers at the run; the hex-dominant mesh makes them with the mesh)
         only_layers = (layers is not None and preset is None and size_max_mm is None and size_min_mm is None
                        and refinements is None and regions is None and method is None and edge_refinement is None
-                       and smart is None and budget is None and m.get("method") != "hex")
+                       and smart is None and budget is None and sizing_methods is None and m.get("method") != "hex")
         self.mark_stale(("solve",) if only_layers else ("mesh", "solve"))  # (layers are added at the run)
         self.save()
 

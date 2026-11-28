@@ -201,7 +201,7 @@ def set_domain(pr, a):
 def set_mesh(pr, a):
     pr.set_mesh(preset=a.get("preset"), size_max_mm=a.get("size_max_mm"), size_min_mm=a.get("size_min_mm"),
                 refinements=a.get("refinements"), method=a.get("method"), layers=a.get("layers"),
-                edge_refinement=a.get("edge_refinement"), smart=a.get("smart"))
+                edge_refinement=a.get("edge_refinement"), smart=a.get("smart"), sizing_methods=a.get("sizing_methods"))
     return pr.data["mesh"]
 
 
@@ -584,7 +584,10 @@ TOOLS = [
                           "this are refined)}) refines the mesh along "
                           "sharp edges (in a flow study those across the flow: leading / trailing edges, which carry much of the friction "
                           "of a thin body; in the other studies the corners and rims of the parts) in any study, with a capped number of extra cells (see mesh.stats.edge_refine and "
-                          "mesh.stats.edge_refine_skipped, the reason when nothing was refined). layers: "
+                          "mesh.stats.edge_refine_skipped, the reason when nothing was refined). sizing_methods: {wake: {length (body lengths, 4), side (0.4), size_factor (wall cells, 5) or "
+                          "size_mm, max_cells}, curvature: {elements (cells per circle), min_size_mm, max_cells}, proximity: {cells_across (3), min_size_mm, max_gap_mm, max_cells}, "
+                          "coarsen: {growth (1.25-1.6), keep_cells}} each true | false | options (what is not named keeps its value); the cells they add are capped "
+                          "(mesh.stats.sizing_methods says what each did). layers: "
                           "smart: true/false switches smart sizing (see mesh_apply_recipe). {n, growth, first_mm, y_plus, tolerant, clamp} wall layers (flow studies; clamp: true | false | "
                           "{fraction (0.1-0.5, default 0.5), coverage (0.5-0.999, default 0.95)} fits the layers to the local thickness of the body: all of them together take at "
                           "most fraction of the thickness on coverage of the wall area, fewer layers where it is thin); y_plus = the target of the "
@@ -596,6 +599,7 @@ TOOLS = [
                           "that mesh by layer.",
      {"type": "object", "properties": {"preset": STR, "size_max_mm": NUM, "size_min_mm": NUM, "method": STR,
                                        "edge_refinement": {"description": "true | false | factor 2-20 | {factor, max_cells, max_angle}"},
+                                       "sizing_methods": {"description": "{wake | curvature | proximity | coarsen: true | false | {options}}"},
                                        "layers": {"type": "object"}, "smart": {"type": "boolean"},
                                        "refinements": {"type": "array", "items": {"type": "object"}}}},
      set_mesh),

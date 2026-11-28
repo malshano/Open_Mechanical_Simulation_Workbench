@@ -1147,6 +1147,26 @@ def task_mesh(job: dict) -> dict:
         h_wall = float(ms.get("size_min") or min(max(feature / 2.0, floor), h_body / 2))
     growth = float(rc["growth"]) if rc else float(ms.get("growth", 1.25))
 
+    # sizing methods (#35 curvature and proximity: faces refined like thin parts, #38 coarsening): the same plan as the memory planner's (sizingmethods.plan)
+    from . import sizingmethods
+
+    method_plan = {"bins": [], "coarsen": None, "n_curv": None, "info": {}}
+    if sizingmethods.any_on(ms):
+        far0 = h_body
+        if study == "external_aero":
+            bmin0, bmax0 = info["domain"]["box_min"], info["domain"]["box_max"]
+            far0 = max(bmax0[i] - bmin0[i] for i in range(3)) / 12
+        if ms.get("far_size"):
+            far0 = float(ms["far_size"])
+        from . import meshplan
+
+        method_plan = sizingmethods.plan(study, faces, ms, h_wall, far0, growth, L, n_curv, meshplan.Surface(faces, study))
+        thin_faces = sorted(thin_faces + [(sz_, list(ids_)) for sz_, ids_ in method_plan["bins"]])
+        if method_plan["n_curv"]:
+            n_curv = int(method_plan["n_curv"])
+            ms = dict(ms, curvature_elements=n_curv)
+    coarsen = method_plan["coarsen"]
+
     # small faces (a blade-tip face, a tiny chamfer): a face smaller than the cells round it is crossed by flat
     # (sliver) cells - 0.3 mm tip faces in 0.8 mm cells gave a sliding run a Courant number of 80 at the first
     # step and it diverged. They get cells about as wide as the face, growing back out quickly (as Ansys sizes
@@ -1270,14 +1290,18 @@ def task_mesh(job: dict) -> dict:
     dist = fields.add("Distance")
     fields.setNumbers(dist, "SurfacesList", wall_faces)
     fields.setNumber(dist, "Sampling", 40)
-    thr = fields.add("Threshold")
-    fields.setNumber(thr, "InField", dist)
-    fields.setNumber(thr, "SizeMin", h_wall)
-    fields.setNumber(thr, "SizeMax", size_far)
-    fields.setNumber(thr, "DistMin", h_wall)
-    # geometric growth from h_wall to size_far
-    n_layers = math.log(max(size_far / h_wall, 1.0001)) / math.log(growth)
-    fields.setNumber(thr, "DistMax", h_wall * (growth ** n_layers - 1) / (growth - 1))
+    if coarsen:                                    # (#38: the growth changes beyond the first cells of the wall)
+        thr = fields.add("MathEval")
+        fields.setString(thr, "F", sizingmethods.gmsh_expr(dist, h_wall, size_far, growth, coarsen))
+    else:
+        thr = fields.add("Threshold")
+        fields.setNumber(thr, "InField", dist)
+        fields.setNumber(thr, "SizeMin", h_wall)
+        fields.setNumber(thr, "SizeMax", size_far)
+        fields.setNumber(thr, "DistMin", h_wall)
+        # geometric growth from h_wall to size_far
+        n_layers = math.log(max(size_far / h_wall, 1.0001)) / math.log(growth)
+        fields.setNumber(thr, "DistMax", h_wall * (growth ** n_layers - 1) / (growth - 1))
     use = [thr]
     in_compound = {i for g in merged for i in g}  # (defeatured faces are smoothed over, not resolved)
     for sz, ids in thin_faces:
@@ -1286,13 +1310,17 @@ def task_mesh(job: dict) -> dict:
             continue
         fd = fields.add("Distance")
         fields.setNumbers(fd, "SurfacesList", ids)
-        ft = fields.add("Threshold")
-        fields.setNumber(ft, "InField", fd)
-        fields.setNumber(ft, "SizeMin", sz)
-        fields.setNumber(ft, "SizeMax", size_far)
-        fields.setNumber(ft, "DistMin", sz)
-        nl = math.log(max(size_far / sz, 1.0001)) / math.log(growth)
-        fields.setNumber(ft, "DistMax", sz * (growth ** nl - 1) / (growth - 1))
+        if coarsen:
+            ft = fields.add("MathEval")
+            fields.setString(ft, "F", sizingmethods.gmsh_expr(fd, sz, size_far, growth, coarsen))
+        else:
+            ft = fields.add("Threshold")
+            fields.setNumber(ft, "InField", fd)
+            fields.setNumber(ft, "SizeMin", sz)
+            fields.setNumber(ft, "SizeMax", size_far)
+            fields.setNumber(ft, "DistMin", sz)
+            nl = math.log(max(size_far / sz, 1.0001)) / math.log(growth)
+            fields.setNumber(ft, "DistMax", sz * (growth ** nl - 1) / (growth - 1))
         use.append(ft)
     thin_only = [t for t in thin_faces if t not in small_faces]
     if thin_only:
@@ -1678,6 +1706,7 @@ def task_mesh(job: dict) -> dict:
         "defeatured_faces": sum(len(g) - 1 for g in merged),
         "edge_refine": edge_info,
         "edge_refine_skipped": edge_skipped,
+        "sizing_methods": {**method_plan["info"], **({"wake": {k: v for k, v in ms["sizing_plan"]["wake"].items()}} if (ms.get("sizing_plan") or {}).get("wake") else {})},
         "collapsed_cells_repaired": int(n_collapsed),
         "sizes": {"near_wall": h_wall, "body": h_body, "far": size_far, "feature": feature,
                   "min_gap": min_gap,

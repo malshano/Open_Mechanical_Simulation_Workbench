@@ -143,13 +143,17 @@ class Surface:
         ok = (i != j) & (self.tri_face[i] == self.tri_face[j])         # (neighbours inside one face; the angle between faces is an edge, not a curvature)
         i, j = i[ok], j[ok]
         if not len(i):
+            self._curv_face = np.zeros(0, np.int64)
             return np.zeros((0, 3)), np.zeros(0)
         cosang = np.clip(np.einsum("ij,ij->i", self.normal[i], self.normal[j]), -1.0, 1.0)
         ang = np.arccos(cosang)
-        dist = np.linalg.norm(self.centroid[i] - self.centroid[j], axis=1)
+        dn = self.normal[j] - self.normal[i]
+        un = dn / np.maximum(np.linalg.norm(dn, axis=1), 1e-300)[:, None]
+        dist = np.abs(np.einsum("ij,ij->i", self.centroid[i] - self.centroid[j], un))          # (the distance across the bend: long thin triangles must not make the radius long)
         good = ang > 1e-3
         R = dist[good] / ang[good]
         cen = 0.5 * (self.centroid[i][good] + self.centroid[j][good])
+        self._curv_face = self.tri_face[i][good]                    # (the face each radius belongs to: the curvature method sizes faces)
         return cen, R
 
     def inside(self, P: np.ndarray) -> np.ndarray:
@@ -328,6 +332,18 @@ def sizing(study: str, faces: list, info: dict, ms: dict, rc: dict | None = None
     growth = float(rc["growth"]) if rc else float(ms.get("growth", 1.25))
     notes: list = []
     thin: dict = {}
+    # the far field: a box of the domain / 12 in a flow, the body size elsewhere
+    dom = info.get("domain") or {}
+    if study == "external_aero" and dom.get("box_min") is not None:
+        bmin, bmax = np.asarray(dom["box_min"], float), np.asarray(dom["box_max"], float)
+        far = float(max(bmax - bmin)) / 12
+        region = {"lo": bmin, "hi": bmax, "mode": "outside"}
+    else:
+        bb = np.asarray(info["bbox"], float)
+        far = h_body
+        region = {"lo": bb[:3], "hi": bb[3:], "mode": "inside" if study in SOLID_STUDIES else "all"}
+    if ms.get("far_size"):
+        far = float(ms["far_size"])
     if study == "external_aero" and not ms.get("size_min"):
         n_feat = FEATURE_CELLS.get(preset, 4)
         h_thin_min = h_wall / 3 if rc else L / (12 * n_per)
@@ -352,18 +368,12 @@ def sizing(study: str, faces: list, info: dict, ms: dict, rc: dict | None = None
                 continue
             if w < 0.5 * h and long < 3 * h and long < 8 * max(w, L * 2e-4):
                 small[int(f["id"])] = max(w, L * 2e-4)
-    # the far field: a box of the domain / 12 in a flow, the body size elsewhere
-    dom = info.get("domain") or {}
-    if study == "external_aero" and dom.get("box_min") is not None:
-        bmin, bmax = np.asarray(dom["box_min"], float), np.asarray(dom["box_max"], float)
-        far = float(max(bmax - bmin)) / 12
-        region = {"lo": bmin, "hi": bmax, "mode": "outside"}
-    else:
-        bb = np.asarray(info["bbox"], float)
-        far = h_body
-        region = {"lo": bb[:3], "hi": bb[3:], "mode": "inside" if study in SOLID_STUDIES else "all"}
-    if ms.get("far_size"):
-        far = float(ms["far_size"])
+    from . import sizingmethods
+    mp = sizingmethods.plan(study, faces, ms, h_wall, far, growth, L, n_curv, surf) if sizingmethods.any_on(ms) else {"bins": [], "coarsen": None, "info": {}}
+    for sz_, ids_ in mp["bins"]:                      # (the faces of the curvature and proximity methods are refined like thin parts)
+        for i in ids_:
+            thin[int(i)] = min(thin.get(int(i), 1e30), float(sz_))
+    coarsen = mp["coarsen"]
     smallest = [h_wall * 0.5] + [s * 0.5 for s in thin.values()]
     for r in ms.get("regions", []):
         smallest.append(float(r["size"]) * 0.5)
@@ -388,6 +398,8 @@ def sizing(study: str, faces: list, info: dict, ms: dict, rc: dict | None = None
             if t is None:
                 return np.full(len(P), 1e30)
             d, _ = t.query(P, workers=-1)
+            if coarsen:
+                return sizingmethods.wall_threshold(d, size, far, growth, coarsen)
             return threshold(d, size, size, d_max, far)
         return f
 
@@ -412,7 +424,7 @@ def sizing(study: str, faces: list, info: dict, ms: dict, rc: dict | None = None
         src.append(fr)
     # curved faces: the mesher's curvature sizing (MeshSizeFromCurvature) made finer than the wall size on small radii, spread into the volume with the growth
     extend = not (rc and rc.get("extend_boundary") is False)         # (smart sizing keeps the fine surface cells of the edges on the surface: MeshSizeExtendFromBoundary 0)
-    cen, hc = surf.curvature_sizes(float(ms.get("curvature_elements", n_curv)), floor, h_wall) if extend else (np.zeros((0, 3)), np.zeros(0))
+    cen, hc = surf.curvature_sizes(float(mp.get("n_curv") or ms.get("curvature_elements", n_curv)), floor, h_wall) if extend else (np.zeros((0, 3)), np.zeros(0))
     if len(cen):
         tc = {}
 
@@ -487,7 +499,7 @@ def sizing(study: str, faces: list, info: dict, ms: dict, rc: dict | None = None
     if study == "cht_enclosure":
         notes.append("Narrow air gaps between parts are refined by the mesher and are not in this estimate: it can be a little low for finned parts.")
     return {"field": Field(far, floor, src, notes), "region": region, "h_wall": h_wall, "h_body": h_body, "far": far, "growth": growth, "notes": notes,
-            "n_curv": n_curv, "surface": surf, "surface_units": units, "smart": bool(rc)}
+            "n_curv": n_curv, "surface": surf, "surface_units": units, "smart": bool(rc), "methods": mp, "n_curv_method": mp.get("n_curv")}
 
 
 # ---------------------------------------------------------------------------------------------------------------------------------- the memory model
@@ -565,15 +577,35 @@ def base_inputs(pr, ms: dict | None = None) -> tuple:
     """(mesh settings, recipe) as the mesher gets them before a budget is applied: the stored settings, with the recipe of smart sizing (and the edge
     refinement it asks for) when that is on. The mesher (`Project._mesh_inputs`) and the estimate both call this, so they cannot differ."""
     from . import meshadvisor
+    from . import sizingmethods
     ms = dict(ms if ms is not None else pr.data["mesh"])
     rc = None
-    if pr.study == "external_aero" and ms.get("smart"):
+    wo = sizingmethods.wake_options(ms) if pr.study == "external_aero" and pr.data["geometry"].get("status") == "ready" else None
+    an = None
+    if pr.study == "external_aero" and (ms.get("smart") or wo):
         an = meshadvisor.analyse(pr.data, pr.faces(), pr.data["geometry"]["info"])
-        rc = meshadvisor.recipe(an, ms.get("preset", "medium"), ms.get("growth"))
+    wk = None
+    if wo:                                           # (#34: the wake box of the method; the recipe's wake box is replaced by it, else it is a refinement region)
+        info = pr.data["geometry"]["info"]
+        n_per, _c = PRESETS_OF(ms)
+        rc0 = meshadvisor.recipe(an, ms.get("preset", "medium"), ms.get("growth")) if ms.get("smart") else None
+        h_body = float(ms.get("size_max") or (rc0["h_near"] if rc0 else float(info["ref_length"]) / n_per))
+        h_wall = wall_size(ms, pr.study, smallest_feature(pr.faces(), float(info["ref_length"])), float(info["ref_length"]), h_body, rc0)
+        wk = sizingmethods.wake_plan(an, wo, h_wall)
+        ms["sizing_plan"] = {"wake": wk}
+    if pr.study == "external_aero" and ms.get("smart"):
+        rc = meshadvisor.recipe(an, ms.get("preset", "medium"), ms.get("growth"), wake=wk)
         ms["recipe"] = rc
         if not ms.get("edge_refine") and rc.get("edge_refinement") and not ms.get("no_edge_refine"):
             ms["edge_refine"] = {"factor": rc["edge_refinement"]}
+    elif wk:
+        ms["regions"] = list(ms.get("regions") or []) + [{"name": "Wake (method)", "min": wk["min"], "max": wk["max"], "size": wk["size"], "auto": "wake"}]
     return ms, rc
+
+
+def PRESETS_OF(ms: dict) -> tuple:
+    from .gmsh_worker import PRESETS
+    return PRESETS.get(ms.get("preset", "medium"), PRESETS["medium"])
 
 
 def _zones(pr) -> list:
