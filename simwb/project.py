@@ -2999,8 +2999,11 @@ class Project:
                 raise ValueError("First layer thickness must be > 0 mm (empty = automatic)")
             # (an option not given keeps its value: a call that only changes the number of layers must not switch
             # the tolerant limits off)
+            from .solvers.openfoam import layermesh
+
+            clamp = layermesh.check_clamp(layers["clamp"], old_layers.get("clamp")) if "clamp" in layers else old_layers.get("clamp")      # (#33: kept when not named)
             m["layers"] = {"n": n, "growth": g, "first": None if first is None else first / 1000, "y_plus": y_plus,
-                           "tolerant": bool(layers.get("tolerant", (m.get("layers") or {}).get("tolerant", False)))}
+                           "tolerant": bool(layers.get("tolerant", (m.get("layers") or {}).get("tolerant", False))), **({"clamp": clamp} if clamp else {})}
             lst = (m.get("stats") or {}).get("layers")
             if lst and m["layers"] != old_layers:
                 lst["stale"] = True            # (the layered mesh in the view was made with the old settings: "Make the layers" again)
@@ -3298,7 +3301,34 @@ class Project:
                 "non_orthogonality_max": ck["non_orthogonality_max"], "non_orthogonality_mean": ck["non_orthogonality_mean"],
                 "skewness_max": ck["skewness_max"], "aspect_ratio_max": ck["aspect_ratio_max"], "mesh_ok": ck["mesh_ok"],
                 "failed_checks": ck["failed_checks"], "warnings": warn, "y_plus": lay.get("y_plus"), "settings": dict(lay), "stale": False,
+                "clamp": meta.get("layer_clamp"),
                 "seconds": round(time.time() - t0, 1)}
+
+    def layer_clamp_report(self) -> dict | None:
+        """What the layer clamp (layers.clamp, #33) does to the layers of the current settings, worked out as the run works it out (cases.write_external_aero):
+        the layers asked for, the layers that fit inside the local thickness of the body, and the share of the wall that is still too thin. None without a
+        clamp, layers or flow speed; {error} when the thickness could not be measured."""
+        from .solvers.openfoam import cases, layermesh
+
+        d = self.data
+        ly = d["mesh"].get("layers") or {}
+        n = int(ly.get("n") or 0)
+        if self.study != "external_aero" or n <= 0 or not ly.get("clamp") or d["geometry"].get("status") != "ready":
+            return None
+        se = d["settings"]
+        info = d["geometry"]["info"]
+        V, L = float(se.get("speed") or 0), float(info.get("ref_length") or 0)
+        if V <= 0 or L <= 0:
+            return None
+        try:
+            fl = materials.get_fluid(se.get("fluid", "air"))
+            g = float(ly.get("growth", 1.2))
+            pl = cases.layer_plan(V, L, fl["mu"] / fl["rho"], se.get("turbulence", "kOmegaSST"), n, g, d.get("moving_zones") or [], ly.get("first"), ly.get("y_plus"))
+            ck = ly["clamp"]
+            th = layermesh.wall_thickness(self.faces(), self.study, L, 1.5 * pl["total"] / float(ck["fraction"]))
+            return layermesh.clamp_layers(pl["first"], g, n, th, float(ck["fraction"]), float(ck["coverage"]))
+        except Exception as e:  # noqa: BLE001 - a help
+            return {"error": f"{type(e).__name__}: {e}"}
 
     def layers_default_cut(self) -> tuple:
         """(axis, fraction of the mesh along it) of a cut through the middle of the object across its longest side: in a cut like that the layers

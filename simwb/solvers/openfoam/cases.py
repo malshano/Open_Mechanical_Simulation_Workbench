@@ -951,11 +951,20 @@ relaxationFactors
     lay = (project.get("mesh") or {}).get("layers") or {}
     # (a hex-dominant mesh already has its layers: they are made together with it, not added again at the run)
     n_lay = int(lay.get("n") or 0) if wall_names and not hexmesh else 0
+    clamp = None
     if n_lay:
         g = float(lay.get("growth", 1.2))
         # automatic first layer: y+ ~ 30 for the wall-function models, a resolved boundary layer when laminar
         first = layer_plan(V, L, nu, s.get("turbulence", "kOmegaSST"), n_lay, g, project.get("moving_zones") or [],
                            lay.get("first"), lay.get("y_plus"))["first"]
+        if lay.get("clamp"):
+            # (#33) all the layers together fit inside a share (half) of the local thickness of the body on most of the wall: fewer layers, or a thinner one
+            from . import layermesh
+            ck = lay["clamp"]
+            fr = float(ck.get("fraction", 0.5))
+            th = layermesh.wall_thickness(faces, "external_aero", L, 1.5 * first * (g ** n_lay - 1.0) / (g - 1.0) / fr)
+            clamp = layermesh.clamp_layers(first, g, n_lay, th, fr, float(ck.get("coverage", 0.95)))
+            n_lay, first = clamp["n"], clamp["first"]
         size = (f"relativeSizes       false;\n    firstLayerThickness {float(first):.8g};\n"
                 f"    minThickness        {float(first) * 0.1:.8g};")
         # tolerant layers (opt-in): with the strict limits snappyHexMesh removes layers wherever the cells are small
@@ -1028,7 +1037,7 @@ mergeTolerance 1e-6;
         "force_patches": force_patches, "rotors": rotor_info, "moving_zones": mzones,
         "ref_area": projected_area(faces, Uinf if V > 0 else AXES[s.get("up_axis", "+z")]),
         "ref_length": L, "CofR": cofr.tolist(), "symmetry": planes,
-        "mesh_quality": q, "n_cells": pm["n_cells"],
+        "mesh_quality": q, "n_cells": pm["n_cells"], "layer_clamp": clamp,
         "steps": [
             {"app": "checkMesh", "args": ["-allGeometry", "-allTopology"], "log": "log.checkMesh", "allow_fail": True},
             *([{"app": "snappyHexMesh", "args": ["-overwrite"], "log": "log.snappyHexMesh"}] if n_lay else []),
