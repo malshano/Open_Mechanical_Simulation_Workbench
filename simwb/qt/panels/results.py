@@ -1644,6 +1644,8 @@ class ResultsPanel(_Panel):
                                     "warn" if abs(cc.get("difference_percent") or 0) > (cc.get("expected_band_percent") or 25) else ""))
         if study == "external_aero":
             self._aero(lay, s)
+            from .results_walls import add_wall_card
+            add_wall_card(self, lay)                          # (the layers per wall and the y+ of the result)
         # loads and reactions
         if "applied_force_N" in s:
             lay.addWidget(_muted("Load " + " / ".join(fmt_num(round(x, 3)) for x in s["applied_force_N"]) + " N, reaction "

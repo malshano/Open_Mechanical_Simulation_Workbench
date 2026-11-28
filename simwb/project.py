@@ -3886,6 +3886,13 @@ class Project:
             raise ValueError("axis must be x, y or z")
         return sizefield.preview(self, axis or None, float(frac))
 
+    def wall_layer_view(self) -> dict:
+        """After a solve of a flow study: for every wall the layers the mesh got (made of planned, first and total thickness) and the y+ of the result with
+        its shares in the bands that matter to a wall function (simwb/wallview.py)."""
+        from . import wallview
+
+        return wallview.view(self)
+
     def mesh_zone_count(self) -> int:
         """How many rotating zones the stored mesh has (their boundary is meshed with it); 0 without a mesh."""
         try:

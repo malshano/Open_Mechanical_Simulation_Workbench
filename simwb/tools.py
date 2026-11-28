@@ -223,6 +223,10 @@ def mesh_size_preview(pr, a):
                                                                               "section_triangles": (d["section"] or {}).get("n_tris")}
 
 
+def wall_layers(pr, a):
+    return pr.wall_layer_view()
+
+
 def generate_mesh(pr, a):
     r = _wait(pr.generate_mesh(), float(a.get("timeout_s", 600)))
     if r.get("status") == "done":
@@ -605,6 +609,10 @@ TOOLS = [
                           "sizing, sharp edges), and the range of the planned sizes in mm on the walls and, with axis x|y|z and position 0..1, in a cut. "
                           "Use it to check where the cells will be small before generate_mesh; the Qt app draws it (Mesh step, Show the planned cell sizes).",
      {"type": "object", "properties": {"axis": STR, "position": {"type": "number"}}}, mesh_size_preview),
+    ("wall_layers", "After a solve of a flow study: for each wall the wall layers the mesh got (made of planned, first-layer and total thickness in mm) "
+                    "and the wall y+ of the result (min, mean, 95th percentile, max, and the share of the wall area below 5, 5 to 30, 30 to 300 and above 300) "
+                    "with a verdict for the wall treatment. Use it to judge the near-wall mesh of a finished run; the Results step shows the same.",
+     {"type": "object", "properties": {}}, wall_layers),
     ("mesh_metrics", "Inspect the generated tetrahedral mesh: statistics and histograms of cell size, aspect ratio, "
                      "growth (size jump to the neighbours), volume and quality, the cell budget (for each size band "
                      "the share of cells and of the volume: where the cells - and the memory - are spent) and plain "

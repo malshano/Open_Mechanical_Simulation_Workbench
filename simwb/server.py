@@ -444,6 +444,12 @@ def mesh_size_preview(pid: str, axis: str | None = None, position: float = 0.5):
     return P.open_project(pid).size_preview(axis, position)
 
 
+@app.get("/api/projects/{pid}/wall_layers")
+def wall_layers(pid: str):
+    """After a solve of a flow study: the layers per wall and the wall y+ of the result."""
+    return P.open_project(pid).wall_layer_view()
+
+
 @app.get("/api/projects/{pid}/mesh/metrics")
 def mesh_metrics(pid: str):
     """Statistics, histograms and the cell budget of the mesh (size, aspect ratio, growth, volume, quality)."""

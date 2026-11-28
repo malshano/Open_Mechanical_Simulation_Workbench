@@ -316,6 +316,13 @@ The panel is split into four tabs; the 3D view is the same in all of them.
 | **Probe** | A **line plot**: the field along a straight line between two points you click on the model (or from the lowest to the highest value); move over the plot to see the point on the model; **Copy data** puts the table on the clipboard. The values pinned with **Probe** are listed here. |
 | **Checks** | The mesh-sensitivity check, the flow-model comparison, the comparison with the previous run and the model assumptions. |
 
+**Wall layers and y+** (Summary tab of a flow study, under the forces and moments). After a solve, one block per wall (OpenFOAM patch): the wall layers the mesh got
+(*2.6 of 3 layers, first 0.4 mm, 1.1 mm in all, 88 % of the planned thickness*, from the layer step of the mesher; shown only when the run used those layers), the y+ of the
+result (mean, 95 % of the wall below, highest) and a bar with the share of the wall area in each band of y+: below 5 (the viscous sub-layer is resolved), 5 to 30 (the buffer
+layer, where wall functions are least accurate), 30 to 300 (what the wall functions expect, green) and above 300. A line at the top says in words whether the wall treatment
+fits (70 % of the wall in 30 to 300 is a pass; a laminar run wants y+ below 5). **Show y+ on the walls** colours the walls in the 3D view by y+. A hex-dominant mesh gives the
+y+ and the share of wall faces that got layers, not the layers per wall.
+
 **Deformation.** A static study draws the part deformed under the load: the real deformation is far too small to see, so it is drawn larger (**Auto**: the largest movement is 8 % of the model size; **True size x1**, or a scale of your own); the note under the controls says by how much. The thin outline is the undeformed part. A mode shape swings at about 8 % of the model size times the amplitude. Every field of a static study (stress, safety factor, ...) is drawn on the deformed shape. The colour map is remembered in the browser.
 
 ### 8.1 Display
