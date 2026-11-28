@@ -47,7 +47,7 @@ MODAL = {
     "file.import": "study.import", "geometry.import": "geometry.import",
     "home.open_folder": "study.open_folder", "home.import": "study.import", "viewbar.picture": "view.picture",
     "chrome.close": None, "results.export.report": "results.export", "results.export.csv": "results.export", "results.export.vtk": "results.export",
-    "results.time.record": "results.video",
+    "results.time.record": "results.video", "mesh.export.html": "mesh.export", "mesh.export.pdf": "mesh.export",
 }
 
 
@@ -688,6 +688,9 @@ class Control(QObject):
                 raise ValueError("The size preview needs the geometry (import it first) and the tetrahedral mesh type")
             self._set(self._w("mesh.sizes.show"), "mesh.sizes.show", bool(show))
             return {"show": pn.sizes.show_chk.isChecked(), "text": pn.sizes.text.text(), "overlay": win.view.overlay_info if show else None}
+        R("mesh.export", "Write the mesh report (statistics, settings, cell budget, findings, histograms, cuts through the mesh) to a file: format html | pdf.",
+          {"format": (S, "html|pdf", True), "path": (S, "full path of the file", True)},
+          lambda format, path: {"file": win.panels["mesh"].export_box.export(format, path)})
         R("mesh.sizes", "Show (or hide) the planned cell sizes: the sizes the mesher will use, drawn on the model and, with a cut open (mesh.view cut), through the "
           "air, before any mesh exists. The control is mesh.sizes.show; GET /mesh/size_preview and the tool mesh_size_preview give the numbers.",
           {"show": (B, "default true", False)}, mesh_sizes)
