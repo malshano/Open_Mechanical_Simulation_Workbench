@@ -69,16 +69,21 @@ class ParamForm(QWidget):
                 c.setCurrentIndex(max(i if i >= 0 else c.findText(str(cur)), 0))
                 c.currentIndexChanged.connect(lambda i, k=k, c=c: self._edited(k, c.itemData(i)))
             else:
-                c = wid(QLineEdit(fmt_num(cur) if cur not in (None, "") else ""), f"{prefix}.{k}")
+                c = wid(QLineEdit((f"{float(cur):,.0f}" if p.get("thousands") else fmt_num(cur)) if cur not in (None, "") else ""), f"{prefix}.{k}")
                 if p.get("placeholder"):                     # (empty means automatic: the field says so)
                     c.setPlaceholderText(str(p["placeholder"]))
-                v = QDoubleValidator(c)
-                v.setNotation(QDoubleValidator.ScientificNotation)
-                if "min" in p:
-                    v.setBottom(float(p["min"]))
-                if "max" in p:
-                    v.setTop(float(p["max"]))
-                c.setValidator(v)
+                if p.get("thousands"):                       # (a count written with separators: 150,000)
+                    from PySide6.QtCore import QRegularExpression
+                    from PySide6.QtGui import QRegularExpressionValidator
+                    c.setValidator(QRegularExpressionValidator(QRegularExpression(r"[0-9,]*"), c))
+                else:
+                    v = QDoubleValidator(c)
+                    v.setNotation(QDoubleValidator.ScientificNotation)
+                    if "min" in p:
+                        v.setBottom(float(p["min"]))
+                    if "max" in p:
+                        v.setTop(float(p["max"]))
+                    c.setValidator(v)
                 c.editingFinished.connect(lambda k=k, c=c: self._edited(k, c.text()))
             oh = p.get("option_help") or {}
             c.setToolTip(p.get("help") or ("  ".join(f"{o}: {t}" for o, t in oh.items()) if oh else f"{p['label']}{unit}"))
@@ -107,7 +112,7 @@ class ParamForm(QWidget):
             val = None
         else:
             try:
-                val = float(text)
+                val = float(str(text).replace(",", "")) if p.get("thousands") else float(text)
             except ValueError:
                 return                       # (an empty or half-typed number: keep the last good value)
             if val == self.vals.get(key):

@@ -142,7 +142,9 @@ def _plate_project(P, tmp_path):
 
 def test_edge_refinement_setting_and_its_effect_on_the_mesh(workspace, tmp_path):
     pr = _plate_project(workspace, tmp_path)
-    pr.set_mesh(preset="quick")
+    # (smart sizing, so that the mesh without the option is made with the same surface sizing: the old sizing spreads the sizes of curved edges over whole
+    # faces, which an edge size field does not - the total of the two meshes would not tell what the edges cost)
+    pr.set_mesh(preset="quick", smart=True, edge_refinement=False)
     j = pr.generate_mesh()
     assert j.wait(600) and j.status == "done", (j.error, j.log[-8:])
     base = pr.data["mesh"]["stats"]
@@ -161,7 +163,7 @@ def test_edge_refinement_setting_and_its_effect_on_the_mesh(workspace, tmp_path)
     assert st["cells"] > base["cells"] * 1.05                                          # more cells along the edges
     assert st["cells"] < base["cells"] * 3.0                                           # (measured: about 2x on this plate)
     pr.set_mesh(edge_refinement=False)
-    assert "edge_refine" not in pr.data["mesh"]
+    assert "edge_refine" not in pr.data["mesh"] and pr.data["mesh"]["no_edge_refine"] is True
 
 
 def test_tolerant_layer_limits_reach_the_case_only_when_asked(workspace, tmp_path):

@@ -12,7 +12,7 @@ from PySide6.QtGui import QDoubleValidator, QGuiApplication
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel,
                                QLineEdit, QPushButton, QSlider, QSpinBox, QStackedWidget, QVBoxLayout, QWidget)
 
-from ... import resample
+from ... import mirrorview, resample
 from .. import colormaps, theme
 from .. import exports
 from ..charts import FieldHist, HBar, LineChart, SignedBar, SpectrumChart, StackBar, XYChart
@@ -325,6 +325,15 @@ class ResultsPanel(_Panel):
         self.part_checks: dict = {}
         self.parts_box.setVisible(False)
         v.addWidget(self.parts_box)
+        self.mirror = wid(QCheckBox("Show the whole model (mirror the symmetry plane)"), "results.mirror")
+        self.mirror.setChecked(True)
+        self.mirror.setEnabled(False)
+        self.mirror.setToolTip("This study has no symmetry plane")
+        self.mirror.toggled.connect(self._mirror_toggled)
+        v.addWidget(self.mirror)
+        self.mirror_note = _muted("")
+        self.mirror_note.setVisible(False)
+        v.addWidget(self.mirror_note)
         self.handles = ResultHandles(self)          # the drag handles of the positioning controls (resulthandles.py)
         self.vis = VisibilityList()                 # (a flow with an object: what is drawn, parts and moving zones; see visibility.py)
         self.vis.changed.connect(self._display_changed)
@@ -352,6 +361,41 @@ class ResultsPanel(_Panel):
 
     def _display_changed(self):
         self.changed.emit()
+
+    # ---- the whole model from the solved part (simwb/mirrorview.py)
+    def _mirror_refresh(self, st):
+        """The switch works when the result was solved with a symmetry plane; the note says what the copy is."""
+        try:
+            planes = self.engine.symmetry_planes() if st["solve"].get("status") in ("done", "stale") else []
+        except Exception:  # noqa: BLE001
+            planes = []
+        self.mirror.setEnabled(bool(planes))
+        self.mirror.setToolTip(
+            ("Draw the other side(s) as well: the solved part mirrored across " + ", ".join(p.get("name") or "the plane" for p in planes)
+             + " (surfaces, sections, vortex surfaces, contour planes, arrows, particles, zones). Untick to see only the solved part.") if planes
+            else "This study has no symmetry plane: the whole model was solved")
+        on = bool(planes) and self.mirror.isChecked()
+        whole = st["study"] in ("external_aero", "cht_enclosure")
+        self.mirror_note.setText(
+            "The solved part is drawn with its mirror image (copy) across " + ", ".join(p.get("name") or "the plane" for p in planes)
+            + "; a faint outline marks each plane. Values on a copy are the solved ones (vectors reflected). Probes and plots read the solved part. "
+            + ("Forces and totals in the Summary are the whole body's already." if whole else "Numbers in the Summary are for the solved part.")
+            if on else "")
+        self.mirror_note.setVisible(on)
+
+    def _mirror_toggled(self, on):
+        self.engine.mirror_view = bool(on)
+        if not on and any(p.get("mirrored") for p in self.pins):          # (a point on a copy has nothing to stand on any more)
+            self.pins = [p for p in self.pins if not p.get("mirrored")]
+            self._pins()
+        planes = self.engine.symmetry_planes() if self.engine.pid else []
+        if planes and self.win is not None:
+            self.win.statusBar().showMessage(
+                "Showing the whole model: the solved part and its mirror image(s) across " + ", ".join(p.get("name") or "the plane" for p in planes)
+                if on else "Showing the solved part only", 6000)
+        if self.engine.pid:
+            self._mirror_refresh(self.engine.state())
+        self._display_changed()
 
     def _contours_toggled(self, on):
         self.cont_n.setEnabled(bool(on))
@@ -503,6 +547,7 @@ class ResultsPanel(_Panel):
                 regs += [zone_outline(z) for z in st.get("moving_zones") or []]
             if sel.get("regions"):
                 regs += list((st.get("mesh") or {}).get("regions") or [])
+        regs = mirrorview.mirror_regions(regs, self.engine.mirror_planes()) if regs else regs      # (the whole model: the zones off the plane twice, one on it once)
         self.view.region_view.set(regs, None) if regs else self.view.region_view.clear()
 
     def left(self):
@@ -748,7 +793,11 @@ class ResultsPanel(_Panel):
         if not h or h.get("kind") != "surface":
             return
         base = self.view.base_point(h["cell"], h["point"])
+        side = self.view.mirror_side(h["cell"])
         if self.line_pick:
+            if side:                          # (a point on a copy: the plot is of the solved part, along the same line reflected)
+                base = self.view.solved_point(h["cell"], base)
+                self.win.statusBar().showMessage("That point is on the mirrored copy: the line plot uses the solved part (the same point reflected)", 6000)
             self.line_ends.append(base)
             if len(self.line_ends) == 1:
                 self.line_info.setText("Click the second point…")
@@ -759,7 +808,7 @@ class ResultsPanel(_Panel):
         elif self.probe_on:
             val = self.view.value_at(h["cell"], h["point"])
             unit = self.view.overlay_info.get("unit", "")
-            self.pins.append({"point": list(h["point"]), "value": val, "unit": unit, "name": self.field.currentText()})
+            self.pins.append({"point": list(h["point"]), "value": val, "unit": unit, "name": self.field.currentText(), "mirrored": bool(side)})
             self._pins()
         self.draw_marks()
 
@@ -769,7 +818,8 @@ class ResultsPanel(_Panel):
         if not h or h["kind"] != "surface":
             raise ValueError("That point is not on the drawn result")
         val = self.view.value_at(h["cell"], h["point"])
-        self.pins.append({"point": list(h["point"]), "value": val, "unit": self.view.overlay_info.get("unit", ""), "name": self.field.currentText()})
+        self.pins.append({"point": list(h["point"]), "value": val, "unit": self.view.overlay_info.get("unit", ""), "name": self.field.currentText(),
+                          "mirrored": bool(self.view.mirror_side(h["cell"]))})
         self._pins()
         self.draw_marks()
         return self.pins[-1]
@@ -813,7 +863,8 @@ class ResultsPanel(_Panel):
     def _pin_texts(self, i: int):
         """The text and the number boxes of pin i, from the pin (no signals: the pin was moved by a handle or by typing)."""
         p, r = self.pins[i], self.pin_rows[i]
-        r["label"].setText(f"<b>{chr(65 + i % 26)}</b>  {p['name']}: {fmt_num(p['value'])} {p['unit']}")
+        r["label"].setText(f"<b>{chr(65 + i % 26)}</b>  {p['name']}: {fmt_num(p['value'])} {p['unit']}"
+                           + ("  <i>(mirrored side: the solved value, reflected)</i>" if p.get("mirrored") else ""))
         for e, c in zip(r["edits"], p["point"]):
             if not e.hasFocus():
                 e.blockSignals(True)
@@ -837,6 +888,7 @@ class ResultsPanel(_Panel):
     def set_pin_hit(self, i: int, cell: int, point, final: bool = True):
         p = self.pins[i]
         p["point"] = [float(c) for c in point]
+        p["mirrored"] = bool(self.view.mirror_side(cell))
         val = self.view.value_at(cell, point)
         if val is not None:
             p["value"] = val
@@ -983,6 +1035,7 @@ class ResultsPanel(_Panel):
         self._time_note()
         self.hide_air.setVisible(st["study"] == "cht_enclosure" and bool(infos))
         self._parts(st)
+        self._mirror_refresh(st)
         self._vis_items(st)
         flow = st["study"] in ("external_aero", "cht_enclosure")
         self.tab_btns["flow"].setVisible(flow and bool(infos))

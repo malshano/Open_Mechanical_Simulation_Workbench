@@ -579,9 +579,12 @@ TOOLS = [
                           "tetrahedra, the default) or 'hex' (hex-dominant snappyHexMesh: external aerodynamics round "
                           "bodies in the automatic box, no rotors, moving zones or symmetry planes; usually fewer, "
                           "more orthogonal cells; needs OpenFOAM, takes about a minute per 100,000 cells). "
-                          "edge_refinement: true (or a factor 2-20, default 6; false = off) refines the mesh along "
+                          "edge_refinement: true (or a factor 2-20, default 6; false = off; or {factor, max_cells (cap on the extra "
+                          "cells, default 150000), max_angle (degrees, default 140: edges where the faces meet at less than "
+                          "this are refined)}) refines the mesh along "
                           "sharp edges across the flow (leading / trailing edges, which carry much of the friction "
-                          "of a thin body) with a capped number of extra cells (see mesh.stats.edge_refine). layers: "
+                          "of a thin body) with a capped number of extra cells (see mesh.stats.edge_refine and "
+                          "mesh.stats.edge_refine_skipped, the reason when nothing was refined). layers: "
                           "smart: true/false switches smart sizing (see mesh_apply_recipe). {n, growth, first_mm, y_plus, tolerant} wall layers (flow studies); y_plus = the target of the "
                           "first cell (empty = automatic, about 30 for the wall-function models; about 1 resolves the "
                           "viscous sublayer and needs many more layers); tolerant = looser limits so thin or sharp "
@@ -590,7 +593,7 @@ TOOLS = [
                           "thickness and the share of the wall that got them; GET /mesh/view?metric=layers colours "
                           "that mesh by layer.",
      {"type": "object", "properties": {"preset": STR, "size_max_mm": NUM, "size_min_mm": NUM, "method": STR,
-                                       "edge_refinement": {"description": "true | false | factor 2-20"},
+                                       "edge_refinement": {"description": "true | false | factor 2-20 | {factor, max_cells, max_angle}"},
                                        "layers": {"type": "object"}, "smart": {"type": "boolean"},
                                        "refinements": {"type": "array", "items": {"type": "object"}}}},
      set_mesh),

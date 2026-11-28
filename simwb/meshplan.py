@@ -506,15 +506,15 @@ def solve_mb(cells: float) -> float:
 def edge_extra_cells(pr, sz: dict, ms: dict, rc: dict | None) -> dict:
     """The extra cells of the sharp-edge refinement: {cells, low, high, source, note}. THE PLUG for the edge term.
 
-    Finding the edges needs the CAD kernel, so the plan that knows them (gmsh_worker.edge_refine_plan, and simwb/edgepreview.py that runs the search in the
-    mesher's worker) is not on this branch. Without it the refinement is bounded by its cap: the term is 0 to the cap (150,000 cells unless set), taken as half of
-    it, and the note says so. When feature/edge-layer-controls is merged this function takes the estimate of that plan: see docs/TECHNICAL_MANUAL.md."""
+    Finding the edges needs the CAD kernel: simwb/edgepreview.py runs the search in the mesher's worker (once per geometry, kept) and
+    gmsh_worker.edge_refine_plan gives the calibrated estimate of the extra cells (EDGE_ESTIMATE_SPREAD is its spread). That is the first choice below. When the
+    search is not possible or failed, the refinement is bounded by its cap: the term is 0 to the cap (150,000 cells unless set), taken as half of it, and the note says so."""
     er = ms.get("edge_refine") or ({"factor": rc["edge_refinement"]} if rc and rc.get("edge_refinement") and not ms.get("no_edge_refine") else None)
     if not er:
         return {"cells": 0.0, "low": 0.0, "high": 0.0, "source": None, "note": None}
     try:                                                    # (after the merge of the edge controls: the calibrated plan, when the search of the edges is done)
         from . import edgepreview                           # noqa: F401  (absent on this branch)
-        pv = edgepreview.preview(pr, scan=False)
+        pv = edgepreview.preview(pr, scan=True, wait=True)
         plan = pv.get("plan") if pv else None
         if plan and plan.get("applied"):
             from . import gmsh_worker

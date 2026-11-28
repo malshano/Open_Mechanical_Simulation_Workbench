@@ -327,7 +327,7 @@ The panel is split into four tabs; the 3D view is the same in all of them.
 | Tab | What it holds |
 |---|---|
 | **Summary** | The numbers of the study as tiles with a verdict (green / amber / red edge: safety factor, margin to an allowed temperature, a mode in the excitation range, heat balance) and a **show on model** link under the key values. Bars compare the parts (stress as a share of the yield strength, temperatures on one scale, forces and moments from a zero line); a stacked bar shows where the heat goes; the vibration study draws its natural frequencies as stems (height = share of the mass moving in the main direction, colour = direction, red band = excitation range, click a stem to show the mode); a flow study draws the solver residuals. Type an **Allowed temperature** to see the margin of every part (kept per study). Warnings are listed under the numbers. |
-| **Display** | **Field**, **Colours** (colour map: turbo, viridis, plasma, inferno, cool-warm, rainbow, grayscale; reverse; flat colour bands; the range), the **distribution** of the field over the drawn surface (drag over it to set the colour range, double-click for automatic), **Model** (opacity, min / max labels, mirrored half), **Deformation** and the contour planes, vortex surfaces, volume, arrows and particles of a flow. |
+| **Display** | **Field**, **Colours** (colour map: turbo, viridis, plasma, inferno, cool-warm, rainbow, grayscale; reverse; flat colour bands; the range), the **distribution** of the field over the drawn surface (drag over it to set the colour range, double-click for automatic), **Model** (opacity, min / max labels, the whole model from a symmetry plane), **Deformation** and the contour planes, vortex surfaces, volume, arrows and particles of a flow. |
 | **Probe** | A **line plot**: the field along a straight line between two points you click on the model (or from the lowest to the highest value); move over the plot to see the point on the model; **Copy data** puts the table on the clipboard. The values pinned with **Probe** are listed here. |
 | **Checks** | The mesh-sensitivity check, the flow-model comparison, the comparison with the previous run and the model assumptions. |
 
@@ -821,12 +821,27 @@ layers** - and **Generate mesh**.
   To size only some faces of a part, press **Pick faces in the 3D view** and click the faces one by one (a second click takes a face out again; the air volume cannot be picked),
   then press **＋ Size the selected faces**. The picking stays on: pick the next group and add it, as many sizings as you need, each with its own size. The list names each
   one by its part and faces; **◎** shows its faces in the 3D view and **✕** removes it. The same faces cannot have two sizings.
+- **Edge refinement** (flow studies, tetrahedral mesh; Expert mode): finer cells along the sharp edges that cross the flow - the leading and trailing edge of a wing, the corner of a box -
+  where the flow changes fastest. Edges along the flow are left alone. The cells at the edge are the wall cells divided by the number in **edge cell size = wall cell size /** (2 to 20, default 6) and grow
+  back to the wall size away from the edge. **Refine sharp edges** switches it on; **refine edges sharper than** is the angle between the two surfaces at the edge (180° smooth, 90° the corner of a box,
+  a few degrees a knife edge; edges below the angle are refined, default 140°); **most extra cells (cap)** limits the cost: the edge cells are made coarser until the estimate fits under it (default 150,000), so the option is kept within the cap (to the accuracy of the estimate, see below). Open the group and the program looks for the sharp edges in the geometry (a second or two, once per geometry); a line under the fields then says, live, about how many extra cells
+  the settings add, how many sharp edges and how long they are, and the edge and wall cell sizes in mm - also while the option is off ("Off. Switched on it would: ..."). **Show the sharp edges in the 3D view** draws the edges that will be refined in orange.
+  The estimate is rough. With Smart sizing on, a cap of 20,000 or more, the quick preset and no wall layers it was within 19 % of the cells the option really adds (the mesh with it minus the same mesh without it, five example geometries, 19 meshes), so the line says "typically within 25 % with Smart sizing";
+  with a smaller cap the mesh usually comes out 1.1 to 1.7 times larger than estimated; with Smart sizing off the numbers are for the edge zone and the whole mesh grows by 0.04 to 0.7 times the estimate (the group says so at the top of the estimate, and a button turns Smart sizing on). Other presets and meshes with layers were not measured. The estimate line's tip repeats this. The cap limits the estimate, so a mesh can come out a few percent over it; the
+  line says what the cap did ("edge cells 3.2x finer than the wall cells instead of 12x"). After meshing the group says what the mesher did ("Last mesh: 1 sharp edge refined, edge cells 4.17 mm = wall cells (25 mm) / 6"), then counts, in the mesh itself, how many extra cells the edges cost - in the warning colour when that is over the cap -
+  and what the mesher had estimated. When nothing was refined it says why (no sharp edge across the flow, the cap too low, a smallest cell size set by hand). The size of the cells is no longer taken over from the edges onto the whole faces next to them (fine cells then covered whole faces), so with Smart sizing off the whole mesh can be smaller than
+  without edge refinement (the old sizing spreads the sizes of curved edges); the estimate and the cap are for the edge zone.
+  **Smart sizing** switches the refinement on by itself at 4×; the box shows it as on, and switching it off there keeps it off. With a **smallest cell** set in Advanced sizes and Smart sizing off the mesher keeps to the size you set and does not refine edges (the group says so).
+  In other kinds of study and for the hex-dominant mesh the group is there but greyed, with the reason.
 - **Wall layers** (flow studies; the block is open): the number of layers, the growth ratio, the first layer (0 = automatic) and the
   **target y+** of the first cell, **measured at its centre** as OpenFOAM does (0 = automatic: about 30 for the wall-function models, which want 30 or more; 5 to 30 is the buffer
   layer where they are least accurate; a target near 1 resolves the wall itself and needs many more layers). Beta 3 and earlier sized the first layer so that the target was
   reached at its outer face, so the cells came out at half the y+ (a mean of 15.8 on a wing run set up for 30). A line under the fields says what they come to - the first and the total thickness, the y+ it aims at and how many
   layers lie inside the boundary layer - and **Show the layers in the 3D view** draws a translucent shell round the object as thick as
   all the layers together (an approximation at sharp corners; it is the preview before the mesh exists).
+  - **Tolerant layers**: where the cells are small and the wall is sharp (a leading edge), the layer step removes layers that would be badly shaped. With **Tolerant layers** on its limits are looser, so more of
+    the layers stay there; they can be less smooth, so look at the mesh quality. Off is the default. After meshing, a line says how many layers were made, on what share of the wall faces, and with which limits; if you
+    change the switch afterwards it says the layers are out of date (**Make the layers again**). Not for the hex-dominant mesh, which makes its layers together with the mesh.
   - **The layers are made with the mesh.** When you press **Generate mesh** in a flow study (tetrahedral mesh, OpenFOAM installed), the
     program adds the layers with OpenFOAM's snappyHexMesh in its layer-only mode - the same step the run would do - so **the mesh you see,
     count and check is the mesh the solver runs**. Without OpenFOAM, or when the setup is not complete, the card says why and the run adds
@@ -1143,9 +1158,20 @@ the plane is moved, flipped or removed in the Symmetry planes card.
 Up to **three planes that are perpendicular to each other** (half, quarter, eighth). Two planes at another angle, or
 parallel planes, are refused: the mirror images would not tile the model.
 
-**In the Results step**, **Show mirrored half** (Display) draws the mirror image(s) of the model and of whatever result
-is shown: the surface colours, sections, vortex surfaces, volume cloud, arrows, particles. Untick it to see only the
-solved part. **Fit** includes the mirrored part. The images are redrawn from the planes: nothing is stored twice.
+**In the Results step**, **Show the whole model (mirror the symmetry plane)** (Display tab, above "Show in the view") draws
+the mirror image(s) of the model and of whatever result is shown: the surface colours, sections (and the section view of
+a flow), contour planes, vortex surfaces, volume cloud, arrows, particles, the air box, and the outlines of moving zones
+and refinement regions. It is on by default and enabled only when the study has a symmetry plane; untick it to see only the
+solved part. The copy is marked: **mirrored copy** in the colour legend, a faint outline of each plane in the view and a line
+in the status bar. Values on the copy are the solved ones (scalars as they are, vectors reflected). A **sliding-mesh** propeller
+turns on the copy the other way about the mirrored axis, because each saved time is mirrored on its own; the time bar, Play, the
+picture and the MP4 show what the view shows. A zone centred on the plane is drawn once, one off the plane twice.
+**Probes and line plots read the solved part**: a point you click on the copy shows the solved value and is marked "mirrored side"
+(a line picked there is drawn on the solved part). The numbers in the Summary are the study's: a flow's forces are already the
+whole body's, other studies' numbers are for the solved part. With several planes (quarter, eighth) the images of all planes are drawn.
+The switch is a viewing choice of the session, not saved with the study. A contour plane across the symmetry normal is drawn on
+the solved side and at the mirrored position on the other (two planes); across any other axis it is one cut through the whole
+model. The volume cloud is mirrored for planes normal to x, y or z only. **Fit** includes the mirrored part.
 
 **What changes in the numbers** (the summary says so):
 

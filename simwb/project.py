@@ -3005,13 +3005,16 @@ class Project:
             if lst and m["layers"] != old_layers:
                 lst["stale"] = True            # (the layered mesh in the view was made with the old settings: "Make the layers" again)
         if edge_refinement is not None:  # fine cells along sharp edges (leading / trailing edges): off | True | factor
-            if edge_refinement in (False, 0, "off"):
+            # (also a dictionary {factor, max_cells, max_angle}, or {enabled: false}; with smart sizing on, 'off' is remembered: smart sizing refines the
+            # edges by itself otherwise - see edgepreview.settings)
+            if edge_refinement in (False, 0, "off") or (isinstance(edge_refinement, dict) and edge_refinement.get("enabled") is False):
                 m.pop("edge_refine", None)
+                m["no_edge_refine"] = True                         # (stays off until switched on: smart sizing, now or later, does not turn it on)
             else:
-                f = 6.0 if edge_refinement is True else studies.finite(edge_refinement, "Edge refinement factor")
-                if not 2.0 <= f <= 20.0:
-                    raise ValueError("Edge refinement factor must be 2..20 (cells at the edge are the wall size / factor)")
-                m["edge_refine"] = {"factor": f}
+                from . import edgepreview
+
+                m["edge_refine"] = edgepreview.check_options(edge_refinement, base=m.get("edge_refine"))
+                m.pop("no_edge_refine", None)
         if budget is not None:  # the memory budget: off | {"mb": 4000} | {"percent": 50} | a number (MB); {"on": false} switches it off and keeps the value (see meshplan.py)
             m["budget"] = self._check_budget(budget, m.get("budget"))
         if defeature_mm is not False:  # small-face groups merged into the face they sit on: None / 0 = off

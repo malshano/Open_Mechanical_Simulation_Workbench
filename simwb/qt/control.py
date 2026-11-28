@@ -508,7 +508,7 @@ class Control(QObject):
             "docks": {d.objectName().removeprefix("dock."): d.isVisible() for d in win.findChildren(QDockWidget)},
             "jobs_running": jobs,
             "shell": {"toasts": win.toasts.listing(), "section": win.shell.section_state(), "hover": win.shell.hover_text,
-                      "hint": win.view.banner.text(), "visibility": win.panels["results"].vis.state(), "recording": (win.panels["results"].recording.state() if win.panels["results"].recording else None),
+                      "hint": win.view.banner.text(), "visibility": win.panels["results"].vis.state(), "mirror": win.engine.mirror_info() if win.engine.pid else None, "recording": (win.panels["results"].recording.state() if win.panels["results"].recording else None),
                       "status_job": win.shell.job_msg.full if win.shell.current else "",
                       "probe": {"checked": win.view.viewbar.probe.isChecked(), "enabled": win.view.viewbar.probe.isEnabled()}},
             "assistant": {"busy": a.busy, "login": a.who.text(), "status": a.status.text(),
@@ -641,6 +641,13 @@ class Control(QObject):
         R("mesh.budget", "The memory budget of the mesh, through its controls: mode off | mb | percent and the value (MB, or percent of the free memory). With a budget on, "
                          "the bulk of the mesh is coarsened to fit it, or the mesh is refused with a message.",
           {"mode": (S, "off|mb|percent", True), "value": (N, "MB, or percent of the free memory", False)}, mesh_budget)
+        def mesh_edges():
+            from .. import edgepreview
+            pv = edgepreview.preview(self.engine.project(), scan=True, wait=True)
+            return {k: v for k, v in pv.items() if k != "lines"} | {"edges_drawn": win.view.sharp_view.count}
+        R("mesh.edges", "The sharp-edge refinement of the open flow study: whether it is on (and whether smart sizing switched it on), its factor, angle and cap, the sharp edges "
+          "found, the wall and edge cell sizes, the estimate of the extra cells, and (after meshing) what the mesh holds at the edges. The controls are mesh.edges.on, "
+          "mesh.edges.factor, mesh.edges.angle, mesh.edges.cap and mesh.edges.show; the tolerant layer limits are mesh.layers.tolerant.", {}, mesh_edges)
         R("mesh.recipe", "Apply the recommended setup of the mesh advisor: smart sizing and the wall layers that fit; then generate the mesh.", {},
           lambda: (self._click("mesh.advisor.apply"), {"applied": True})[1])
         R("mesh.layers", "Make the wall layers again on the mesh that is there (flow study, tetrahedral mesh, OpenFOAM installed); a job (use wait).", {},
@@ -673,6 +680,7 @@ class Control(QObject):
            "contour_labels": (B, "write the value on each contour line", False),
            "opacity": (N, "0.1..1: see-through surfaces (1 = solid)", False), "outline": (B, "outline of the undeformed part", False),
            "hide_air": (B, "cooling studies: hide the air box", False),
+           "mirror": (B, "studies with a symmetry plane: draw the whole model (the solved part mirrored); false: the solved part only", False),
            "time": (N, "index of the saved time to show (transient results; -1 = the last)", False)},
           lambda **kw: self._results(**kw))
 
@@ -1083,7 +1091,7 @@ class Control(QObject):
 
     def _results(self, field=None, colormap=None, reverse=None, bands=None, deform=None, edges=None, animate=None, scale=None, range=None,
                  minmax=None, section=None, section_pos=None, contours=None, contour_lines=None, contour_levels=None, contour_labels=None,
-                 opacity=None, outline=None, hide_air=None, time=None):
+                 opacity=None, outline=None, hide_air=None, mirror=None, time=None):
         panel = self.win.panels["results"]
         if time is not None:
             panel.timebar.set_index(int(time))
@@ -1095,6 +1103,10 @@ class Control(QObject):
             if not panel.hide_air.isVisibleTo(panel):
                 raise ValueError("Hide the air is for cooling studies (they have an air box)")
             self._set(self._w("results.hide_air"), "results.hide_air", bool(hide_air))
+        if mirror is not None:
+            if not panel.mirror.isEnabled():
+                raise ValueError("This study has no symmetry plane: the whole model was solved")
+            self._set(self._w("results.mirror"), "results.mirror", bool(mirror))
         if section_pos is not None:
             self._set(self._w("results.section.pos"), "results.section.pos", int(round(float(section_pos) * 1000)))
         if section is not None:
@@ -1126,7 +1138,7 @@ class Control(QObject):
             else:
                 self._set(self._w("results.range.auto"), "results.range.auto", True)
         out = {k: self._value(self._w(f"results.{k}")) for k in ("field", "colormap", "reverse", "bands", "deform", "edges", "minmax")}
-        out.update(opacity=panel.opacity.value() / 100.0, outline=panel.outline.isChecked(), time_index=panel.timebar.time_index(),
+        out.update(mirror=self.engine.mirror_info() if self.engine.pid else None, opacity=panel.opacity.value() / 100.0, outline=panel.outline.isChecked(), time_index=panel.timebar.time_index(),
                    times=len(panel.timebar.times), hidden=panel.hidden_regions())
         return out
 

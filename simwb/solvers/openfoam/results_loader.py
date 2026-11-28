@@ -311,7 +311,7 @@ def _cht_whole_device(summary: dict, planes: list):
             summary[key] = summary[key] * k
     if isinstance(summary.get("thermal_resistance_K_per_W"), (int, float)):
         summary["thermal_resistance_K_per_W"] = summary["thermal_resistance_K_per_W"] / k
-    summary["symmetry"] = {"planes": len(planes), "copies": k,
+    summary["symmetry"] = {"planes": len(planes), "copies": k, "definition": [dict(p) for p in planes],
                            "note": f"Heat flows, the air flow rate and the thermal resistance are those of the whole "
                                    f"device ({k} copies of the solved part); temperatures and speeds are local values. "
                                    "The heat of a part listed under Parts is that of its kept part."}
@@ -942,7 +942,7 @@ def whole_body(planes: list, F, meta: dict, V: float, up) -> tuple:
             F["history"] = (T_h, sym.expand_force(planes, Ft_h), sym.expand_force(planes, Fp_h),
                             sym.expand_force(planes, Fv_h),
                             None if M_h is None else sym.expand_force_moment(planes, Ft_h, M_h, cofr)[1])
-    note = {"planes": len(planes), "copies": sym.mass_factor(planes),
+    note = {"planes": len(planes), "copies": sym.mass_factor(planes), "definition": [dict(p) for p in planes],     # (the planes the run used: the Results step mirrors across these)
             "note": "Forces, moments, rotor thrust and the reference area are those of the whole body: the solved "
                     f"part and its {sym.mass_factor(planes) - 1} mirror image(s)."}
     return F, meta, note

@@ -290,6 +290,14 @@ An optional mesher for `external_aero` (`mesh.method == "hex"`, set with `set_me
 - **Worker** (`ms["recipe"]` present): `h_wall = recipe.h_surf`, `h_body = recipe.h_near`, growth from the recipe, the old automatic box (0.5 L round the object, 1.5 x the body size, growing over L) is replaced by the two
   boxes with `Thickness = (size_far - size) / (growth - 1)` (size = inside + (growth - 1) x distance), user regions grow the same way (the old `Thickness = 8 x size` stepped to the far-field size over 8 cells),
   `Mesh.MeshSizeExtendFromBoundary = 0` (spreading the sizes of the boundary curves put the fine cells of the sharp-edge field over the whole surface), and the sharp-edge refinement runs even with a recipe.
+- **Edge refinement settings and preview** (`simwb/edgepreview.py`, `gmsh_worker.edge_refine_plan`). `mesh.edge_refine = {factor 2..20, max_cells 1e3..5e6 (default 150000), max_angle 20..175 (default 140)}`, set with
+  `set_mesh(edge_refinement=True | factor | {factor, max_cells, max_angle, enabled})` (a bare factor keeps the cap and the angle; `false` removes it and, with smart sizing on, sets `mesh.no_edge_refine` so that the recipe's factor 4 is not applied;
+  tool `set_mesh_settings`, REST `/mesh/settings`). `edge_refine_plan(edges, h_wall, L, growth, factor, cap, max_angle)` is the one decision (which edges, the edge cell size, coarsened in steps of 8 % until the estimate fits the cap) used by the mesher and by the preview. The estimate is `gmsh_worker.edge_cells_union(polylines, face_angles, h_edge, h_wall, growth)`: the cells of the size field `h_edge + (growth - 1) d` over the union of the edge tubes (Monte Carlo, seed 7, about 1 % noise, edges weighted by the air share (360 - angle) / 360) less those of the wall size, times `EDGE_CELLS_CALIBRATION` (0.52); documented uncertainty `EDGE_ESTIMATE_SPREAD` = 25 % (measured 0.84 to 1.19 of the real extra cells on 19 meshes with Smart sizing and caps of 20,000 and up; 1.07 to 1.70 below that; not valid for the whole-mesh total with Smart sizing off; see MESHING_GUIDE). `edgepreview.preview` makes the plan once per setting on a thread (`_edge_plan`, `estimating` in its answer) because a binding cap evaluates the estimate a dozen times (1 to 5 s). With the edge field the mesher sets `Mesh.MeshSizeMin` to half the edge size and `Mesh.MeshSizeExtendFromBoundary = 0`. `mesh.no_edge_refine` is set whenever the option is switched off (smart sizing never turns it on again); a partial dictionary keeps the stored values it does not name.
+  The preview finds the edges in the worker program (`gmsh_worker edges`, no meshing; one subprocess per geometry on a thread, kept on the project, the change event tells the window; each search has a job file of its own and a new geometry or the end of the program stops it), takes the wall size from `gmsh_worker.aero_wall_size` (the mesher's own)
+  and `meshadvisor.recipe` with smart sizing, and returns the plan, the polylines for the 3D view and, after meshing, `measure()`: the tetrahedra whose centre lies within `dist_max` of the refined edges, counted in `mesh.npz` (the volume per wall-size cell is the mean of the mesh's own cells in a shell from 1 to 1.5 reaches of the edges).
+  `stats.edge_refine` (edges, size, factor, factor_used, estimated_extra_cells, cap_cells, angle_limit, capped, dist_max ...) is what the mesher did (the extra cells are the estimate, not a count); `stats.edge_refine_skipped` is the reason when it was
+  asked for and nothing was refined (`size_min`, `no_edges`, `finer_than_floor`, `cap_too_low`). Not used when `size_min` is set without smart sizing (the old rule, now reported). Qt: `qt/panels/mesh_edges.py`, `qt/edgeview.py`; action `mesh.edges`.
+- **Tolerant layers**: `mesh.layers.tolerant` selects `cases.LAYER_TOLERANT` instead of `LAYER_STRICT` (the snappyHexMesh layer limits) in the tetrahedral mesh's layer step; the hex-dominant mesh does not use it.
 - **Scorecard** (`measure`, `scorecard`): the mesh is measured in zones that do not depend on the sizing (the wall; thin faces; within 0.3 lengths of the body; 0.2 to 2 lengths behind it over the body's width + 0.2 lengths;
   neighbour size ratio) and every check has an `ok | warn | bad | info` band; the score is the share of passing checks, warnings counting half. `Project._score_mesh` stores it in `stats.advice` at the end of the mesh job
   and when the layers are made again (never fails a job).
@@ -788,6 +796,23 @@ automatically (Three.js flips the winding of a mirrored object itself). `bounds(
 `setSymmetryEditor(items, onChange)` draws each plane (sheet, outline, arrow to the kept side, drag handle; a draft
 also tints the removed side); `_bindSymDrag` slides a handle along the plane normal (`onChange(id, point, final)`).
 `app.js`: `symmetryHtml`, `bindSymmetry`, `symApply`, `symItems`, `symDragged`, `S.symDraft`, `S.symPick`, `S.mirror`.
+
+**Qt Results step: the whole model (`simwb/mirrorview.py`, `simwb/qt/mirrormarks.py`).** Only what is drawn is mirrored, as numpy
+copies of the payloads the engine already makes; the volume mesh is never copied. `images(planes)` gives the reflections in every
+non-empty subset of the (perpendicular) planes, composed in order (mirror about the first plane, then the result about the second);
+a reflection has det -1 and turns the triangle winding, a product of two has det +1 and keeps it, so the normals of an image point
+outward. `whole_surface` (solved part first, then each image; `payload["mirror"]` = solved triangle count and the transforms, for
+probes), `mirror_vectors` (positions and vectors, v - 2 (v.n) n), `mirror_paths`, `mirror_volumes` (grid flipped and moved, axis planes
+only), `mirror_box` (camera box), `mirror_regions` (zone / region outlines; an image equal to an existing one is dropped), `mirror_faces`
+(air box; faces lying in a plane, key `symmetry`, are the cut and are left out). Scalars and vector magnitudes are copied; the
+deformation vectors of a structural result are reflected. `Engine.mirror_view` (default True, a session choice) and
+`Engine.mirror_planes()` (the planes the run recorded in `summary["symmetry"]["definition"]`, else the study's) decide; `result_surface`,
+`flow_object` and `flow_layers` apply it after the cached payloads (the cache holds the solved part), the window mirrors the vortex
+surface after smoothing and merging with the object (smoothing must not cross the plane). Cut after mirroring is not needed: a
+section / contour plane is cut on the half and its cut is mirrored (a plane across the plane's normal therefore appears at +d and -d).
+A transient result is mirrored frame by frame, so a sliding zone turns the other way on the copy. `mirrormarks.mark` adds the legend entry
+and the plane outlines. Not mirrored: probes and plots (solved part), the force numbers; the volume cloud across a slanted plane; no
+rotor (actuator disc) overlay exists in the Results step. Control: widget `results.mirror`, `results.show {mirror}`, `state.shell.mirror`.
 
 **Tests** (`tests/test_symmetry.py`): the force / moment expansion against explicit mirrored bodies for 1, 2 and 3
 planes; geometry cuts through the project (flip, move, quarter, delete, failed cut, a plane from a face, BC and body

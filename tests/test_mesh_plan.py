@@ -198,18 +198,31 @@ def test_without_geometry_the_estimate_says_so(workspace):
 
 
 # ---------------------------------------------------------------------------------------------------------------------------------- the edge plug
+def test_the_edge_term_takes_the_real_edge_plan_of_a_box(workspace, tmp_path):
+    """The calibrated plan of the edge controls (edgepreview + gmsh_worker.edge_refine_plan), through the plug: a box has sharp edges across the flow."""
+    pr = _box_project(workspace, tmp_path)
+    pr.set_mesh(preset="quick", edge_refinement=6)
+    e = pr.mesh_estimate()["estimate"]
+    from simwb import edgepreview
+    plan = edgepreview.preview(pr, scan=True, wait=True)["plan"]
+    assert plan and plan["applied"] and e["edge_cells"] == round(plan["estimated_extra_cells"])
+
+
 def test_the_edge_term_is_bounded_by_its_cap_until_the_edge_plan_is_there(workspace, tmp_path, monkeypatch):
     pr = _box_project(workspace, tmp_path)
     pr.set_mesh(preset="quick")
     off = pr.mesh_estimate()["estimate"]
     assert off["edge_cells"] == 0
+    nope = types.ModuleType("simwb.edgepreview")                                      # (no edge search: the cap bounds the term)
+    nope.preview = lambda pr, scan=False, wait=False: {"plan": None}
+    monkeypatch.setitem(sys.modules, "simwb.edgepreview", nope)
     pr.set_mesh(edge_refinement=6)
     on = pr.mesh_estimate()
     assert on["estimate"]["edge_cells"] == 75_000 and "up to 150,000" in " ".join(on["notes"])
     assert on["estimate"]["cells_high"] - off["cells_high"] >= 150_000 - 1
     # (the plug: the calibrated plan of the edge controls, when its module exists)
     fake = types.ModuleType("simwb.edgepreview")
-    fake.preview = lambda pr, scan=False: {"plan": {"applied": True, "estimated_extra_cells": 40_000.0}}
+    fake.preview = lambda pr, scan=False, wait=False: {"plan": {"applied": True, "estimated_extra_cells": 40_000.0}}
     monkeypatch.setitem(sys.modules, "simwb.edgepreview", fake)
     monkeypatch.setattr("simwb.gmsh_worker.EDGE_ESTIMATE_SPREAD", 0.25, raising=False)
     plug = pr.mesh_estimate()["estimate"]

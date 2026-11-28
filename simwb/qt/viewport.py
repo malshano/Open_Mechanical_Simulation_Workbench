@@ -34,6 +34,7 @@ from .handles import HandleSet
 from .planehandle import PlaneHandle
 from .layerview import LayerView
 from .regionview import RegionView
+from .edgeview import EdgeView
 from .zoneview import ZoneView
 from .gizmo import RotateGizmo
 from .legend import Legend
@@ -128,6 +129,7 @@ class Viewport(QWidget):
         cam.SetViewUp(0, 0, 1)
         self.geo_actors: list = []
         self.air_actors: list = []          # the air box of a flow study: translucent, shown or hidden on request
+        self.air_mirror_key = None          # (set by the Results step when the air box drawn is the whole one, mirrored across the symmetry planes)
         self.air_over_results = False       # (the Results step draws the air box over the result too when it is switched on)
         self.air_on = False
         self.choose_air = False             # a real click on the air volume where its walls overlap asks which wall (set while a plane is picked)
@@ -143,6 +145,7 @@ class Viewport(QWidget):
         self.mark_actors: list = []         # selection, hover and tint highlights
         self.layer_view = LayerView(self)           # the wall layers as a shell round the object (layerview.py)
         self.region_view = RegionView(self)         # the refinement regions of the Mesh step (regionview.py)
+        self.sharp_view = EdgeView(self)            # the sharp edges the edge refinement will make finer (edgeview.py)
         self.zone_view = ZoneView(self)             # the rotating zones of the Setup and Mesh steps (zoneview.py)
         self.plane_handle = PlaneHandle(self)      # the preview of a symmetry plane and its handle (planehandle.py)
         self.handles = HandleSet(self)          # the drag handles of the 3D view: the Results step's positioning controls, the refinement regions, the rotating zones (handles.py)
@@ -360,6 +363,23 @@ class Viewport(QWidget):
         w1, w2 = (d11 * d20 - d01 * d21) / den, (d00 * d21 - d01 * d20) / den
         w = np.array([1 - w1 - w2, w1, w2])
         return [float(x) for x in w @ o["base"][tri]]
+
+    def mirror_side(self, cell: int) -> int:
+        """0 when triangle `cell` of the drawn result belongs to the solved part, k when it is the k-th mirror image of it (the whole-model view)."""
+        m = (getattr(self, "_ov", None) or {}).get("mirror")
+        if not m or cell < 0:
+            return 0
+        from .. import mirrorview
+        return mirrorview.side_of_triangle(m, cell)
+
+    def solved_point(self, cell: int, point) -> list:
+        """The point of the solved part that a point of the drawn result is (on a mirror image: the point it is the copy of)."""
+        m = (getattr(self, "_ov", None) or {}).get("mirror")
+        side = self.mirror_side(cell)
+        if not m or not side:
+            return [float(c) for c in point]
+        from .. import mirrorview
+        return mirrorview.to_solved(point, m, side)
 
     def surface_point_under(self, x: float, y: float):
         """(cell, point) of the drawn result under the pixel (x, y) (device pixels, origin top-left, as the handles count), or None."""
@@ -791,6 +811,7 @@ class Viewport(QWidget):
         translucent surface with its edges, visible only when air_visible (see set_air_visible)."""
         self._clear(self.geo_actors)
         self._clear(self.air_actors)
+        self.air_mirror_key = None         # (the Results step says when the air box it draws is the whole one)
         self.air_on = bool(air_visible)
         air = [f for f in faces if f.get("kind") in air_kinds]
         faces = [f for f in faces if f.get("kind") not in air_kinds]
@@ -1079,13 +1100,15 @@ class Viewport(QWidget):
             lut.SetNanColor(0.6, 0.6, 0.6, 1.0)
             lut.Build()
         self._overlay_index = locator_for(pd)
-        self._ov = {"pos": pos, "base": base, "idx": idx, "val": val, "per": p.get("per"), "unit": unit, "name": name}
+        self._ov = {"pos": pos, "base": base, "idx": idx, "val": val, "per": p.get("per"), "unit": unit, "name": name, "mirror": p.get("mirror")}
         self.overlay_info = {"kind": "categories" if cats else "scalar", "name": name, "unit": unit, "range": [float(lo), float(hi)],
                              "triangles": int(len(idx)), "per": p.get("per"), "scale": p.get("scale") or "linear",
                              "colormap": None if cats else ("quality (fixed)" if fixed_quality else cmap), "reverse": bool(reverse),
                              "bands": int(bands), "edges": bool(edges), "deform": info.get("deform"),
                              "animated": bool(self._anim), "nan_values": int(np.isnan(val).sum()),
                              "categories": [c["name"] for c in (cats or [])]}
+        if p.get("mirror"):        # (the whole model drawn from the solved part: how much of the drawing is the solved part, how much its copies)
+            self.overlay_info["mirror"] = {"solved_triangles": p["mirror"]["solved_tris"], "copies": p["mirror"]["copies"]}
         if p.get("per") == "face":
             pd.GetCellData().SetScalars(arr)
         else:
