@@ -11,7 +11,7 @@ The web version (`python -m simwb.server`) stays, for remote machines and for Cl
 | Window, docks, menus, step bar | `simwb/qt/main_window.py` | dark theme from one set of design tokens (`theme.py`) |
 | 3D view | `simwb/qt/viewport.py` | VTK: colour maps, deformation, mode shapes, cuts, depth-peeled transparency (contours/glass are drawn in the right order from every side) |
 | Colour legend | `simwb/qt/legend.py` | round ticks, log scale, category swatches |
-| Step panels | `simwb/qt/panels.py` | Geometry, Setup (materials), Mesh (colour by quality / cell size / region, cut), Solve, Results (summary tiles, field, colour map, bands, deformation) |
+| Step panels | `simwb/qt/panels.py` | Geometry, Setup (materials), Mesh (colour by quality / cell size / aspect ratio / size jump / volume / region, the legend, a histogram of the metric, the cell budget, cut; the same for a hex-dominant mesh), Solve, Results (summary tiles, field, colour map, bands, deformation) |
 | Recording notice, Stop, pause when minimised | `simwb/qt/recording.py` | the MP4 button's `Recording`; `exports.record(gate=...)` asks it before every picture |
 | "Show in the view" list (parts, air box, zone / region outlines of a flow result) | `simwb/qt/visibility.py` | one list for the Results step; the window draws what `selection()` says (`main_window.update_view`) |
 | Vortex-surface smoothing | `simwb/surfsmooth.py` | windowed-sinc display filter on the iso payload (does not shrink); the view shades it smooth (`show_surface(smooth_shading=)`) |
