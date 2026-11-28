@@ -749,6 +749,7 @@ class MainWindow(QMainWindow):
                     if flow and r.get("flow") and (any(r["flow"][k]["on"] for k in ("iso", "volume", "vectors", "streams")) or r["flow"].get("planes")):
                         self.view.show_geometry(False)    # (the CAD model must not stay drawn beside the object of the result: a turning propeller showed twice)
                         self._draw_flow_tools(r, info)
+                        self._mark_mirror()
                         return
                     rng = r["range"]
                     if rng is None and st["study"] == "topology_optimization" and r["field"] == "Density":
@@ -761,10 +762,12 @@ class MainWindow(QMainWindow):
                                            contours=r.get("contours"), opacity=r.get("opacity", 1.0), outline=r.get("outline", False))
                     sec = r.get("section")
                     self.view.set_focus(self.engine.flow_focus(sec) if sec and flow else None)
+                    mir = bool(self.engine.mirror_planes())
                     if sec and st["study"] in AIR_KINDS:      # a flow cut open: seen straight on, from the side that is kept
-                        self._fit_once((self.engine.pid, "results", sec[0]), f"+{sec[0]}")
+                        self._fit_once((self.engine.pid, "results", sec[0], mir), f"+{sec[0]}")
                     else:
-                        self._fit_once((self.engine.pid, "results"), "iso" if flow else None)
+                        self._fit_once((self.engine.pid, "results", mir), "iso" if flow else None)
+                    self._mark_mirror()
                     self.panels["results"].draw_marks()
                     return
             self.view.air_over_results = False
@@ -806,10 +809,15 @@ class MainWindow(QMainWindow):
 
     def _air_for_results(self, st):
         """The Air box switch works on the Results step too (it is also a tick box of the list there): make sure the box is built, and show it or not."""
+        from .. import mirrorview
         v = self.view
-        if not v.air_actors and st["geometry"].get("status") == "ready":
+        planes = self.engine.mirror_planes()
+        key = repr(planes) if planes else None            # (the air box is the whole one when the result is drawn whole: its images, without the cut)
+        if (not v.air_actors or v.air_mirror_key != key) and st["geometry"].get("status") == "ready":
             on = self._air_pref.get(self.engine.pid, False)
-            v.set_geometry(self.engine.project().faces(), AIR_KINDS.get(st["study"], ()), on)
+            faces = self.engine.project().faces()
+            v.set_geometry(mirrorview.mirror_faces(faces, planes) if planes else faces, AIR_KINDS.get(st["study"], ()), on)
+            v.air_mirror_key = key
             v.show_geometry(False)                     # (only the air box is wanted here: the result is the model)
             self._geo_key = None                       # (the other steps build their own drawing again)
             self.chk_air.blockSignals(True)
@@ -836,7 +844,7 @@ class MainWindow(QMainWindow):
             cf = t["iso"]["color"] if t["iso"]["color"] in fields else r["field"]
             f = fields.get(cf, {})
             polished, sm = self.engine.smooth_iso(L["iso"], t["iso"].get("surface_smooth", 0))     # (a display filter: the data is not changed)
-            surf = merge_payloads(polished, self.engine.flow_object(cf, ti, groups=groups))
+            surf = self.engine.mirror_surface(merge_payloads(polished, self.engine.flow_object(cf, ti, groups=groups, mirror=False)))     # (smoothed and merged, then mirrored: the smoothing does not cross the plane)
             rng = (f["p01"], f["p99"]) if f.get("p99", 0) > f.get("p01", 0) else None
             self.view.show_surface(surf, name=f"Vortex surfaces{' (smoothed)' if sm['passes'] else ''}, coloured by {cf}", unit=f.get("unit", ""),
                                    cmap=r["cmap"], reverse=r["reverse"], bands=r["bands"], vrange=rng, smooth_shading=bool(sm["passes"]))
@@ -857,7 +865,10 @@ class MainWindow(QMainWindow):
             f = fields.get(t["volume"]["field"], {})
             win = t["volume"].get("range") or flowdraw.volume_window(L["volume"], t["volume"]["field"], L["free_stream"])
             ft.show_range("volume", *win)
-            flowdraw.add_volume(self.view, L["volume"], tab, win, t["volume"]["density"], t["volume"]["style"])
+            for vol in [L["volume"]] + list(L.get("volume_mirrors") or []):
+                flowdraw.add_volume(self.view, vol, tab, win, t["volume"]["density"], t["volume"]["style"])
+            if L.get("volume_skipped"):
+                self.statusBar().showMessage(f"The cloud is drawn on the solved part and the mirror images across planes normal to an axis; {L['volume_skipped']} image(s) across a slanted plane are not drawn.", 8000)
             if not legend:
                 self.view.legend.set_scalar(t["volume"]["field"], f.get("unit", ""), win[0], win[1], tab, log=bool(L["volume"].get("log")))
                 legend = True
@@ -901,11 +912,21 @@ class MainWindow(QMainWindow):
         if only_planes:                                   # planes alone: looked at straight on, close round the object at the first one
             first = L["planes"][0]
             self.view.set_focus(self.engine.flow_focus_at(first["axis"], first["pos"]))
-            self._fit_once((self.engine.pid, "results", "plane", first["axis"]), f"+{first['axis']}")
+            self._fit_once((self.engine.pid, "results", "plane", first["axis"], bool(self.engine.mirror_planes())), f"+{first['axis']}")
         else:
-            self._fit_once((self.engine.pid, "results", "tools"), "iso")
+            self._fit_once((self.engine.pid, "results", "tools", bool(self.engine.mirror_planes())), "iso")
         self.view.render()
         self.panels["results"].draw_marks()
+
+    def _mark_mirror(self):
+        """After a result is drawn: when it is the whole model made of the solved part and its mirror images, say so in the legend and draw a faint outline of
+        each symmetry plane (the solved part is on one side of it, its copy on the other)."""
+        from . import mirrormarks
+        info = self.engine.mirror_info()
+        planes = self.engine.mirror_planes()
+        mirrormarks.mark(self.view, planes)
+        self.view.overlay_info["mirror_planes"] = info["planes"] if info["on"] else []
+        self.view.render()
 
     # ------------------------------------------------------------------ pictures (for checking the look)
     def screenshot(self, path: str):
