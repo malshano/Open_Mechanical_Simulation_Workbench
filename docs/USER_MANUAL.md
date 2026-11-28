@@ -331,6 +331,13 @@ The panel is split into four tabs; the 3D view is the same in all of them.
 | **Probe** | A **line plot**: the field along a straight line between two points you click on the model (or from the lowest to the highest value); move over the plot to see the point on the model; **Copy data** puts the table on the clipboard. The values pinned with **Probe** are listed here. |
 | **Checks** | The mesh-sensitivity check, the flow-model comparison, the comparison with the previous run and the model assumptions. |
 
+**Wall layers and y+** (Summary tab of a flow study, under the forces and moments). After a solve, one block per wall (OpenFOAM patch): the wall layers the mesh got
+(*2.6 of 3 layers, first 0.4 mm, 1.1 mm in all, 88 % of the planned thickness*, from the layer step of the mesher; shown only when the run used those layers), the y+ of the
+result (mean, 95 % of the wall below, highest) and a bar with the share of the wall area in each band of y+: below 5 (the viscous sub-layer is resolved), 5 to 30 (the buffer
+layer, where wall functions are least accurate), 30 to 300 (what the wall functions expect, green) and above 300. A line at the top says in words whether the wall treatment
+fits (70 % of the wall in 30 to 300 is a pass; a laminar run wants y+ below 5). **Show y+ on the walls** colours the walls in the 3D view by y+. A hex-dominant mesh gives the
+y+ and the share of wall faces that got layers, not the layers per wall.
+
 **Deformation.** A static study draws the part deformed under the load: the real deformation is far too small to see, so it is drawn larger (**Auto**: the largest movement is 8 % of the model size; **True size x1**, or a scale of your own); the note under the controls says by how much. The thin outline is the undeformed part. A mode shape swings at about 8 % of the model size times the amplitude. Every field of a static study (stress, safety factor, ...) is drawn on the deformed shape. The colour map is remembered in the browser.
 
 ### 8.1 Display
@@ -894,9 +901,19 @@ layers** - and **Generate mesh**.
   colour, the others grey; a cut through the zone shows where its boundary, the sliding interface, lies in the mesh). Under the colour buttons, **Show the zone
   boundaries** draws the meshed boundary of each zone as a pink surface (for a sliding-mesh zone the **sliding interface**, where the turning cells meet the fixed ones;
   it should be a clean cylinder) and says how many faces it has and its area, for example *prop: sliding interface, 4,120 faces, 28.3 cm²* or **Wall layers** (flow studies with layers: the mesh the solver runs, each layer in its own colour and the tetrahedra
-  in grey; choosing it opens a cut through the object if none is open). A hex-dominant mesh is shown by quality and region only (the other buttons are greyed and say why). Under the buttons,
+  in grey; choosing it opens a cut through the object if none is open). A hex-dominant mesh has the same buttons (cell size, aspect ratio, size jump and volume are measured on its real cells, read from the OpenFOAM mesh: a cut
+  through it shows them; the aspect ratio is the one checkMesh reports, 1 for a cube, and the size is the edge of the cube of the cell's volume). Under the buttons,
   the **cell budget** shows, for each band of cell sizes, the share of the cells and of the volume, with remarks when a size jump or a
   fine region uses too many cells.
+- **Planned cell sizes** (under *Generate mesh*, tetrahedral meshes; no mesh is needed): **Show the planned cell sizes** draws the cell size the mesher will use, on
+  the model and, with a cut open, through the air round it, on a logarithmic colour bar in mm. It shows the wall size, the thin parts, the near-field and wake boxes,
+  rotors and rotating zones, your part sizing and refinement regions, and the sharp edges, and follows every setting at once (try another resolution or move a
+  region). A line under the switch gives the wall, near-body and far-field sizes and the growth. The sizes the curvature of a face asks for and the narrow-gap
+  boxes are decided by the mesher and are not in it: the real cells come out finer there and, on average, about a quarter larger than the target elsewhere.
+- **The histogram of the metric** (under the cut controls, for Cell size, Aspect ratio, Size jump and Cell volume; quality keeps its own histogram): how many
+  cells fall in each band, with the colours of the legend under the 3D view. A dashed line marks the value the remarks warn about (a size jump of 2, an aspect ratio of 20).
+  **Click a bar** (or a band of the **cell budget**) to show only those cells on the model, as the outside of that set of cells; a line says how many there are, and
+  **Show all cells** (or a second click on the same bar) shows the whole mesh again. Choosing another colour, **Show cells below** or a new mesh also ends it.
 - Under the quality check (**Show cells below**, **Zoom to worst**) the verdict lists, in words, what the checks cover: poorly
   shaped cells, how many cells lie across the thinnest part and the narrowest air gap, the estimated wall y+ of a flow (from the first
   layer when there are layers, else from the surface cells), and a coarse CFD mesh. **Next: solve →** goes on.

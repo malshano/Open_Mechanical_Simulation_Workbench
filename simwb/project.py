@@ -3813,36 +3813,69 @@ class Project:
             m["hex_dir"] = str(self.mesh_dir / "polyMesh_hex")
         return m
 
+    def hex_cell_data(self) -> dict:
+        """The hex-dominant mesh by its real cells: {metrics: {size, aspect, growth, volume, quality} per cell, tet_cell: the cell of each display tetrahedron}.
+        Read from the OpenFOAM mesh kept with it (polyMesh_hex) once and kept until the mesh file changes: the display tetrahedra split every cell, so a metric
+        of the tetrahedra would not be the cell's."""
+        from . import meshviz
+        from .solvers.openfoam.foamio import read_polymesh
+        from .solvers.openfoam.results_loader import display_mesh
+
+        p = self.mesh_dir / "mesh.npz"
+        stt = p.stat()
+        key = (stt.st_mtime_ns, stt.st_size)
+        hit = getattr(self, "_hex_cells", None)
+        if hit and hit[0] == key:
+            return hit[1]
+        pm = read_polymesh(self.mesh_dir / "polyMesh_hex")
+        dm = display_mesh(pm)
+        if not isinstance(dm, dict):
+            raise ValueError("The hex-dominant mesh has no cells of its own to measure")
+        with np.load(p) as z:
+            q_tet = np.asarray(z["quality"], np.float32)
+            if len(z["tets"]) != len(dm["tets"]):
+                raise ValueError("The stored mesh and its OpenFOAM mesh do not match: generate the mesh again")
+        metrics = meshviz.polymesh_cell_metrics(pm)
+        q = np.zeros(int(pm["n_cells"]), np.float32)
+        q[dm["tet_cell"]] = q_tet
+        metrics["quality"] = q
+        out = {"metrics": metrics, "tet_cell": np.asarray(dm["tet_cell"], np.int64)}
+        self._hex_cells = (key, out)
+        return out
+
     def mesh_metrics(self):
-        """Statistics, histograms and the cell budget (which cell sizes use the cells) of the stored mesh."""
+        """Statistics, histograms and the cell budget (which cell sizes use the cells) of the stored mesh: per tetrahedron for a tetrahedral mesh, per cell
+        (from the OpenFOAM mesh) for a hex-dominant one."""
         from . import meshviz
 
         m = self.load_mesh()
         if "hex" in m:
-            raise ValueError("The size and growth metrics need the tetrahedral mesh (the hex-dominant mesh is shown "
-                             "by its quality only)")
+            d = meshviz.summarise(dict(self.hex_cell_data()["metrics"]))
+            d["method"] = "hex"
+            return d
         d = meshviz.summary(m["nodes"], m["tets"], m.get("quality"))
         d["method"] = "tet"
         return d
 
-    def mesh_view(self, clip_axis=None, clip_pos=None, hide_fluid=False, poor=None, metric="quality"):
+    def mesh_view(self, clip_axis=None, clip_pos=None, hide_fluid=False, poor=None, metric="quality", band=None):
         """Surface (or crinkle-clipped) mesh triangles coloured by a cell metric, for inspection: quality (default),
-        size, aspect, growth (size jump to the neighbours), volume, or region (each body, the surface of the object
-        and the far-field of a flow study: how the domain was put together). poor: only the cells below this quality (all
-        their faces; the worst 20000), with the box round the worst one."""
+        size, aspect, growth (size jump to the neighbours), volume (for a hex-dominant mesh from its real cells), or region (each body, the
+        surface of the object and the far-field of a flow study: how the domain was put together). poor: only the cells below this quality (all
+        their faces; the worst 20000), with the box round the worst one. band: (low, high) only the cells of the metric whose value lies in that
+        range, drawn as the outside of that set of cells (what a click on a histogram bar or a budget band shows)."""
         from . import meshviz
 
         metric = (metric or "quality").lower()
         if metric == "layers":
-            if poor is not None:
-                raise ValueError("'poor' selects cells by their quality; use it with the quality metric")
+            if poor is not None or band is not None:
+                raise ValueError("'poor' and 'band' select cells by a metric; use them with the quality, size, aspect, growth or volume metric")
             m = self.load_layered()
             d = self._mesh_view(m, m["quality"], "-", clip_axis, clip_pos, hide_fluid, None, layers=True)
             d.update({"metric": "layers", "label": "Wall layers"})
             return d
         if metric == "zones":
-            if poor is not None:
-                raise ValueError("'poor' selects cells by their quality; use it with the quality metric")
+            if poor is not None or band is not None:
+                raise ValueError("'poor' and 'band' select cells by a metric; use them with the quality, size, aspect, growth or volume metric")
             m = self.load_mesh()
             lab = self.zone_cell_labels(m)
             d = self._mesh_view(m, m["quality"], "-", clip_axis, clip_pos, hide_fluid, None, zone_labels=lab)
@@ -3852,24 +3885,68 @@ class Project:
             raise ValueError(f"Unknown mesh metric '{metric}'. Available: {', '.join(meshviz.METRICS)}, region, layers, zones")
         m = self.load_mesh()
         label, unit, worse = meshviz.METRICS["quality" if metric == "region" else metric]
+        cell_vals = None                                                   # (one value per real cell: the range of the colours is theirs)
         if metric == "region":
-            if poor is not None:
-                raise ValueError("'poor' selects cells by their quality; use it with the quality metric")
+            if poor is not None or band is not None:
+                raise ValueError("'poor' and 'band' select cells by a metric; use them with the quality, size, aspect, growth or volume metric")
             vals = m["quality"]
-        elif metric != "quality":
-            if "hex" in m:
-                raise ValueError("The size and growth metrics need the tetrahedral mesh")
+        elif metric != "quality" or band is not None:
             if poor is not None:
                 raise ValueError("'poor' selects cells by their quality; use it with the quality metric")
-            vals = meshviz.cell_metrics(m["nodes"], m["tets"], (metric,))[metric]
+            if "hex" in m:
+                hc = self.hex_cell_data()
+                cell_vals = hc["metrics"][metric]
+                vals = cell_vals[hc["tet_cell"]]
+            else:
+                vals = meshviz.cell_metrics(m["nodes"], m["tets"], (metric,))[metric] if metric != "quality" else m["quality"]
         else:
             vals = m["quality"]
+        if band is not None:
+            d = self._band_view(m, vals, unit, float(band[0]), float(band[1]))
+            if cell_vals is not None:
+                d["n_cells_in_band"] = int(len(meshviz.cells_between(cell_vals, float(band[0]), float(band[1]))))
+            d.update({"metric": metric, "label": label, "higher_is_worse": worse,
+                      "range": meshviz.display_range(metric, vals if cell_vals is None else cell_vals), "band": [float(band[0]), float(band[1])]})
+            if metric == "size":
+                d["scale"] = "log"
+            return d
         d = self._mesh_view(m, vals, unit, clip_axis, clip_pos, hide_fluid, poor, region=(metric == "region"),
                             log=(metric == "size"))
         if poor is None and metric != "region" and d.get("n_tris", 1):
             d.update({"metric": metric, "label": label, "higher_is_worse": worse,
-                      "range": meshviz.display_range(metric, vals)})
+                      "range": meshviz.display_range(metric, vals if cell_vals is None else cell_vals)})
         return d
+
+    def _band_view(self, m, vals, unit, lo, hi):
+        """The outside of the set of cells whose metric lies in [lo, hi): the cells themselves, not the mesh around them."""
+        from . import meshviz
+
+        sel = meshviz.cells_between(vals, lo, hi)
+        d = {"n_tris": 0}
+        if len(sel):
+            t = m["tets"][sel].astype(np.int64)
+            tris, cells = boundary_from_tets(t)
+            rs = ResultSet(m["nodes"], t, np.zeros(len(t), int), ["all"], {"Quality": ("cell", np.asarray(vals)[sel].astype(float), unit)},
+                           np.zeros((0, 3), np.int64), np.zeros(0, np.int64), np.zeros(0, np.int32), [])
+            d = rs._tri_payload(tris, cells, "Quality")
+        d["n_cells_in_band"] = int(len(sel))
+        return d
+
+    def size_preview(self, axis=None, frac: float = 0.5) -> dict:
+        """The cell sizes the mesher would use for the stored settings, before any mesh exists (simwb/sizefield.py): the sizes on the walls and, with `axis`
+        (x, y, z) and `frac` (0..1), in a cut through the domain, with the wall, body and far-field sizes, the fields at work and the notes."""
+        from . import sizefield
+
+        if axis not in (None, "", "x", "y", "z"):
+            raise ValueError("axis must be x, y or z")
+        return sizefield.preview(self, axis or None, float(frac))
+
+    def wall_layer_view(self) -> dict:
+        """After a solve of a flow study: for every wall the layers the mesh got (made of planned, first and total thickness) and the y+ of the result with
+        its shares in the bands that matter to a wall function (simwb/wallview.py)."""
+        from . import wallview
+
+        return wallview.view(self)
 
     def mesh_zone_count(self) -> int:
         """How many rotating zones the stored mesh has (their boundary is meshed with it); 0 without a mesh."""

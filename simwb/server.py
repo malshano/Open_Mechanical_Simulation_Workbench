@@ -447,8 +447,21 @@ def mesh(pid: str):
 
 @app.get("/api/projects/{pid}/mesh/view")
 def mesh_view(pid: str, clip_axis: str | None = None, clip_pos: float | None = None, hide_fluid: bool = False,
-              poor: float | None = None, metric: str = "quality"):
-    return P.open_project(pid).mesh_view(clip_axis, clip_pos, hide_fluid, poor, metric)
+              poor: float | None = None, metric: str = "quality", band_from: float | None = None, band_to: float | None = None):
+    band = (band_from, band_to) if band_from is not None and band_to is not None else None      # (only the cells of the metric in that range)
+    return P.open_project(pid).mesh_view(clip_axis, clip_pos, hide_fluid, poor, metric, band)
+
+
+@app.get("/api/projects/{pid}/mesh/size_preview")
+def mesh_size_preview(pid: str, axis: str | None = None, position: float = 0.5):
+    """The cell sizes the mesher would use for the stored settings, before any mesh exists: on the walls and (axis x|y|z) in a cut."""
+    return P.open_project(pid).size_preview(axis, position)
+
+
+@app.get("/api/projects/{pid}/wall_layers")
+def wall_layers(pid: str):
+    """After a solve of a flow study: the layers per wall and the wall y+ of the result."""
+    return P.open_project(pid).wall_layer_view()
 
 
 @app.get("/api/projects/{pid}/mesh/metrics")

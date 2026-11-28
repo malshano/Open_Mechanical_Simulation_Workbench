@@ -446,7 +446,9 @@ class StatsGrid(QWidget):
 
 
 class Budget(QWidget):
-    """The cell budget: for each size band the share of the cells and of the volume, as bars, and the findings in words."""
+    """The cell budget: for each size band the share of the cells and of the volume, as bars, and the findings in words. A band is clicked to
+    show only its cells on the model (`bandClicked(low, high)`, sizes in mm)."""
+    bandClicked = Signal(float, float)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -454,10 +456,18 @@ class Budget(QWidget):
         self.v.setContentsMargins(0, 0, 0, 0)
         self.v.setSpacing(2)
         self.data = None
-        self.setToolTip("Which cell sizes use the cells (and so the memory and the run time): share of the cells / share of the volume")
+        self.rows: list = []
+        self.setToolTip("Which cell sizes use the cells (and so the memory and the run time): share of the cells / share of the volume. "
+                        "Click a band to show only those cells on the model")
+
+    def mark(self, band) -> None:
+        """Outline the band that is shown on the model (band: (low, high) in mm, or None)."""
+        for w, lo, hi in self.rows:
+            w.set_chosen(bool(band) and abs(lo - band[0]) <= 1e-9 * max(lo, 1e-12) and abs(hi - band[1]) <= 1e-9 * max(hi, 1e-12))
 
     def set_data(self, d: dict | None, tokens: dict):
         self.data = d
+        self.rows = []
         while self.v.count():
             w = self.v.takeAt(0).widget()
             if w is not None:
@@ -485,9 +495,13 @@ class Budget(QWidget):
             row.addWidget(bar)
             row.addStretch(1)
             row.addWidget(pct)
-            w = QWidget()
+            from .metrichist import ClickRow
+            w = ClickRow()
             w.setLayout(row)
             row.setContentsMargins(0, 0, 0, 0)
+            w.setToolTip(f"Show only the {b['cells']:,} cells of {_f(b['size_from'])} to {_f(b['size_to'])} mm on the model")
+            w.clicked.connect(lambda lo=b.get("lo", b["size_from"]), hi=b.get("hi", b["size_to"]): self.bandClicked.emit(lo, hi))
+            self.rows.append((w, b.get("lo", b["size_from"]), b.get("hi", b["size_to"])))
             self.v.addWidget(w)
         for f in d.get("findings") or []:
             n = QLabel("⚠ " + f)

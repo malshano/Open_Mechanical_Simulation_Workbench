@@ -716,8 +716,18 @@ class MainWindow(QMainWindow):
             return
         st = self.engine.state()
         try:
+            if self.step == "mesh" and self.panels["mesh"].sizes.active() and self._draw_size_preview():
+                return                                  # (the cell sizes the mesher would use: no mesh needed)
             if self.step == "mesh" and st["mesh"].get("status") in ("ready", "stale"):
                 axis, frac, color, poor = self.panels["mesh"].request()
+                band = self.panels["mesh"].mv.request() if poor is None else None
+                if band is not None:                # only the cells of a clicked histogram bar or budget band, on the model
+                    p = self.engine.mesh_payload(None, 0.0, color, None, band)
+                    self.view.show_geometry(False)
+                    self.panels["mesh"].mv.set_shown(p.get("n_cells_in_band"))
+                    self.view.show_surface(p, name=p.get("label") or "Cell size", unit=p.get("unit") or "-", edges=True, vrange=p.get("range"), deform=0)
+                    self._fit_once((self.engine.pid, "mesh", "band"))
+                    return
                 p = self.engine.mesh_payload(axis, frac, color, poor)
                 self.view.show_geometry(False)
                 if poor is not None:                # only the cells below the threshold, on the model
@@ -806,6 +816,28 @@ class MainWindow(QMainWindow):
             self.panels[self.step].draw_marks()
         except Exception as e:  # noqa: BLE001
             self.statusBar().showMessage(f"Cannot draw: {e}", 10000)
+
+    def _draw_size_preview(self) -> bool:
+        """The planned cell sizes (simwb/sizefield.py) on the walls and in the open cut; False when there is none to draw (the view then shows what it did)."""
+        import numpy as np
+
+        from .. import sizefield
+        pn = self.panels["mesh"]
+        try:
+            d = sizefield.combined(self.engine.project().size_preview(pn.axis or None, pn.frac))
+        except Exception as e:  # noqa: BLE001
+            self.statusBar().showMessage(f"No size preview: {e}", 8000)
+            return False
+        if not d.get("n_tris"):
+            return False
+        self.view.show_geometry(False)
+        bb = np.asarray(self.engine.project().data["geometry"]["info"]["parts_bbox"], float)
+        pad = float((bb[3:] - bb[:3]).max())
+        self.view.set_focus([*(bb[:3] - pad), *(bb[3:] + pad)] if pn.axis else None)      # (a cut through a domain many body lengths wide: the camera fits to the body and the air close to it)
+        self.view.show_surface(d, name="Planned cell size", unit="mm", edges=False, vrange=d["range"], deform=0)
+        self._fit_once((self.engine.pid, "mesh", "plan", pn.axis), f"+{pn.axis}" if pn.axis else None)
+        pn.draw_marks()
+        return True
 
     def _air_for_results(self, st):
         """The Air box switch works on the Results step too (it is also a tick box of the list there): make sure the box is built, and show it or not."""

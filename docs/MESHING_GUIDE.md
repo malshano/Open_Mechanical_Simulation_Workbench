@@ -187,3 +187,9 @@ the hex-dominant mesher, and the run's memory.
 5. Gmsh: the `naca_boundary_layer_3d` example and `extrudeBoundaryLayer` (https://gitlab.onelab.info/gmsh/gmsh), and the reference manual https://www.gmsh.info/doc/texinfo/gmsh.pdf (curvature sizing `Mesh.MeshSizeFromCurvature`, `Mesh.MeshSizeExtendFromBoundary`)
 
 The measurements in section 4 are ours: `benchmarks`-style scripts on `examples/airplane_wing.step` with OpenFOAM v2606 on Windows; the thresholds of section 2 marked *ours* are not taken from a source.
+
+
+## Looking at the cell sizes before and after meshing
+
+- **Before**: *Show the planned cell sizes* (Mesh step) draws the size field the mesher will use, so a refinement region, a part sizing or a coarser resolution can be judged without meshing. The curvature of faces and narrow gaps are not in it.
+- **After**: colour the mesh by Cell size, Aspect ratio, Size jump or Cell volume (tetrahedral and hex-dominant meshes); the histogram under the cut controls shows how many cells have each value, with a dashed line at the value the findings warn about, and a click on a bar or a band of the cell budget shows only those cells.

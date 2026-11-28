@@ -83,6 +83,68 @@ def cell_metrics(nodes: np.ndarray, tets: np.ndarray, which=("size", "aspect", "
     return {k: v for k, v in out.items() if k in which}
 
 
+def polymesh_cell_metrics(pm: dict, which=("size", "aspect", "growth", "volume")) -> dict:
+    """The same per-cell arrays for a general polyhedral mesh (the hex-dominant mesh of snappyHexMesh: hexahedra, split hexahedra, prisms), one
+    value per real cell, not per display tetrahedron. pm is what foamio.read_polymesh returns (points, faces or poly_faces, owner, neighbour, n_cells).
+
+    volume   the cell's volume from pyramids over the fan triangles of its faces (exact for flat faces), in mm^3
+    size     the edge of the cube of that volume (V^(1/3)) in mm
+    aspect   the largest over the smallest of the three projected face areas (what checkMesh calls the aspect ratio: 1 for a cube)
+    growth   the largest size ratio to a neighbouring cell across a face"""
+    P = np.asarray(pm["points"], np.float64)
+    own, nei, nc = np.asarray(pm["owner"]), np.asarray(pm["neighbour"]), int(pm["n_cells"])
+    nint = len(nei)
+    polys = pm["poly_faces"] if pm["faces"] is None else list(pm["faces"])
+    k = np.array([len(f) for f in polys], np.int64)
+    flat = np.concatenate(polys).astype(np.int64)
+    fid = np.repeat(np.arange(len(polys)), k)
+    fc = np.zeros((len(polys), 3))
+    np.add.at(fc, fid, P[flat])
+    fc /= k[:, None]
+    first = np.r_[0, np.cumsum(k)[:-1]]
+    nxt = np.where(np.arange(len(flat)) == (first + k - 1)[fid], first[fid], np.arange(len(flat)) + 1)
+    p0, p1 = P[flat] - fc[fid], P[flat[nxt]] - fc[fid]
+    tri = 0.5 * np.cross(p0, p1)                                                  # area vector of each fan triangle
+    sf = np.zeros((len(polys), 3))
+    np.add.at(sf, fid, tri)
+    cc = np.zeros((nc, 3))                                                        # a cell's reference point: the mean of its face centres
+    cnt = np.zeros(nc)
+    np.add.at(cc, own, fc)
+    np.add.at(cnt, own, 1)
+    np.add.at(cc, nei, fc[:nint])
+    np.add.at(cnt, nei, 1)
+    cc /= np.maximum(cnt, 1)[:, None]
+    vol = np.zeros(nc)
+    centroid = fc[fid] + (p0 + p1) / 3.0                                          # (fan triangle centroid)
+    pyr_own = np.einsum("ij,ij->i", tri, centroid - cc[own[fid]]) / 3.0
+    np.add.at(vol, own[fid], pyr_own)
+    inner = fid < nint
+    pyr_nei = -np.einsum("ij,ij->i", tri[inner], centroid[inner] - cc[nei[fid[inner]]]) / 3.0
+    np.add.at(vol, nei[fid[inner]], pyr_nei)
+    vol = np.abs(vol)
+    size = np.cbrt(np.maximum(vol, 1e-300))
+    out = {}
+    if "size" in which or "growth" in which:
+        out["size"] = (size * 1000.0).astype(np.float32)
+    if "volume" in which:
+        out["volume"] = (vol * 1e9).astype(np.float32)
+    if "aspect" in which:
+        proj = np.zeros((nc, 3))
+        a = np.abs(sf)
+        np.add.at(proj, own, a)
+        np.add.at(proj, nei, a[:nint])
+        out["aspect"] = (proj.max(1) / np.maximum(proj.min(1), 1e-300)).astype(np.float32)
+    if "growth" in which:
+        s = np.maximum(size, 1e-300)
+        r = s[nei] / s[own[:nint]]
+        r = np.maximum(r, 1.0 / r).astype(np.float32)
+        g = np.ones(nc, np.float32)
+        np.maximum.at(g, own[:nint], r)
+        np.maximum.at(g, nei, r)
+        out["growth"] = g
+    return {k_: v for k_, v in out.items() if k_ in which}
+
+
 def _stats(a: np.ndarray) -> dict:
     a = a[np.isfinite(a)]
     if not len(a):
@@ -90,6 +152,13 @@ def _stats(a: np.ndarray) -> dict:
     p = np.percentile(a, [1, 50, 99])
     return {"min": float(a.min()), "mean": float(a.mean()), "p01": float(p[0]), "median": float(p[1]),
             "p99": float(p[2]), "max": float(a.max())}
+
+
+def cells_between(vals: np.ndarray, lo: float, hi: float) -> np.ndarray:
+    """Indices of the cells whose value lies in [lo, hi) (the last bin of a histogram also takes its upper edge): what a click on a histogram bar or
+    a budget band shows."""
+    v = np.asarray(vals)
+    return np.where((v >= lo) & (v < hi))[0]
 
 
 def display_range(metric: str, a: np.ndarray) -> list:
@@ -105,11 +174,18 @@ def display_range(metric: str, a: np.ndarray) -> list:
 
 
 def summary(nodes: np.ndarray, tets: np.ndarray, quality: np.ndarray | None = None, bins: int = 20) -> dict:
-    """Statistics, histograms and the cell budget of the mesh."""
+    """Statistics, histograms and the cell budget of the tetrahedral mesh."""
     m = cell_metrics(nodes, tets)
     if quality is not None:
         m["quality"] = np.asarray(quality, np.float32)
-    out = {"cells": int(len(tets)), "metrics": {}}
+    return summarise(m, bins)
+
+
+def summarise(m: dict, bins: int = 20) -> dict:
+    """Statistics, histograms, the cell budget and the findings from per-cell metric arrays (size, aspect, growth, volume and, if known, quality):
+    the part of `summary` that does not care which kind of cells they are, so the hex-dominant mesh uses it too."""
+    tets_n = len(m["size"])
+    out = {"cells": int(tets_n), "metrics": {}}
     for name, a in m.items():
         label, unit, worse = METRICS[name]
         s = _stats(a)
@@ -121,7 +197,7 @@ def summary(nodes: np.ndarray, tets: np.ndarray, quality: np.ndarray | None = No
             lo, hi = max(float(a.min()), 1e-12), max(float(a.max()), 1e-12 * 1.0001)
             ed = np.geomspace(lo, hi, bins + 1) if hi > lo else np.array([lo, lo * 1.0001])
             h, ed = np.histogram(a, bins=ed)
-        out["metrics"][name] = {"label": label, "unit": unit, "higher_is_worse": worse, **s,
+        out["metrics"][name] = {"label": label, "unit": unit, "higher_is_worse": worse, **s, "range": display_range(name, a),               # (the range of the colour bar of the 3D view)
                                 "histogram": h.tolist(), "edges": [float(x) for x in ed]}
     # the cell budget: size bands a factor 1.5 apart (about every second band is a visible change of the cell size)
     size, vol = m["size"], m["volume"].astype(np.float64)
@@ -131,11 +207,12 @@ def summary(nodes: np.ndarray, tets: np.ndarray, quality: np.ndarray | None = No
     cells = np.bincount(band, minlength=nb)
     volume = np.bincount(band, weights=vol, minlength=nb)
     out["budget"] = [{"size_from": round(lo * 1.5 ** k, 4), "size_to": round(lo * 1.5 ** (k + 1), 4),
-                      "cells": int(cells[k]), "cells_percent": round(100.0 * cells[k] / len(tets), 2),
+                      "lo": lo * 1.5 ** k, "hi": lo * 1.5 ** (k + 1),             # (exact limits: what a click on the band selects)
+                      "cells": int(cells[k]), "cells_percent": round(100.0 * cells[k] / tets_n, 2),
                       "volume_percent": round(100.0 * volume[k] / max(volume.sum(), 1e-300), 2)}
                      for k in range(nb) if cells[k]]
     g = m["growth"]
-    out["findings"] = findings(m, len(tets))
+    out["findings"] = findings(m, tets_n)
     out["growth_over_2_percent"] = round(100.0 * float((g > 2.0).mean()), 3)
     return out
 
