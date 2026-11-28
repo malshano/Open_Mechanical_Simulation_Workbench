@@ -724,6 +724,7 @@ _PATHS = {  # tool or action: {argument: (where, allowed suffixes or None)}; whe
     "solve.case_zip": {"path": (True, {".zip"})},
     "results.export": {"path": (True, {".csv", ".vtk", ".vtu", ".html", ".pdf", ".md", ".txt", ".json"})},
     "results.video": {"path": (True, {".mp4"})},
+    "mesh.export": {"path": (True, {".html", ".pdf"})},
     "study.new": {"location": (True, None)},
     "study.save_as": {"location": (True, None)},
     "study.import": {"location": (True, None), "path": (False, {".zip"})},
