@@ -18,6 +18,7 @@ from . import mesh_edges
 from .mesh_adv import MeshAdvanced
 from .mesh_ram import MemoryCard
 from .mesh_metrics import MetricViews
+from .mesh_report import MeshExport
 from .mesh_sizes import SizePreview
 
 
@@ -365,6 +366,8 @@ class MeshPanel(_Panel):
         self.v.addWidget(self.check_h)
         self.check = MeshCheck(self)
         self.v.addWidget(self.check)
+        self.export_box = MeshExport(self)                  # (the mesh report: HTML or PDF)
+        self.v.addWidget(self.export_box)
         self.v.addStretch(1)
         self._budget_key = None
         self.hex = False
@@ -634,6 +637,7 @@ class MeshPanel(_Panel):
         for w in (self.stats_h, self.grid, self.poor_row, self.poor_info, self.next, self.notes):
             w.setVisible(have)
         self._hists(have)
+        self.export_box.setVisible(bool(have))
         show_adv = bool(aero and not self.hex and st["geometry"].get("status") == "ready")
         self.advisor_h.setVisible(show_adv)
         self.advisor.setVisible(show_adv)

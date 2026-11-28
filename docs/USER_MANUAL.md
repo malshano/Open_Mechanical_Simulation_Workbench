@@ -905,6 +905,10 @@ layers** - and **Generate mesh**.
   through it shows them; the aspect ratio is the one checkMesh reports, 1 for a cube, and the size is the edge of the cube of the cell's volume). Under the buttons,
   the **cell budget** shows, for each band of cell sizes, the share of the cells and of the volume, with remarks when a size jump or a
   fine region uses too many cells.
+- **Export** (end of the Mesh step, once there is a mesh): **Mesh report (HTML)** and **Mesh report (PDF)** write the same report: the verdict and remarks, the statistics, the settings the mesh was made
+  with, the cell budget as a table with bars, the findings, a histogram of each metric (cell size, aspect ratio, size jump, volume, quality) in the colours of the 3D view, four cuts through the mesh (across
+  X, Y and Z coloured by cell size, across Y by quality; in a flow domain the cuts go through the body and show the air close to it) and the wall layers made. The HTML page is one file with the
+  pictures inside; the PDF is made by the application itself (A4). A file chooser asks where to save it; the assistant's action is `mesh.export`.
 - **Planned cell sizes** (under *Generate mesh*, tetrahedral meshes; no mesh is needed): **Show the planned cell sizes** draws the cell size the mesher will use, on
   the model and, with a cut open, through the air round it, on a logarithmic colour bar in mm. It shows the wall size, the thin parts, the near-field and wake boxes,
   rotors and rotating zones, your part sizing and refinement regions, and the sharp edges, and follows every setting at once (try another resolution or move a
