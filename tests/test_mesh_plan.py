@@ -213,17 +213,14 @@ def test_the_edge_term_is_bounded_by_its_cap_until_the_edge_plan_is_there(worksp
     pr.set_mesh(preset="quick")
     off = pr.mesh_estimate()["estimate"]
     assert off["edge_cells"] == 0
-    nope = types.ModuleType("simwb.edgepreview")                                      # (no edge search: the cap bounds the term)
-    nope.preview = lambda pr, scan=False, wait=False: {"plan": None}
-    monkeypatch.setitem(sys.modules, "simwb.edgepreview", nope)
+    from simwb import edgepreview
+    monkeypatch.setattr(edgepreview, "preview", lambda pr, scan=False, wait=False: {"plan": None})      # (no edge search: the cap bounds the term)
     pr.set_mesh(edge_refinement=6)
     on = pr.mesh_estimate()
     assert on["estimate"]["edge_cells"] == 75_000 and "up to 150,000" in " ".join(on["notes"])
     assert on["estimate"]["cells_high"] - off["cells_high"] >= 150_000 - 1
     # (the plug: the calibrated plan of the edge controls, when its module exists)
-    fake = types.ModuleType("simwb.edgepreview")
-    fake.preview = lambda pr, scan=False, wait=False: {"plan": {"applied": True, "estimated_extra_cells": 40_000.0}}
-    monkeypatch.setitem(sys.modules, "simwb.edgepreview", fake)
+    monkeypatch.setattr(edgepreview, "preview", lambda pr, scan=False, wait=False: {"plan": {"applied": True, "estimated_extra_cells": 40_000.0}})
     monkeypatch.setattr("simwb.gmsh_worker.EDGE_ESTIMATE_SPREAD", 0.25, raising=False)
     plug = pr.mesh_estimate()["estimate"]
     assert plug["edge_cells"] == 40_000
