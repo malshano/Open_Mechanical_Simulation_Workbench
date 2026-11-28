@@ -718,6 +718,14 @@ class MainWindow(QMainWindow):
         try:
             if self.step == "mesh" and st["mesh"].get("status") in ("ready", "stale"):
                 axis, frac, color, poor = self.panels["mesh"].request()
+                band = self.panels["mesh"].mv.request() if poor is None else None
+                if band is not None:                # only the cells of a clicked histogram bar or budget band, on the model
+                    p = self.engine.mesh_payload(None, 0.0, color, None, band)
+                    self.view.show_geometry(False)
+                    self.panels["mesh"].mv.set_shown(p.get("n_cells_in_band"))
+                    self.view.show_surface(p, name=p.get("label") or "Cell size", unit=p.get("unit") or "-", edges=True, vrange=p.get("range"), deform=0)
+                    self._fit_once((self.engine.pid, "mesh", "band"))
+                    return
                 p = self.engine.mesh_payload(axis, frac, color, poor)
                 self.view.show_geometry(False)
                 if poor is not None:                # only the cells below the threshold, on the model

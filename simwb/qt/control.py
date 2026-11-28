@@ -645,6 +645,29 @@ class Control(QObject):
             return {"poor": win.panels["mesh"].poor_on, "threshold": win.panels["mesh"].poor_thr, "info": win.panels["mesh"].poor_info.text()}
         R("mesh.poor", "Show only the cells below a quality threshold on the model (the mesher's weak spots), or switch that off.",
           {"on": (B, "default true", False), "threshold": (N, "quality 0.01-0.9 (default 0.1)", False)}, mesh_poor)
+        def mesh_highlight(off=False, bar=None, band=None, metric=None, low=None, high=None):
+            pn = win.panels["mesh"]
+            if off:
+                pn.mv.clear()
+            elif bar is not None:                                    # (a bar of the histogram of the colouring metric)
+                if not pn.mv.hist.d:
+                    raise ValueError("No histogram is shown: colour the mesh by size, aspect, growth or volume first (mesh.view)")
+                pn.mv.hist.click_bin(int(bar))
+            elif band is not None:                                   # (a band of the cell budget)
+                rows = pn.budget.rows
+                if not 0 <= int(band) < len(rows):
+                    raise ValueError(f"The cell budget has {len(rows)} bands (0..{len(rows) - 1})")
+                pn.budget.bandClicked.emit(rows[int(band)][1], rows[int(band)][2])
+            elif metric is not None and low is not None and high is not None:
+                pn.highlight(metric, float(low), float(high))
+            else:
+                raise ValueError("Give off, bar (a histogram bar), band (a budget band) or metric with low and high")
+            return {"band": pn.mv.band, "cells": pn.mv.cells_in_band, "text": pn.mv.info.text()}
+        R("mesh.highlight", "Show only some cells of the mesh on the model: a bar of the histogram (bar = its number), a band of the cell budget (band = its number), "
+          "or a range of a metric (metric size|aspect|growth|volume with low and high); the same again, or off, shows all of them. The controls are mesh.hist "
+          "(the histogram), mesh.band.info and mesh.band.clear; the histogram data is GET /mesh/metrics.",
+          {"off": (B, "show all cells again", False), "bar": (N, "histogram bar number, from 0", False), "band": (N, "cell budget band number, from 0", False),
+           "metric": (S, "size|aspect|growth|volume", False), "low": (N, "lowest value", False), "high": (N, "highest value", False)}, mesh_highlight)
         R("mesh.zoom_worst", "Turn the 3D view to the poorest cell.", {}, lambda: {"worst": win.panels["mesh"].zoom_worst()})
         R("solve.run", "Run the simulation; a job (use wait).", {}, lambda: (self._click("solve.run"), {"started": True})[1])
         R("results.show", "Choose what the results step shows. Omitted arguments stay as they are.",

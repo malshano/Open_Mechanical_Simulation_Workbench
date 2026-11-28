@@ -433,8 +433,9 @@ def mesh(pid: str):
 
 @app.get("/api/projects/{pid}/mesh/view")
 def mesh_view(pid: str, clip_axis: str | None = None, clip_pos: float | None = None, hide_fluid: bool = False,
-              poor: float | None = None, metric: str = "quality"):
-    return P.open_project(pid).mesh_view(clip_axis, clip_pos, hide_fluid, poor, metric)
+              poor: float | None = None, metric: str = "quality", band_from: float | None = None, band_to: float | None = None):
+    band = (band_from, band_to) if band_from is not None and band_to is not None else None      # (only the cells of the metric in that range)
+    return P.open_project(pid).mesh_view(clip_axis, clip_pos, hide_fluid, poor, metric, band)
 
 
 @app.get("/api/projects/{pid}/mesh/metrics")

@@ -138,8 +138,10 @@ class Engine(QObject):
         self.changed.emit()
 
     # ------------------------------------------------------------------ what the views draw
-    def mesh_payload(self, axis: str | None, frac: float, color: str, poor: float | None = None):
+    def mesh_payload(self, axis: str | None, frac: float, color: str, poor: float | None = None, band=None):
         pr = self.project()
+        if band is not None:                  # only the cells of this metric in a range (a clicked histogram bar or budget band)
+            return pr.mesh_view(None, None, False, None, color, band)
         if poor is not None:                  # only the cells below this quality, on the CAD model
             return pr.mesh_view(None, None, False, float(poor), color)
         if axis:

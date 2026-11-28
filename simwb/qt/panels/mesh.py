@@ -16,6 +16,7 @@ from ..meshtools import AdvisorCard, Budget, LayerCard, MeshCheck, StatsGrid, me
 from .common import _h, _muted, _Panel, _seg
 from . import mesh_edges
 from .mesh_adv import MeshAdvanced
+from .mesh_metrics import MetricViews
 
 
 def verdict(q: dict, stats: dict | None = None) -> tuple:
@@ -284,6 +285,9 @@ class MeshPanel(_Panel):
         self.v.addWidget(self.hist_h)
         self.hist = QualityHist()
         self.v.addWidget(self.hist)
+        self.mv = MetricViews()                             # (the histogram of the metric the mesh is coloured by; a click on a bar shows those cells)
+        self.mv.changed.connect(self._band_changed)
+        self.v.addWidget(self.mv)
         self.color_h = _h("Colour the mesh by")
         self.v.addWidget(self.color_h)
         self.color_btns, self.color_grp = {}, QButtonGroup(self)
@@ -310,6 +314,7 @@ class MeshPanel(_Panel):
         self.iface_note = wid(_muted(""), "mesh.zones.interface_text")
         self.v.addWidget(self.iface_note)
         self.budget = wid(Budget(), "mesh.budget")
+        self.budget.bandClicked.connect(lambda lo, hi: self.highlight("size", lo, hi))      # (a click on a band of the cell budget)
         self.v.addWidget(self.budget)
         row = QHBoxLayout()
         self.poor_chk = wid(QCheckBox("Show cells below"), "mesh.poor.on")
@@ -354,6 +359,7 @@ class MeshPanel(_Panel):
         self.v.addStretch(1)
         self._budget_key = None
         self.hex = False
+        self.metrics_ok = False                             # (the size, aspect, size jump and volume of the cells are known)
         self.layers_ok = False                              # (a layered mesh exists: the colour "Wall layers" can be drawn)
 
     # ------------------------------------------------------------------ choices
@@ -363,6 +369,8 @@ class MeshPanel(_Panel):
         if kw.get("color") == "layers" and not self.axis and "axis" not in kw:
             self._default_cut()                 # (the layers lie on the walls: they are seen in a cut through the object, so open one)
         self.slider.setEnabled(bool(self.axis))
+        if "color" in kw:
+            self._hists(self.hist_h.isVisibleTo(self) or self.mv.isVisibleTo(self))      # (the cells of a band belong to the metric they were chosen in)
         self.changed.emit()
         if "color" in kw:
             self.draw_marks()                   # (the shell that previews the layers is not drawn beside the real ones)
@@ -377,6 +385,33 @@ class MeshPanel(_Panel):
         self.slider.blockSignals(True)
         self.slider.setValue(int(round(fr * 1000)))
         self.slider.blockSignals(False)
+
+    def _hists(self, have: bool):
+        """The histogram of the metric the mesh is coloured by; the quality histogram where the colouring has none of its own."""
+        color = self.request()[2]
+        self.mv.refresh(color, bool(have and self.metrics_ok))
+        for w in (self.hist_h, self.hist):
+            w.setVisible(bool(have) and not self.mv.isVisibleTo(self))
+
+    def _band_changed(self):
+        """A bar of the histogram or a band of the budget was clicked (or the choice cleared): colour by that metric, show only those cells."""
+        if self.mv.band:
+            metric = self.mv.band[0]
+            if self.poor_on:
+                self.poor_chk.setChecked(False)
+            if self.color != metric:
+                self.color = metric
+                self.color_btns[metric].setChecked(True)
+        self._hists(True)
+        self.budget.mark(self.mv.request() if self.mv.band and self.mv.band[0] == "size" else None)
+        self.changed.emit()
+
+    def highlight(self, metric: str, lo: float, hi: float):
+        """Show only the cells of a metric (size, aspect, growth, volume) between lo and hi on the model; the same range again shows all."""
+        if metric not in self.TET_ONLY or not self.metrics_ok:
+            raise ValueError("The cells of a range need a mesh with measured cells (generate the mesh) and one of size, aspect, growth, volume")
+        self.mv.highlight(metric, lo, hi)
+        return {"metric": metric, "range": self.mv.request()}
 
     def _smart(self, on: bool):
         try:
@@ -464,6 +499,8 @@ class MeshPanel(_Panel):
 
     def _poor_toggled(self, on):
         self.poor_on = on
+        if on:
+            self.mv.clear()                                 # (only one choice of cells is shown at a time)
         self.poor_zoom.setEnabled(on)
         self.poor_zoom.setToolTip("Look at the poorest cell" if on else "Switch on 'Show cells below' first")
         self.changed.emit()
@@ -489,7 +526,7 @@ class MeshPanel(_Panel):
 
     def request(self):
         color = self.color
-        if self.hex and color in self.TET_ONLY:              # (the hex-dominant mesh is shown by its quality only)
+        if self.hex and color in self.TET_ONLY and not self.metrics_ok:      # (a hex-dominant mesh without its cells measured: quality only)
             color = "quality"
         if color == "layers" and not self.layers_ok:
             color = "quality"
@@ -534,6 +571,7 @@ class MeshPanel(_Panel):
         t = theme.tokens()
         have = bool(s) and m.get("status") in ("ready", "stale")
         self.hex = bool(s and s.get("method") == "hex")
+        self._budget(st, have)                              # (the measured cells: the metric buttons, the histogram and the budget follow them)
         if have:
             q = s["quality"]
             extra = ""
@@ -581,8 +619,9 @@ class MeshPanel(_Panel):
         self.stale_note.setVisible(stale)
         self.stale_note.setText("⚠ The setup changed since this mesh was made: regenerate it." if stale else "")
         self.stale_note.setStyleSheet(f"color: {t['warn_text']};")
-        for w in (self.stats_h, self.grid, self.hist_h, self.hist, self.poor_row, self.poor_info, self.next, self.notes):
+        for w in (self.stats_h, self.grid, self.poor_row, self.poor_info, self.next, self.notes):
             w.setVisible(have)
+        self._hists(have)
         show_adv = bool(aero and not self.hex and st["geometry"].get("status") == "ready")
         self.advisor_h.setVisible(show_adv)
         self.advisor.setVisible(show_adv)
@@ -624,13 +663,12 @@ class MeshPanel(_Panel):
         tips = {c: tip for c, _l, tip in self.COLORS}
         for k in self.TET_ONLY:
             b = self.color_btns[k]
-            b.setEnabled(not self.hex)
-            b.setToolTip(tips[k] if not self.hex else
-                         "Not for a hex-dominant mesh: it is shown by its cell quality only (these metrics need the tetrahedral mesh)")
+            b.setEnabled(self.metrics_ok)
+            b.setToolTip(tips[k] if self.metrics_ok else "The cells of this mesh could not be measured (generate the mesh again)")
         self.color_btns[self.request()[2] if self.color in self.color_btns else "quality"].setChecked(True)
-        self.color_note.setVisible(have and self.hex)
-        self.color_note.setText("The hex-dominant mesh is shown by its cell quality and its regions only." if self.hex else "")
-        self._budget(st, have)
+        self.color_note.setVisible(have and self.hex and not self.metrics_ok)
+        self.color_note.setText("The cells of this hex-dominant mesh could not be measured: it is shown by its cell quality and its regions only." if self.hex else "")
+        self._hists(have)
         jc = P.JOBS.latest(self.engine.pid, "check") if self.engine.pid else None
         ck = bool(jc and jc.status == "running")
         show_check = (have and st["solve"].get("status") in ("done", "stale")) or bool(st.get("mesh_check"))
@@ -646,16 +684,23 @@ class MeshPanel(_Panel):
         self.draw_marks()
 
     def _budget(self, st, have):
-        """The cell budget of a tetrahedral mesh (computed once per mesh)."""
+        """The measured cells of the mesh (size, aspect, size jump, volume; the cell budget): computed once per mesh, for a tetrahedral mesh and for a
+        hex-dominant one (from its OpenFOAM cells)."""
         s = st["mesh"].get("stats") or {}
         key = (self.engine.pid, s.get("cells"), s.get("seconds"), self.hex, theme.effective()) if have else None
         if key == self._budget_key:
             return
+        same_mesh = key is not None and self._budget_key is not None and key[:-1] == self._budget_key[:-1]       # (only the theme changed)
         self._budget_key = key
         d = None
-        if have and not self.hex:
+        if have:
             try:
                 d = self.engine.project().mesh_metrics()
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 - an old hex mesh without its OpenFOAM mesh: shown by its quality
                 d = None
+        self.metrics_ok = bool(d)
+        if not same_mesh:
+            self.mv.band = None                             # (a new mesh: the cells chosen on the old one mean nothing)
+        self.mv.set_metrics(d)
         self.budget.set_data(d, theme.tokens())
+        self.budget.mark(self.mv.request() if self.mv.band and self.mv.band[0] == "size" else None)

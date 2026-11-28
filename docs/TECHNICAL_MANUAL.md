@@ -276,6 +276,12 @@ An optional mesher for `external_aero` (`mesh.method == "hex"`, set with `set_me
 - **Quality rules** (`parse_logs`): concave cells are a warning (snappyHexMesh limits them); any other failed `checkMesh` item is a problem. The cell limit (`MAX_CELLS`) stopping refinement is reported.
 - **Known limits**: sections of the display mesh take seconds (12 display tetrahedra per hexahedron); layer coverage depends on the parts being several cells thick; the log formats are those of OpenFOAM v2606.
 
+### Mesh metric views (`simwb/meshviz.py`, `simwb/qt/metrichist.py`, `simwb/qt/panels/mesh_metrics.py`)
+
+- `meshviz.cell_metrics` (tetrahedra) and `meshviz.polymesh_cell_metrics` (the polyhedral cells of the hex-dominant mesh: volume from pyramids over the fan triangles of the faces, size = V^(1/3), aspect = largest over smallest projected face area as checkMesh, growth over the internal faces) give the same arrays; `summarise` makes the statistics, the histograms (each with its `range`, the colour range of the 3D view), the cell budget (bands with exact `lo`/`hi`) and the findings from either.
+- `Project.hex_cell_data()` reads `polyMesh_hex` once per mesh file (kept on the project) and returns the per-cell metrics and the cell of every display tetrahedron (`display_mesh` is deterministic, so it matches the stored `tets`; a mismatch asks for a new mesh). The display tetrahedra split every cell, so a metric of the tetrahedra would not be the cell's: `mesh_view(metric=...)` and `mesh_metrics()` use the cell values mapped to the tetrahedra.
+- `mesh_view(..., band=(low, high))` (REST `band_from`/`band_to`) draws the outside of the set of cells whose metric lies in the range (`n_cells_in_band` counts real cells). The Qt panel asks for it when a histogram bar (`MetricHist.binClicked`) or a cell-budget band is clicked; control action `mesh.highlight`.
+
 ### Smart sizing and the mesh advisor (`meshadvisor.py`, `gmsh_worker.task_mesh`)
 
 - **Why**: the old sizing took `ref_length` (the largest side of the object) for every size; for a slender body that is not the length along the flow and not the thickness. See `docs/MESHING_GUIDE.md`

@@ -879,9 +879,14 @@ layers** - and **Generate mesh**.
   colour, the others grey; a cut through the zone shows where its boundary, the sliding interface, lies in the mesh). Under the colour buttons, **Show the zone
   boundaries** draws the meshed boundary of each zone as a pink surface (for a sliding-mesh zone the **sliding interface**, where the turning cells meet the fixed ones;
   it should be a clean cylinder) and says how many faces it has and its area, for example *prop: sliding interface, 4,120 faces, 28.3 cm²* or **Wall layers** (flow studies with layers: the mesh the solver runs, each layer in its own colour and the tetrahedra
-  in grey; choosing it opens a cut through the object if none is open). A hex-dominant mesh is shown by quality and region only (the other buttons are greyed and say why). Under the buttons,
+  in grey; choosing it opens a cut through the object if none is open). A hex-dominant mesh has the same buttons (cell size, aspect ratio, size jump and volume are measured on its real cells, read from the OpenFOAM mesh: a cut
+  through it shows them; the aspect ratio is the one checkMesh reports, 1 for a cube, and the size is the edge of the cube of the cell's volume). Under the buttons,
   the **cell budget** shows, for each band of cell sizes, the share of the cells and of the volume, with remarks when a size jump or a
   fine region uses too many cells.
+- **The histogram of the metric** (under the cut controls, for Cell size, Aspect ratio, Size jump and Cell volume; quality keeps its own histogram): how many
+  cells fall in each band, with the colours of the legend under the 3D view. A dashed line marks the value the remarks warn about (a size jump of 2, an aspect ratio of 20).
+  **Click a bar** (or a band of the **cell budget**) to show only those cells on the model, as the outside of that set of cells; a line says how many there are, and
+  **Show all cells** (or a second click on the same bar) shows the whole mesh again. Choosing another colour, **Show cells below** or a new mesh also ends it.
 - Under the quality check (**Show cells below**, **Zoom to worst**) the verdict lists, in words, what the checks cover: poorly
   shaped cells, how many cells lie across the thinnest part and the narrowest air gap, the estimated wall y+ of a flow (from the first
   layer when there are layers, else from the surface cells), and a coarse CFD mesh. **Next: solve →** goes on.
